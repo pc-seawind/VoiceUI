@@ -7,6 +7,7 @@ __pycache__/
 venv/
 .env
 *.wav
+!voiceui/resources/*.wav
 models/
 device-identity.json
 debug_sessions/

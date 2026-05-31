@@ -20,6 +20,11 @@ wake:
   max_wait_seconds: 0
   inference_framework: onnx
 
+wake_ack:
+  enabled: true
+  wav_path: default
+  playback_device: default
+
 vad:
   engine: energy
   threshold: 650

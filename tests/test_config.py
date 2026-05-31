@@ -50,6 +50,8 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(wake_config.wake.engine, "openwakeword")
         self.assertEqual(wake_config.wake.model, "hey_jarvis")
         self.assertEqual(wake_config.wake.inference_framework, "onnx")
+        self.assertTrue(wake_config.wake_ack.enabled)
+        self.assertEqual(wake_config.wake_ack.wav_path, "default")
         self.assertEqual(wake_config.stt.model, "xiaomi/mimo-v2.5")
 
 

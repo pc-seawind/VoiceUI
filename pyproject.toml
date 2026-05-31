@@ -40,3 +40,6 @@ select = ["E", "F", "I", "UP", "B"]
 
 [tool.setuptools.packages.find]
 include = ["voiceui*"]
+
+[tool.setuptools.package-data]
+voiceui = ["resources/*.wav"]

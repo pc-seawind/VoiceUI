@@ -12,6 +12,7 @@ from voiceui.stt import create_stt
 from voiceui.tts import create_tts
 from voiceui.vad import SpeechStartTimeoutError, create_vad_recorder
 from voiceui.wake import create_wake_detector
+from voiceui.wake_ack import create_wake_ack_player
 
 
 class VoiceAssistant:
@@ -33,6 +34,10 @@ class VoiceAssistant:
         self.stt = create_stt(config.stt)
         self.chat = create_chat_client(config.llm)
         self.tts = create_tts(config.tts)
+        self.wake_ack = create_wake_ack_player(
+            config.wake_ack,
+            fallback_device=config.tts.playback_device,
+        )
         self.home = HomeAssistantClient(config.home_assistant)
         self.session = ConversationSession(config.llm, config.conversation)
         self.debug = DebugRecorder(config.debug)
@@ -73,10 +78,23 @@ class VoiceAssistant:
         )
         return wake, wake_ms
 
+    def _play_wake_ack(self) -> int:
+        ack_started = time.monotonic()
+        try:
+            self.wake_ack.play()
+        except Exception as exc:
+            print(f"wake_ack> error={exc}")
+            return 0
+        ack_ms = int((time.monotonic() - ack_started) * 1000)
+        if ack_ms:
+            print(f"wake_ack> latency_ms={ack_ms}")
+        return ack_ms
+
     def _run_audio_turn(
         self,
         wake: WakeEvent,
         wake_ms: int,
+        wake_ack_ms: int = 0,
         speech_start_timeout_seconds: float = 0.0,
     ) -> tuple[AssistantReply, str]:
         vad_started = time.monotonic()
@@ -101,6 +119,7 @@ class VoiceAssistant:
             reply, response_timings = self._complete_transcript(transcript)
         timings = {
             "wake": wake_ms,
+            "wake_ack": wake_ack_ms,
             "vad": vad_ms,
             "stt": stt_ms,
             **response_timings,
@@ -134,7 +153,8 @@ class VoiceAssistant:
             return self.run_text_turn(text)
 
         wake, wake_ms = self._wait_for_wake()
-        reply, _transcript = self._run_audio_turn(wake, wake_ms)
+        wake_ack_ms = self._play_wake_ack()
+        reply, _transcript = self._run_audio_turn(wake, wake_ms, wake_ack_ms=wake_ack_ms)
         return reply
 
     def run_conversation(self) -> AssistantReply:
@@ -142,8 +162,9 @@ class VoiceAssistant:
             return self.run_once()
 
         wake, wake_ms = self._wait_for_wake()
+        wake_ack_ms = self._play_wake_ack()
         self.session.reset()
-        reply, transcript = self._run_audio_turn(wake, wake_ms)
+        reply, transcript = self._run_audio_turn(wake, wake_ms, wake_ack_ms=wake_ack_ms)
         follow_up_seconds = self.config.conversation.follow_up_seconds
         if follow_up_seconds <= 0 or not transcript:
             return reply

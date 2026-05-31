@@ -12,6 +12,7 @@ from voiceui.diagnostics import calibrate_vad, record_wav
 from voiceui.models import Utterance
 from voiceui.stt import create_stt
 from voiceui.wake import create_wake_detector
+from voiceui.wake_ack import create_wake_ack_player
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -104,6 +105,17 @@ def main(argv: list[str] | None = None) -> int:
                 f"wake> engine={wake.engine} label={wake.label} "
                 f"confidence={wake.confidence:.3f} latency_ms={latency_ms}"
             )
+            ack_started = time.monotonic()
+            try:
+                create_wake_ack_player(
+                    config.wake_ack,
+                    fallback_device=config.tts.playback_device,
+                ).play()
+                ack_ms = int((time.monotonic() - ack_started) * 1000)
+                if ack_ms:
+                    print(f"wake_ack> latency_ms={ack_ms}")
+            except Exception as exc:
+                print(f"wake_ack> error={exc}")
             return 0
 
         assistant = VoiceAssistant(config)

@@ -35,6 +35,13 @@ class WakeConfig:
 
 
 @dataclass(slots=True)
+class WakeAckConfig:
+    enabled: bool = False
+    wav_path: str = ""
+    playback_device: str | int | None = None
+
+
+@dataclass(slots=True)
 class VadConfig:
     engine: Literal["energy", "silero"] = "energy"
     threshold: int = 450
@@ -115,6 +122,7 @@ class AssistantConfig:
     input: InputConfig = field(default_factory=InputConfig)
     audio: AudioConfig = field(default_factory=AudioConfig)
     wake: WakeConfig = field(default_factory=WakeConfig)
+    wake_ack: WakeAckConfig = field(default_factory=WakeAckConfig)
     vad: VadConfig = field(default_factory=VadConfig)
     stt: SttConfig = field(default_factory=SttConfig)
     llm: LlmConfig = field(default_factory=LlmConfig)

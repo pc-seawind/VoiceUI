@@ -113,7 +113,7 @@ python -m voiceui --config config.demo.wake.yaml --wake-test
 
 Say "hey jarvis". The first run downloads the openWakeWord feature model and
 `hey_jarvis` ONNX model. A successful detection prints `wake>` with the label,
-confidence, and latency.
+confidence, and latency, then plays the local wake acknowledgement WAV.
 
 Then run the wake-word Mify demo:
 
@@ -125,6 +125,19 @@ Flow: say "hey jarvis", speak one command after the wake log appears, then wait
 for VAD, ASR, LLM, and TTS. After the answer, speak the next turn within
 `conversation.follow_up_seconds` to continue the same LLM conversation without
 another wake word.
+
+The wake acknowledgement is configured separately from TTS:
+
+```yaml
+wake_ack:
+  enabled: true
+  wav_path: default
+  playback_device: default
+```
+
+`default` uses the bundled local `voiceui/resources/wake_ack_wo_zai.wav`
+clip. Replace `wav_path` with another 16-bit PCM WAV if you want a different
+phrase or voice.
 
 Each audio turn writes debug artifacts under `debug_sessions/` when
 `debug.enabled` is true. The folder contains `utterance.wav` and

@@ -59,6 +59,14 @@ class FakeTts:
         self.spoken.append(text)
 
 
+class FakeWakeAck:
+    def __init__(self):
+        self.calls = 0
+
+    def play(self) -> None:
+        self.calls += 1
+
+
 class CoreTests(unittest.TestCase):
     def test_run_conversation_keeps_context_for_follow_up_without_second_wake(self) -> None:
         config = AssistantConfig(
@@ -77,7 +85,9 @@ class CoreTests(unittest.TestCase):
         )
         chat = RecordingChat()
         tts = FakeTts()
+        wake_ack = FakeWakeAck()
         assistant.wake = FakeWake()
+        assistant.wake_ack = wake_ack
         assistant.vad = fake_vad
         assistant.stt = FakeStt()
         assistant.chat = chat
@@ -87,6 +97,7 @@ class CoreTests(unittest.TestCase):
             reply = assistant.run_conversation()
 
         self.assertIsInstance(reply, AssistantReply)
+        self.assertEqual(wake_ack.calls, 1)
         self.assertEqual(fake_vad.start_timeouts, [0.0, 1, 1])
         self.assertEqual(tts.spoken, ["reply 1", "reply 2"])
         self.assertEqual([message.content for message in chat.calls[0]], ["system", "first"])

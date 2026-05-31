@@ -132,7 +132,8 @@ python -m voiceui --config config.demo.wake.yaml --wake-test
 ```
 
 Say "hey jarvis". On the first run, openWakeWord downloads its feature model and
-the `hey_jarvis` model. A successful detection prints:
+the `hey_jarvis` model. A successful detection plays the local "我在" WAV and
+prints:
 
 ```text
 wake> engine=openwakeword label=hey_jarvis confidence=... latency_ms=...
@@ -155,7 +156,7 @@ python -m voiceui --config config.demo.wake.yaml
 Flow:
 
 1. Say "hey jarvis".
-2. Wait for the `wake>` log.
+2. Wait for the `wake>` log and the local "我在" acknowledgement.
 3. Speak one command.
 4. Wait for `vad>`, `stt>`, `llm>`, `tts>`, and the spoken answer.
 5. When `session> listening_for_follow_up seconds=10` appears, speak the next
