@@ -33,7 +33,7 @@ class OllamaChatClient(ChatClient):
     def complete(self, messages: list[ChatMessage]) -> str:
         payload = {
             "model": self.config.model,
-            "messages": [message.__dict__ for message in messages],
+            "messages": _messages_payload(messages),
             "stream": False,
             "options": {"temperature": self.config.temperature},
         }
@@ -59,7 +59,7 @@ class OpenAICompatibleChatClient(ChatClient):
 
         payload = {
             "model": self.config.model,
-            "messages": [message.__dict__ for message in messages],
+            "messages": _messages_payload(messages),
             "temperature": self.config.temperature,
             "stream": False,
         }
@@ -83,6 +83,10 @@ def create_chat_client(config: LlmConfig) -> ChatClient:
     if config.provider in ("openai_compatible", "mify"):
         return OpenAICompatibleChatClient(config)
     raise ValueError(f"Unsupported LLM provider: {config.provider}")
+
+
+def _messages_payload(messages: list[ChatMessage]) -> list[dict[str, str]]:
+    return [{"role": message.role, "content": message.content} for message in messages]
 
 
 def _post_json(
