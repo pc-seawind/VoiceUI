@@ -42,3 +42,9 @@ conversation:
 
 home_assistant:
   enabled: false
+
+debug:
+  enabled: true
+  output_dir: debug_sessions
+  save_audio: true
+  save_metadata: true

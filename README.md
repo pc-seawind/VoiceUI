@@ -93,6 +93,10 @@ python -m voiceui --config config.demo.mify.yaml
 For the audio demo, press Enter when prompted, speak one command, and wait for
 the transcript plus assistant reply.
 
+Each audio turn writes debug artifacts under `debug_sessions/` when
+`debug.enabled` is true. The folder contains `utterance.wav` and
+`metadata.json` with wake/VAD/STT/LLM/TTS timings, transcript, and reply.
+
 ## Recommended MVP Setup
 
 For the first XVF3800 prototype:

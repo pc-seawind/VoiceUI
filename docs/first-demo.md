@@ -93,11 +93,18 @@ Flow:
 1. Press Enter when prompted.
 2. Speak one command.
 3. Wait for `vad>`, `stt>`, and `assistant>` logs.
-4. Listen for the system TTS output.
+4. Listen for the TTS output.
+5. Check `debug_sessions\<timestamp>-0001\metadata.json` and `utterance.wav`.
 
 With `config.demo.mify.yaml`, TTS also uses Mify/MiMo through
 `xiaomi/mimo-v2.5-tts`. If you only want local OS speech while testing LLM/ASR, change
 `tts.provider` back to `system`.
+
+To re-test ASR with a saved turn:
+
+```powershell
+python -m voiceui --config config.demo.mify.yaml --transcribe-wav debug_sessions\<turn>\utterance.wav
+```
 
 For hardware-only smoke testing without Mify:
 

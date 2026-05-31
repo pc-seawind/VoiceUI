@@ -71,3 +71,9 @@ home_assistant:
   url: http://homeassistant.local:8123
   token_env: HA_TOKEN
   default_area: living_room
+
+debug:
+  enabled: true
+  output_dir: debug_sessions
+  save_audio: true
+  save_metadata: true

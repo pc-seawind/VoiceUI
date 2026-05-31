@@ -45,6 +45,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(mify_config.llm.model, "xiaomi/mimo-v2.5")
         self.assertEqual(mify_config.tts.provider, "mify")
         self.assertEqual(mify_config.tts.model, "xiaomi/mimo-v2.5-tts")
+        self.assertTrue(mify_config.debug.enabled)
 
 
 if __name__ == "__main__":

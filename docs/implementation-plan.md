@@ -78,6 +78,8 @@ Implementation:
 - Home Assistant REST service adapter.
 - Session memory with bounded history.
 - Latency spans around every pipeline stage.
+- Per-turn debug artifacts with captured audio, transcript, reply, and latency
+  metadata.
 
 ## Phase 3: Low-Latency Interaction
 

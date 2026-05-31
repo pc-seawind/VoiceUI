@@ -9,3 +9,4 @@ venv/
 *.wav
 models/
 device-identity.json
+debug_sessions/

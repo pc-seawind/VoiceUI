@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 
 from voiceui.audio import create_audio_input
+from voiceui.debug import DebugRecorder, TurnDebugData
 from voiceui.home_assistant import HomeAssistantClient
 from voiceui.llm import create_chat_client
 from voiceui.models import AssistantConfig, AssistantReply
@@ -34,19 +35,33 @@ class VoiceAssistant:
         self.tts = create_tts(config.tts)
         self.home = HomeAssistantClient(config.home_assistant)
         self.session = ConversationSession(config.llm, config.conversation)
+        self.debug = DebugRecorder(config.debug)
 
     def run_text_turn(self, text: str) -> AssistantReply:
         transcript = text.strip()
         if not transcript:
             return AssistantReply(text="I did not hear anything.", routed_to="system")
 
+        reply, _timings = self._complete_transcript(transcript)
+        return reply
+
+    def _complete_transcript(self, transcript: str) -> tuple[AssistantReply, dict[str, int]]:
         self.session.add_user(transcript)
+        timings: dict[str, int] = {}
+
+        llm_started = time.monotonic()
         response = self.chat.complete(self.session.messages)
+        timings["llm"] = int((time.monotonic() - llm_started) * 1000)
+        print(f"llm> latency_ms={timings['llm']}")
         if not response:
             response = "I could not produce a response."
         self.session.add_assistant(response)
+
+        tts_started = time.monotonic()
         self.tts.speak(response)
-        return AssistantReply(text=response)
+        timings["tts"] = int((time.monotonic() - tts_started) * 1000)
+        print(f"tts> latency_ms={timings['tts']}")
+        return AssistantReply(text=response), timings
 
     def run_once(self) -> AssistantReply:
         if self.config.input.mode == "text":
@@ -71,7 +86,41 @@ class VoiceAssistant:
         stt_ms = int((time.monotonic() - stt_started) * 1000)
         print(f"stt> latency_ms={stt_ms} text={transcript}")
 
-        return self.run_text_turn(transcript)
+        transcript = transcript.strip()
+        if not transcript:
+            reply = AssistantReply(text="I did not hear anything.", routed_to="system")
+            response_timings = {"llm": 0, "tts": 0}
+            print("assistant> I did not hear anything.")
+        else:
+            reply, response_timings = self._complete_transcript(transcript)
+        timings = {
+            "wake": wake_ms,
+            "vad": vad_ms,
+            "stt": stt_ms,
+            **response_timings,
+        }
+        debug_data = TurnDebugData(
+            node_id=self.config.node.id,
+            room=self.config.node.room,
+            wake={
+                "engine": wake.engine,
+                "label": wake.label,
+                "confidence": wake.confidence,
+            },
+            timings_ms=timings,
+            utterance={
+                "duration_ms": utterance.duration_ms,
+                "sample_rate": utterance.sample_rate,
+                "bytes": len(utterance.pcm),
+            },
+            transcript=transcript,
+            reply=reply.text,
+            routed_to=reply.routed_to,
+        )
+        debug_dir = self.debug.save_turn(debug_data, utterance)
+        if debug_dir:
+            print(f"debug> saved={debug_dir}")
+        return reply
 
     def run_forever(self) -> None:
         while True:

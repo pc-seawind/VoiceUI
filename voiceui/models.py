@@ -101,6 +101,14 @@ class HomeAssistantConfig:
 
 
 @dataclass(slots=True)
+class DebugConfig:
+    enabled: bool = False
+    output_dir: str = "debug_sessions"
+    save_audio: bool = True
+    save_metadata: bool = True
+
+
+@dataclass(slots=True)
 class AssistantConfig:
     node: NodeConfig = field(default_factory=NodeConfig)
     input: InputConfig = field(default_factory=InputConfig)
@@ -112,6 +120,7 @@ class AssistantConfig:
     tts: TtsConfig = field(default_factory=TtsConfig)
     conversation: ConversationConfig = field(default_factory=ConversationConfig)
     home_assistant: HomeAssistantConfig = field(default_factory=HomeAssistantConfig)
+    debug: DebugConfig = field(default_factory=DebugConfig)
 
 
 @dataclass(slots=True)
