@@ -62,8 +62,9 @@ Set `vad.threshold` in the demo config to the returned
 short smoke tests can be skewed by transient noise.
 
 For `config.demo.mify.yaml` and `config.demo.wake.yaml`, VAD is now
-`engine: webrtc`. WebRTC ignores `vad.threshold`; if it still clips endings,
-raise `vad.silence_ms` first. If it misses speech, try lowering
+`engine: webrtc`. WebRTC ignores `vad.threshold`; if it clips endings, raise
+`vad.silence_ms` from `700` toward `900`. If the assistant waits too long after
+you stop speaking, lower it toward `500`. If it misses speech, try lowering
 `vad.webrtc_mode` from `2` to `1`.
 
 ## 5. Verify ASR Separately

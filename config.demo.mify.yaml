@@ -19,10 +19,10 @@ wake:
 vad:
   engine: webrtc
   threshold: 650
-  min_speech_ms: 160
-  silence_ms: 1200
+  min_speech_ms: 120
+  silence_ms: 700
   max_speech_ms: 15000
-  pre_roll_ms: 300
+  pre_roll_ms: 200
   frame_ms: 20
   webrtc_mode: 2
 

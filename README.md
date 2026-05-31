@@ -165,9 +165,9 @@ Each audio turn writes debug artifacts under `debug_sessions/` when
 For the first XVF3800 prototype:
 
 - Wake word: `openwakeword` with `hey_jarvis`.
-- Endpointing: WebRTC VAD for the current hardware demo; increase
-  `vad.silence_ms` if endings are still clipped, and lower `vad.webrtc_mode` if
-  speech is missed.
+- Endpointing: WebRTC VAD for the current hardware demo. The default
+  `vad.silence_ms` is tuned for lower latency; raise it toward `900` if endings
+  are clipped, or lower it toward `500` if the assistant still waits too long.
 - STT: `faster_whisper` on GPU if available, otherwise CPU `int8` with a smaller
   model.
 - LLM: Ollama or any OpenAI-compatible endpoint.
