@@ -36,6 +36,12 @@ For the manual first demo, the smaller dependency set is enough:
 pip install -e ".[demo]"
 ```
 
+For wake-word testing, install the wake extra as well:
+
+```powershell
+pip install -e ".[demo,wake]"
+```
+
 List audio devices:
 
 ```powershell
@@ -92,6 +98,25 @@ python -m voiceui --config config.demo.mify.yaml
 
 For the audio demo, press Enter when prompted, speak one command, and wait for
 the transcript plus assistant reply.
+
+After the manual demo works, verify wake detection with openWakeWord:
+
+```powershell
+python -m voiceui --config config.demo.wake.yaml --wake-test
+```
+
+Say "hey jarvis". The first run downloads the openWakeWord feature model and
+`hey_jarvis` ONNX model. A successful detection prints `wake>` with the label,
+confidence, and latency.
+
+Then run the wake-word Mify demo:
+
+```powershell
+python -m voiceui --config config.demo.wake.yaml
+```
+
+Flow: say "hey jarvis", speak one command after the wake log appears, then wait
+for VAD, ASR, LLM, and TTS.
 
 Each audio turn writes debug artifacts under `debug_sessions/` when
 `debug.enabled` is true. The folder contains `utterance.wav` and
@@ -159,8 +184,9 @@ For TTS, VoiceUI puts the text to synthesize in an `assistant` message and sends
 and played through the configured speaker.
 
 Full templates are available in [config.demo.mify.yaml](config.demo.mify.yaml)
-and [config.mify.example.yaml](config.mify.example.yaml). The runnable first
-demo flow is documented in [docs/first-demo.md](docs/first-demo.md).
+[config.demo.wake.yaml](config.demo.wake.yaml), and
+[config.mify.example.yaml](config.mify.example.yaml). The runnable first demo
+flow is documented in [docs/first-demo.md](docs/first-demo.md).
 
 See [docs/implementation-plan.md](docs/implementation-plan.md) and
 [docs/xvf3800.md](docs/xvf3800.md) for the detailed plan.

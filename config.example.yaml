@@ -18,6 +18,7 @@ wake:
   model: hey_jarvis
   threshold: 0.5
   max_wait_seconds: 0
+  inference_framework: onnx
 
 vad:
   engine: energy

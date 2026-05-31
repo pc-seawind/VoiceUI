@@ -1,10 +1,11 @@
 # First Demo Runbook
 
-This demo proves the first usable assistant loop without depending on a wake-word
-model:
+This demo proves the first usable assistant loop, then switches the same backend
+to wake-word mode:
 
 ```text
-Press Enter -> VAD records one utterance -> ASR -> LLM -> system speaker output
+Press Enter -> VAD records one utterance -> ASR -> LLM -> MiMo TTS -> speaker
+Wake word -> VAD records one utterance -> ASR -> LLM -> MiMo TTS -> speaker
 ```
 
 ## 1. Install Minimal Demo Dependencies
@@ -13,6 +14,12 @@ Press Enter -> VAD records one utterance -> ASR -> LLM -> system speaker output
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -e ".[demo]"
+```
+
+For the wake-word demo:
+
+```powershell
+pip install -e ".[demo,wake]"
 ```
 
 ## 2. Confirm Audio Devices
@@ -80,7 +87,8 @@ Expected output:
 assistant> ...
 ```
 
-The `system` TTS provider also speaks the answer through the OS default output.
+With `config.demo.mify.yaml`, MiMo TTS also speaks the answer through the
+configured output device.
 
 ## 7. Run the First Voice Demo
 
@@ -113,3 +121,40 @@ python -m voiceui --config config.demo.mock.yaml
 ```
 
 That confirms microphone, VAD, and speaker output but uses mock ASR/LLM text.
+
+## 8. Verify Wake Word
+
+The wake demo uses openWakeWord with the built-in `hey_jarvis` model. VoiceUI
+loads it through ONNXRuntime on Windows.
+
+```powershell
+python -m voiceui --config config.demo.wake.yaml --wake-test
+```
+
+Say "hey jarvis". On the first run, openWakeWord downloads its feature model and
+the `hey_jarvis` model. A successful detection prints:
+
+```text
+wake> engine=openwakeword label=hey_jarvis confidence=... latency_ms=...
+```
+
+If it does not trigger reliably, try these in order:
+
+1. Confirm `audio.device`, `audio.channels`, and `audio.wake_stream_channel`.
+2. Speak toward the XVF3800 at a normal smart-speaker distance.
+3. Lower `wake.threshold` from `0.5` to `0.35` for bring-up only.
+4. Record `--audio-purpose wake` and inspect the saved WAV level.
+
+## 9. Run the Wake-Word Full Chain
+
+```powershell
+$env:MIFY_API_KEY="your-token-if-required"
+python -m voiceui --config config.demo.wake.yaml
+```
+
+Flow:
+
+1. Say "hey jarvis".
+2. Wait for the `wake>` log.
+3. Speak one command.
+4. Wait for `vad>`, `stt>`, `llm>`, `tts>`, and the spoken answer.

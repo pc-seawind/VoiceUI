@@ -3,13 +3,15 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 
-from voiceui.audio import list_audio_devices, read_pcm16_wav
+from voiceui.audio import create_audio_input, list_audio_devices, read_pcm16_wav
 from voiceui.config import config_to_dict, load_config
 from voiceui.core import VoiceAssistant
 from voiceui.diagnostics import calibrate_vad, record_wav
 from voiceui.models import Utterance
 from voiceui.stt import create_stt
+from voiceui.wake import create_wake_detector
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -32,6 +34,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Use command_stream_channel or wake_stream_channel",
     )
     parser.add_argument("--audio-channel", type=int, help="Override configured audio channel")
+    parser.add_argument("--wake-test", action="store_true", help="Wait for one wake word and exit")
     parser.add_argument("--text", help="Run one text-only turn")
     parser.add_argument("--once", action="store_true", help="Run a single turn")
     args = parser.parse_args(argv)
@@ -85,6 +88,22 @@ def main(argv: list[str] | None = None) -> int:
                 channel_override=args.audio_channel,
             )
             print(summary.to_json())
+            return 0
+
+        if args.wake_test:
+            channel = (
+                args.audio_channel
+                if args.audio_channel is not None
+                else config.audio.wake_stream_channel
+            )
+            audio = create_audio_input(config.audio, enabled=True, selected_channel=channel)
+            started = time.monotonic()
+            wake = create_wake_detector(config.wake).wait(audio)
+            latency_ms = int((time.monotonic() - started) * 1000)
+            print(
+                f"wake> engine={wake.engine} label={wake.label} "
+                f"confidence={wake.confidence:.3f} latency_ms={latency_ms}"
+            )
             return 0
 
         assistant = VoiceAssistant(config)

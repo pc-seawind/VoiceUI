@@ -1,16 +1,16 @@
 node:
-  id: living_room_xvf3800
-  room: living_room
+  id: first_wake_demo
+  room: demo_room
 
 input:
   mode: audio
 
 audio:
   sample_rate: 16000
-  channels: 2
+  channels: 1
   block_ms: 80
-  device: reSpeaker XVF3800
-  wake_stream_channel: 1
+  device: default
+  wake_stream_channel: 0
   command_stream_channel: 0
 
 wake:
@@ -22,16 +22,15 @@ wake:
 
 vad:
   engine: energy
-  threshold: 450
+  threshold: 650
   min_speech_ms: 250
-  silence_ms: 800
+  silence_ms: 900
   max_speech_ms: 15000
   pre_roll_ms: 240
 
 stt:
   provider: mify
-  # MiMo-compatible chat completions base URL. Replace with your Mify endpoint.
-  endpoint: https://api.xiaomimimo.com/v1
+  endpoint: https://editdemo.ai.xiaomi.net/model/infer/xiaomi-mify/v1
   api_key_env: MIFY_API_KEY
   timeout_seconds: 60
   model: xiaomi/mimo-v2.5
@@ -39,19 +38,17 @@ stt:
 
 llm:
   provider: mify
-  # MiMo-compatible chat completions base URL. Replace with your Mify endpoint.
-  endpoint: https://api.xiaomimimo.com/v1
+  endpoint: https://editdemo.ai.xiaomi.net/model/infer/xiaomi-mify/v1
   api_key_env: MIFY_API_KEY
   model: xiaomi/mimo-v2.5
   temperature: 0.3
   system_prompt: >
-    You are a concise Chinese home voice assistant. Keep replies short and ask
-    for confirmation before sensitive actions.
+    You are a concise Chinese smart speaker assistant. Reply in short spoken
+    Chinese. Ask for confirmation before sensitive home actions.
 
 tts:
   provider: mify
-  # MiMo-compatible chat completions base URL. Replace with your Mify endpoint.
-  endpoint: https://api.xiaomimimo.com/v1
+  endpoint: https://editdemo.ai.xiaomi.net/model/infer/xiaomi-mify/v1
   api_key_env: MIFY_API_KEY
   timeout_seconds: 60
   model: xiaomi/mimo-v2.5-tts
@@ -71,7 +68,7 @@ home_assistant:
   enabled: false
   url: http://homeassistant.local:8123
   token_env: HA_TOKEN
-  default_area: living_room
+  default_area: demo_room
 
 debug:
   enabled: true

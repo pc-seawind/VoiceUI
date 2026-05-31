@@ -31,6 +31,7 @@ class WakeConfig:
     model: str = "hey_jarvis"
     threshold: float = 0.5
     max_wait_seconds: float = 0.0
+    inference_framework: Literal["onnx", "tflite"] = "onnx"
 
 
 @dataclass(slots=True)

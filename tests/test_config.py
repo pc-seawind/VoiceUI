@@ -36,6 +36,7 @@ class ConfigTests(unittest.TestCase):
     def test_demo_configs_load(self) -> None:
         mock_config = load_config("config.demo.mock.yaml")
         mify_config = load_config("config.demo.mify.yaml")
+        wake_config = load_config("config.demo.wake.yaml")
 
         self.assertEqual(mock_config.wake.engine, "manual")
         self.assertEqual(mock_config.tts.provider, "system")
@@ -46,6 +47,10 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(mify_config.tts.provider, "mify")
         self.assertEqual(mify_config.tts.model, "xiaomi/mimo-v2.5-tts")
         self.assertTrue(mify_config.debug.enabled)
+        self.assertEqual(wake_config.wake.engine, "openwakeword")
+        self.assertEqual(wake_config.wake.model, "hey_jarvis")
+        self.assertEqual(wake_config.wake.inference_framework, "onnx")
+        self.assertEqual(wake_config.stt.model, "xiaomi/mimo-v2.5")
 
 
 if __name__ == "__main__":
