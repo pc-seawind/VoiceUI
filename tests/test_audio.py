@@ -4,7 +4,13 @@ import unittest
 import tempfile
 from pathlib import Path
 
-from voiceui.audio import pcm16_rms, read_pcm16_wav, select_pcm16_channel, write_pcm16_wav
+from voiceui.audio import (
+    apply_pcm16_gain_db,
+    pcm16_rms,
+    read_pcm16_wav,
+    select_pcm16_channel,
+    write_pcm16_wav,
+)
 
 
 class AudioTests(unittest.TestCase):
@@ -26,6 +32,19 @@ class AudioTests(unittest.TestCase):
         samples = [3, 4]
         pcm = b"".join(sample.to_bytes(2, "little", signed=True) for sample in samples)
         self.assertAlmostEqual(pcm16_rms(pcm), 3.5355, places=3)
+
+    def test_apply_pcm16_gain_db_amplifies_and_clips(self) -> None:
+        samples = [1000, -1000, 4000, -4000]
+        pcm = b"".join(sample.to_bytes(2, "little", signed=True) for sample in samples)
+
+        amplified = apply_pcm16_gain_db(pcm, 20.0)
+
+        self.assertEqual(_decode_pcm16(amplified), [10000, -10000, 32767, -32768])
+
+    def test_apply_pcm16_gain_db_zero_gain_returns_same_bytes(self) -> None:
+        pcm = b"\x01\x00\x02\x00"
+
+        self.assertIs(apply_pcm16_gain_db(pcm, 0.0), pcm)
 
     def test_write_and_read_pcm16_wav(self) -> None:
         samples = [100, -100]

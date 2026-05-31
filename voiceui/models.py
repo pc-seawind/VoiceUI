@@ -23,6 +23,7 @@ class AudioConfig:
     device: str | int | None = None
     wake_stream_channel: int = 0
     command_stream_channel: int = 0
+    input_gain_db: float = 0.0
 
 
 @dataclass(slots=True)

@@ -12,6 +12,7 @@ audio:
   device: default
   wake_stream_channel: 0
   command_stream_channel: 0
+  input_gain_db: 20.0
 
 wake:
   engine: manual

@@ -62,6 +62,7 @@ class SoundDeviceAudioInput:
                         channels=self.config.channels,
                         selected_channel=self.selected_channel,
                     )
+                chunk = apply_pcm16_gain_db(chunk, self.config.input_gain_db)
                 yield chunk
 
 
@@ -97,6 +98,22 @@ def pcm16_rms(pcm: bytes) -> float:
         sample = int.from_bytes(pcm[index : index + 2], "little", signed=True)
         total += sample * sample
     return math.sqrt(total / sample_count)
+
+
+def apply_pcm16_gain_db(pcm: bytes, gain_db: float) -> bytes:
+    if not pcm or gain_db == 0:
+        return pcm
+
+    multiplier = math.pow(10.0, gain_db / 20.0)
+    output = bytearray(len(pcm))
+    for index in range(0, len(pcm) - 1, 2):
+        sample = int.from_bytes(pcm[index : index + 2], "little", signed=True)
+        amplified = int(round(sample * multiplier))
+        clipped = min(32767, max(-32768, amplified))
+        output[index : index + 2] = clipped.to_bytes(2, "little", signed=True)
+    if len(pcm) % 2:
+        output[-1] = pcm[-1]
+    return bytes(output)
 
 
 def write_pcm16_wav(path: str | Path, pcm: bytes, sample_rate: int) -> None:

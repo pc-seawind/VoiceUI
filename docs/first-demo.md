@@ -49,6 +49,10 @@ python -m voiceui --config config.demo.mock.yaml --record-wav recordings\smoke.w
 Play the file with any media player and confirm that speech is clear enough for
 ASR.
 
+The demo configs apply `audio.input_gain_db: 20.0` to the microphone PCM before
+wake detection, VAD, ASR, and saved WAVs. If the recording sounds harsh or
+clipped, lower it to `12.0` or `6.0`.
+
 ## 4. Calibrate VAD
 
 Run this while the room is quiet:
