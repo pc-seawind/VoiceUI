@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 import tempfile
 import urllib.parse
 import urllib.request
@@ -17,6 +18,35 @@ class TextToSpeech:
 class ConsoleTextToSpeech(TextToSpeech):
     def speak(self, text: str) -> None:
         print(f"assistant> {text}")
+
+
+class SystemTextToSpeech(TextToSpeech):
+    def speak(self, text: str) -> None:
+        print(f"assistant> {text}")
+        if sys.platform == "win32":
+            _run_tts_command(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    (
+                        "Add-Type -AssemblyName System.Speech; "
+                        "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
+                        "$s.Speak([Console]::In.ReadToEnd())"
+                    ),
+                ],
+                text,
+            )
+            return
+        if sys.platform == "darwin":
+            _run_tts_command(["say"], text)
+            return
+
+        try:
+            _run_tts_command(["spd-say"], text)
+        except RuntimeError:
+            _run_tts_command(["espeak"], text)
 
 
 class PiperHttpTextToSpeech(TextToSpeech):
@@ -54,11 +84,22 @@ class PiperCliTextToSpeech(TextToSpeech):
 def create_tts(config: TtsConfig) -> TextToSpeech:
     if config.provider == "console":
         return ConsoleTextToSpeech()
+    if config.provider == "system":
+        return SystemTextToSpeech()
     if config.provider == "piper_http":
         return PiperHttpTextToSpeech(config)
     if config.provider == "piper_cli":
         return PiperCliTextToSpeech(config)
     raise ValueError(f"Unsupported TTS provider: {config.provider}")
+
+
+def _run_tts_command(command: list[str], text: str) -> None:
+    try:
+        subprocess.run(command, input=text, text=True, check=True)
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"System TTS command is not available: {command[0]}") from exc
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(f"System TTS command failed: {command[0]}") from exc
 
 
 def _play_wav_bytes(wav_data: bytes, device: str | int | None) -> None:

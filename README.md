@@ -30,6 +30,12 @@ python -m venv .venv
 pip install -e ".[config,audio,wake,stt,tts]"
 ```
 
+For the manual first demo, the smaller dependency set is enough:
+
+```powershell
+pip install -e ".[demo]"
+```
+
 List audio devices:
 
 ```powershell
@@ -40,6 +46,12 @@ Record from the configured XVF3800 command stream:
 
 ```powershell
 python -m voiceui --config config.example.yaml --record-wav recordings\command.wav --seconds 5
+```
+
+Transcribe a saved WAV through the configured ASR backend:
+
+```powershell
+python -m voiceui --config config.demo.mify.yaml --transcribe-wav recordings\command.wav
 ```
 
 Estimate an initial `vad.threshold` from room noise:
@@ -59,6 +71,27 @@ Run continuously:
 ```powershell
 python -m voiceui --config config.example.yaml
 ```
+
+## First Demo
+
+Use the mock demo first to prove that the microphone, VAD, and speaker path
+work. It does not call ASR or an LLM backend:
+
+```powershell
+python -m voiceui --config config.demo.mock.yaml
+```
+
+Then run the real Mify-backed demo:
+
+```powershell
+$env:MIFY_API_KEY="your-token-if-required"
+python -m voiceui --config config.demo.mify.yaml --text "你好，介绍一下你自己"
+python -m voiceui --config config.demo.mify.yaml --transcribe-wav recordings\command.wav
+python -m voiceui --config config.demo.mify.yaml
+```
+
+For the audio demo, press Enter when prompted, speak one command, and wait for
+the transcript plus assistant reply.
 
 ## Recommended MVP Setup
 
@@ -99,8 +132,9 @@ stt:
   language: zh
 ```
 
-A full Mify-oriented template is available in
-[config.mify.example.yaml](config.mify.example.yaml).
+Full templates are available in [config.demo.mify.yaml](config.demo.mify.yaml)
+and [config.mify.example.yaml](config.mify.example.yaml). The runnable first
+demo flow is documented in [docs/first-demo.md](docs/first-demo.md).
 
 See [docs/implementation-plan.md](docs/implementation-plan.md) and
 [docs/xvf3800.md](docs/xvf3800.md) for the detailed plan.

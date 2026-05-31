@@ -109,6 +109,20 @@ def write_pcm16_wav(path: str | Path, pcm: bytes, sample_rate: int) -> None:
         wav.writeframes(pcm)
 
 
+def read_pcm16_wav(path: str | Path, selected_channel: int = 0) -> tuple[bytes, int]:
+    with wave.open(str(path), "rb") as wav:
+        channels = wav.getnchannels()
+        sample_width = wav.getsampwidth()
+        sample_rate = wav.getframerate()
+        frames = wav.readframes(wav.getnframes())
+
+    if sample_width != 2:
+        raise ValueError(f"Only 16-bit PCM WAV is supported, got sample_width={sample_width}")
+    if channels > 1:
+        frames = select_pcm16_channel(frames, channels=channels, selected_channel=selected_channel)
+    return frames, sample_rate
+
+
 def select_pcm16_channel(pcm: bytes, channels: int, selected_channel: int) -> bytes:
     if channels <= 1:
         return pcm

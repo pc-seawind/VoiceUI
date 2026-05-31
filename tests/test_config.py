@@ -31,6 +31,15 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.stt.api_key_env, "MIFY_API_KEY")
         self.assertEqual(config.llm.api_key_env, "MIFY_API_KEY")
 
+    def test_demo_configs_load(self) -> None:
+        mock_config = load_config("config.demo.mock.yaml")
+        mify_config = load_config("config.demo.mify.yaml")
+
+        self.assertEqual(mock_config.wake.engine, "manual")
+        self.assertEqual(mock_config.tts.provider, "system")
+        self.assertEqual(mify_config.wake.engine, "manual")
+        self.assertEqual(mify_config.stt.provider, "mify")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -42,6 +42,7 @@ Deliverables:
 
 Acceptance criteria:
 
+- A manual-wake demo runs without a wake-word model.
 - Wake word triggers reliably in a quiet room.
 - VAD records a command and stops within 800-1200 ms after speech ends.
 - STT transcript is passed to the LLM.

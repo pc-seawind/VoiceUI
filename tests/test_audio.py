@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import unittest
+import tempfile
+from pathlib import Path
 
-from voiceui.audio import pcm16_rms, select_pcm16_channel
+from voiceui.audio import pcm16_rms, read_pcm16_wav, select_pcm16_channel, write_pcm16_wav
 
 
 class AudioTests(unittest.TestCase):
@@ -24,6 +26,18 @@ class AudioTests(unittest.TestCase):
         samples = [3, 4]
         pcm = b"".join(sample.to_bytes(2, "little", signed=True) for sample in samples)
         self.assertAlmostEqual(pcm16_rms(pcm), 3.5355, places=3)
+
+    def test_write_and_read_pcm16_wav(self) -> None:
+        samples = [100, -100]
+        pcm = b"".join(sample.to_bytes(2, "little", signed=True) for sample in samples)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "sample.wav"
+            write_pcm16_wav(path, pcm, sample_rate=16000)
+            loaded_pcm, sample_rate = read_pcm16_wav(path)
+
+        self.assertEqual(loaded_pcm, pcm)
+        self.assertEqual(sample_rate, 16000)
 
 
 def _decode_pcm16(pcm: bytes) -> list[int]:

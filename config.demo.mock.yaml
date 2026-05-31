@@ -1,0 +1,44 @@
+node:
+  id: first_demo_mock
+  room: demo_room
+
+input:
+  mode: audio
+
+audio:
+  sample_rate: 16000
+  channels: 1
+  block_ms: 80
+  device: default
+  wake_stream_channel: 0
+  command_stream_channel: 0
+
+wake:
+  engine: manual
+
+vad:
+  engine: energy
+  threshold: 650
+  min_speech_ms: 250
+  silence_ms: 900
+  max_speech_ms: 15000
+  pre_roll_ms: 240
+
+stt:
+  provider: mock
+  mock_text: "你好，演示链路已经听到语音输入。"
+
+llm:
+  provider: mock
+  system_prompt: >
+    You are a concise Chinese smart speaker assistant.
+
+tts:
+  provider: system
+
+conversation:
+  follow_up_seconds: 10
+  max_turns: 12
+
+home_assistant:
+  enabled: false

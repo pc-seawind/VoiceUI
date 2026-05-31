@@ -1,0 +1,59 @@
+node:
+  id: first_demo
+  room: demo_room
+
+input:
+  mode: audio
+
+audio:
+  sample_rate: 16000
+  channels: 1
+  block_ms: 80
+  device: default
+  wake_stream_channel: 0
+  command_stream_channel: 0
+
+wake:
+  engine: manual
+
+vad:
+  engine: energy
+  threshold: 650
+  min_speech_ms: 250
+  silence_ms: 900
+  max_speech_ms: 15000
+  pre_roll_ms: 240
+
+stt:
+  provider: mify
+  endpoint: http://localhost:8000/v1/audio/transcriptions
+  api_key_env: MIFY_API_KEY
+  timeout_seconds: 60
+  model: whisper-large-v3
+  language: zh
+
+llm:
+  provider: mify
+  endpoint: http://localhost:8000
+  api_key_env: MIFY_API_KEY
+  model: qwen2.5:7b-instruct
+  temperature: 0.3
+  system_prompt: >
+    You are a concise Chinese smart speaker assistant. Reply in short spoken
+    Chinese. Ask for confirmation before sensitive home actions.
+
+tts:
+  provider: system
+  piper_url: http://localhost:5000
+  piper_model: models/voice.onnx
+  playback_device: default
+
+conversation:
+  follow_up_seconds: 10
+  max_turns: 12
+
+home_assistant:
+  enabled: false
+  url: http://homeassistant.local:8123
+  token_env: HA_TOKEN
+  default_area: demo_room

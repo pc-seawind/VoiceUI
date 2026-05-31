@@ -4,10 +4,12 @@ import argparse
 import json
 import sys
 
-from voiceui.audio import list_audio_devices
+from voiceui.audio import list_audio_devices, read_pcm16_wav
 from voiceui.config import config_to_dict, load_config
 from voiceui.core import VoiceAssistant
 from voiceui.diagnostics import calibrate_vad, record_wav
+from voiceui.models import Utterance
+from voiceui.stt import create_stt
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -16,6 +18,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true", help="Print resolved config and exit")
     parser.add_argument("--list-audio-devices", action="store_true", help="List audio devices and exit")
     parser.add_argument("--record-wav", help="Record a mono WAV from the configured audio device")
+    parser.add_argument("--transcribe-wav", help="Transcribe a WAV file with the configured STT backend")
     parser.add_argument(
         "--calibrate-vad",
         action="store_true",
@@ -57,6 +60,21 @@ def main(argv: list[str] | None = None) -> int:
                 channel_override=args.audio_channel,
             )
             print(f"recorded> {path}")
+            return 0
+
+        if args.transcribe_wav:
+            pcm, sample_rate = read_pcm16_wav(
+                args.transcribe_wav,
+                selected_channel=args.audio_channel or 0,
+            )
+            transcript = create_stt(config.stt).transcribe(
+                Utterance(
+                    pcm=pcm,
+                    sample_rate=sample_rate,
+                    duration_ms=int(len(pcm) / 2 / sample_rate * 1000),
+                )
+            )
+            print(f"transcript> {transcript}")
             return 0
 
         if args.calibrate_vad:

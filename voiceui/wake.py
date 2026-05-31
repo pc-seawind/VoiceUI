@@ -13,7 +13,13 @@ class WakeDetector:
 
 class DisabledWakeDetector(WakeDetector):
     def wait(self, audio: AudioInput) -> WakeEvent:
-        return WakeEvent(engine="disabled", confidence=1.0, label="manual")
+        return WakeEvent(engine="disabled", confidence=1.0, label="disabled")
+
+
+class ManualWakeDetector(WakeDetector):
+    def wait(self, audio: AudioInput) -> WakeEvent:
+        input("wake> press Enter, then speak your command...")
+        return WakeEvent(engine="manual", confidence=1.0, label="enter")
 
 
 class OpenWakeWordDetector(WakeDetector):
@@ -62,6 +68,8 @@ class SherpaOnnxDetector(WakeDetector):
 def create_wake_detector(config: WakeConfig) -> WakeDetector:
     if config.engine == "disabled":
         return DisabledWakeDetector()
+    if config.engine == "manual":
+        return ManualWakeDetector()
     if config.engine == "openwakeword":
         return OpenWakeWordDetector(config)
     if config.engine == "sherpa_onnx":

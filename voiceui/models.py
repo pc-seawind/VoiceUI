@@ -27,7 +27,7 @@ class AudioConfig:
 
 @dataclass(slots=True)
 class WakeConfig:
-    engine: Literal["disabled", "openwakeword", "sherpa_onnx"] = "disabled"
+    engine: Literal["disabled", "manual", "openwakeword", "sherpa_onnx"] = "disabled"
     model: str = "hey_jarvis"
     threshold: float = 0.5
     max_wait_seconds: float = 0.0
@@ -72,7 +72,7 @@ class LlmConfig:
 
 @dataclass(slots=True)
 class TtsConfig:
-    provider: Literal["console", "piper_http", "piper_cli"] = "console"
+    provider: Literal["console", "system", "piper_http", "piper_cli"] = "console"
     piper_url: str = "http://localhost:5000"
     piper_model: str | None = None
     playback_device: str | int | None = None
