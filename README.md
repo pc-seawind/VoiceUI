@@ -121,6 +121,9 @@ python -m voiceui --config config.demo.wake.yaml --wake-test
 Say "hey jarvis". The first run downloads the openWakeWord feature model and
 `hey_jarvis` ONNX model. A successful detection prints `wake>` with the label,
 confidence, and latency, then plays the local wake acknowledgement WAV.
+For hardware bring-up, `config.demo.wake.yaml` uses `wake.threshold: 0.35`.
+Lower it toward `0.25` if wake is still difficult; raise it toward `0.5` if it
+false-wakes.
 
 Then run the wake-word Mify demo:
 

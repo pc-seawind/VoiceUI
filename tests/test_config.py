@@ -50,6 +50,7 @@ class ConfigTests(unittest.TestCase):
         self.assertTrue(mify_config.debug.enabled)
         self.assertEqual(wake_config.wake.engine, "openwakeword")
         self.assertEqual(wake_config.wake.model, "hey_jarvis")
+        self.assertEqual(wake_config.wake.threshold, 0.35)
         self.assertEqual(wake_config.wake.inference_framework, "onnx")
         self.assertTrue(wake_config.wake_ack.enabled)
         self.assertEqual(wake_config.wake_ack.wav_path, "default")

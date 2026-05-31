@@ -16,7 +16,7 @@ audio:
 wake:
   engine: openwakeword
   model: hey_jarvis
-  threshold: 0.5
+  threshold: 0.35
   max_wait_seconds: 0
   inference_framework: onnx
 

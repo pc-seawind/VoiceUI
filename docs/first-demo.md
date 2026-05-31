@@ -163,7 +163,8 @@ If it does not trigger reliably, try these in order:
 
 1. Confirm `audio.device`, `audio.channels`, and `audio.wake_stream_channel`.
 2. Speak toward the XVF3800 at a normal smart-speaker distance.
-3. Lower `wake.threshold` from `0.5` to `0.35` for bring-up only.
+3. If it is still hard to wake, lower `wake.threshold` from `0.35` to `0.25`
+   for bring-up only. If it false-wakes, raise it toward `0.5`.
 4. Record `--audio-purpose wake` and inspect the saved WAV level.
 
 ## 9. Run the Wake-Word Full Chain
