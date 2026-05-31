@@ -1,0 +1,66 @@
+node:
+  id: living_room_xvf3800
+  room: living_room
+
+input:
+  mode: audio
+
+audio:
+  sample_rate: 16000
+  channels: 2
+  block_ms: 80
+  device: reSpeaker XVF3800
+  wake_stream_channel: 1
+  command_stream_channel: 0
+
+wake:
+  engine: openwakeword
+  model: hey_jarvis
+  threshold: 0.5
+  max_wait_seconds: 0
+
+vad:
+  engine: energy
+  threshold: 450
+  min_speech_ms: 250
+  silence_ms: 800
+  max_speech_ms: 15000
+  pre_roll_ms: 240
+
+stt:
+  provider: faster_whisper
+  # Use provider: mify for an OpenAI-compatible /v1/audio/transcriptions backend.
+  endpoint: http://localhost:8000/v1/audio/transcriptions
+  # api_key_env: MIFY_API_KEY
+  timeout_seconds: 60
+  model: small
+  language: zh
+  device: cpu
+  compute_type: int8
+
+llm:
+  provider: ollama
+  # Use provider: mify when your backend exposes /v1/chat/completions.
+  endpoint: http://localhost:11434
+  # api_key_env: MIFY_API_KEY
+  model: qwen2.5:7b-instruct
+  temperature: 0.3
+  system_prompt: >
+    You are a concise home voice assistant. Answer briefly and ask for
+    confirmation before sensitive actions.
+
+tts:
+  provider: console
+  piper_url: http://localhost:5000
+  piper_model: models/voice.onnx
+  playback_device: default
+
+conversation:
+  follow_up_seconds: 10
+  max_turns: 12
+
+home_assistant:
+  enabled: false
+  url: http://homeassistant.local:8123
+  token_env: HA_TOKEN
+  default_area: living_room

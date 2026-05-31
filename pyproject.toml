@@ -1,0 +1,38 @@
+[project]
+name = "voiceui"
+version = "0.1.0"
+description = "A modular voice assistant core for XVF3800 microphone arrays, LLMs, and whole-home control."
+requires-python = ">=3.11"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "VoiceUI" }]
+dependencies = []
+
+[project.optional-dependencies]
+config = ["PyYAML>=6.0.1"]
+audio = ["sounddevice>=0.4.6"]
+wake = ["openwakeword>=0.6.0", "onnxruntime>=1.16.0", "numpy>=1.26.0"]
+stt = ["faster-whisper>=1.0.0"]
+vad = ["silero-vad>=5.1.0", "numpy>=1.26.0"]
+tts = ["soundfile>=0.12.1", "sounddevice>=0.4.6"]
+dev = ["pytest>=8.0.0", "ruff>=0.5.0"]
+all = [
+  "PyYAML>=6.0.1",
+  "sounddevice>=0.4.6",
+  "openwakeword>=0.6.0",
+  "onnxruntime>=1.16.0",
+  "numpy>=1.26.0",
+  "faster-whisper>=1.0.0",
+  "silero-vad>=5.1.0",
+  "soundfile>=0.12.1"
+]
+
+[project.scripts]
+voiceui = "voiceui.__main__:main"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
