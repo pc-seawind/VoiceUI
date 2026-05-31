@@ -42,6 +42,9 @@ For wake-word testing, install the wake extra as well:
 pip install -e ".[demo,wake]"
 ```
 
+The demo extra includes `webrtcvad-wheels`, which is used by the current
+Mify/wake configs for endpointing.
+
 List audio devices:
 
 ```powershell
@@ -65,6 +68,10 @@ Estimate an initial `vad.threshold` from room noise:
 ```powershell
 python -m voiceui --config config.example.yaml --calibrate-vad --seconds 10
 ```
+
+This calibration is only useful for `vad.engine: energy`. WebRTC VAD ignores
+`vad.threshold`; tune `vad.webrtc_mode`, `vad.silence_ms`, and
+`vad.min_speech_ms` instead.
 
 Run once with a config file:
 
@@ -148,8 +155,9 @@ Each audio turn writes debug artifacts under `debug_sessions/` when
 For the first XVF3800 prototype:
 
 - Wake word: `openwakeword` with `hey_jarvis`.
-- Endpointing: built-in energy VAD first, then switch to Silero VAD after audio
-  levels are stable.
+- Endpointing: WebRTC VAD for the current hardware demo; increase
+  `vad.silence_ms` if endings are still clipped, and lower `vad.webrtc_mode` if
+  speech is missed.
 - STT: `faster_whisper` on GPU if available, otherwise CPU `int8` with a smaller
   model.
 - LLM: Ollama or any OpenAI-compatible endpoint.
@@ -198,11 +206,19 @@ tts:
   voice: mimo_default
   audio_format: pcm
   sample_rate: 24000
+  stream: false
 ```
 
 For TTS, VoiceUI puts the text to synthesize in an `assistant` message and sends
 `audio: {format, voice}`. The returned `message.audio.data` is base64-decoded
 and played through the configured speaker.
+
+MiMo-V2.5-TTS currently does not provide true low-latency streaming output. If
+`tts.stream: true` is enabled, VoiceUI sends `stream: true` and can play PCM
+chunks as they arrive, but the current MiMo API documents this as a
+compatibility mode that returns once after inference completes. VoiceUI logs
+`tts> synth_latency_ms`, `tts> playback_latency_ms`, and when streaming is
+enabled, `tts> stream_first_audio_ms` so the bottleneck is visible.
 
 Full templates are available in [config.demo.mify.yaml](config.demo.mify.yaml)
 [config.demo.wake.yaml](config.demo.wake.yaml), and

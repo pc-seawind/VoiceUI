@@ -26,12 +26,14 @@ wake_ack:
   playback_device: default
 
 vad:
-  engine: energy
+  engine: webrtc
   threshold: 450
-  min_speech_ms: 250
-  silence_ms: 800
+  min_speech_ms: 160
+  silence_ms: 1200
   max_speech_ms: 15000
-  pre_roll_ms: 240
+  pre_roll_ms: 300
+  frame_ms: 20
+  webrtc_mode: 2
 
 stt:
   provider: mify
@@ -64,6 +66,7 @@ tts:
   audio_format: pcm
   sample_rate: 24000
   style_prompt: 自然、清晰、适合智能音箱的中文播报。
+  stream: false
   piper_url: http://localhost:5000
   piper_model: models/voice.onnx
   playback_device: default

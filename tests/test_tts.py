@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import base64
+import contextlib
+import io
 import unittest
 from unittest.mock import patch
 
@@ -9,6 +11,7 @@ from voiceui.tts import (
     ConsoleTextToSpeech,
     MimoTextToSpeech,
     SystemTextToSpeech,
+    _extract_stream_audio,
     _play_audio_bytes,
     create_tts,
 )
@@ -66,6 +69,49 @@ class TtsTests(unittest.TestCase):
         self.assertEqual(payload["messages"][-1], {"role": "assistant", "content": "你好"})
         self.assertEqual(payload["audio"], {"format": "pcm", "voice": "mimo_default"})
         self.assertEqual(post_json.call_args.kwargs["headers"], {"api-key": "test-token"})
+
+    def test_mimo_streaming_tts_requests_pcm16_stream_and_plays_chunks(self) -> None:
+        config = TtsConfig(
+            provider="mify",
+            endpoint="https://api.xiaomimimo.com/v1",
+            api_key_env="MIFY_API_KEY",
+            model="xiaomi/mimo-v2.5-tts",
+            audio_format="pcm",
+            stream=True,
+        )
+        tts = MimoTextToSpeech(config)
+        chunk = base64.b64encode(b"\x00\x00").decode("ascii")
+
+        with patch.dict("os.environ", {"MIFY_API_KEY": "test-token"}):
+            with patch("voiceui.tts._post_json_stream") as post_json_stream:
+                with patch("voiceui.tts._play_pcm_stream") as play_pcm_stream:
+                    post_json_stream.return_value = iter(
+                        [{"choices": [{"delta": {"audio": {"data": chunk, "format": "pcm16"}}}]}]
+                    )
+                    play_pcm_stream.side_effect = lambda chunks, **_kwargs: sum(1 for _ in chunks)
+
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        tts.speak("你好")
+
+        url, payload = post_json_stream.call_args.args[:2]
+        self.assertEqual(url, "https://api.xiaomimimo.com/v1/chat/completions")
+        self.assertTrue(payload["stream"])
+        self.assertEqual(payload["audio"]["format"], "pcm16")
+        self.assertEqual(post_json_stream.call_args.kwargs["headers"], {"api-key": "test-token"})
+        self.assertEqual(play_pcm_stream.call_args.kwargs["sample_rate"], 24000)
+
+    def test_extract_stream_audio_supports_delta_and_message_shapes(self) -> None:
+        delta_audio = {"data": "delta"}
+        message_audio = {"data": "message"}
+
+        self.assertEqual(
+            _extract_stream_audio({"choices": [{"delta": {"audio": delta_audio}}]}),
+            delta_audio,
+        )
+        self.assertEqual(
+            _extract_stream_audio({"choices": [{"message": {"audio": message_audio}}]}),
+            message_audio,
+        )
 
     def test_play_pcm_audio_bytes(self) -> None:
         with patch("sounddevice.play") as play, patch("sounddevice.wait") as wait:

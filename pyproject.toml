@@ -11,10 +11,15 @@ dependencies = []
 [project.optional-dependencies]
 config = ["PyYAML>=6.0.1"]
 audio = ["sounddevice>=0.4.6"]
-demo = ["PyYAML>=6.0.1", "sounddevice>=0.4.6", "soundfile>=0.12.1"]
+demo = [
+  "PyYAML>=6.0.1",
+  "sounddevice>=0.4.6",
+  "soundfile>=0.12.1",
+  "webrtcvad-wheels>=2.0.14"
+]
 wake = ["openwakeword>=0.6.0", "onnxruntime>=1.16.0", "numpy>=1.26.0"]
 stt = ["faster-whisper>=1.0.0"]
-vad = ["silero-vad>=5.1.0", "numpy>=1.26.0"]
+vad = ["silero-vad>=5.1.0", "numpy>=1.26.0", "webrtcvad-wheels>=2.0.14"]
 tts = ["soundfile>=0.12.1", "sounddevice>=0.4.6"]
 dev = ["pytest>=8.0.0", "ruff>=0.5.0"]
 all = [
@@ -25,6 +30,7 @@ all = [
   "numpy>=1.26.0",
   "faster-whisper>=1.0.0",
   "silero-vad>=5.1.0",
+  "webrtcvad-wheels>=2.0.14",
   "soundfile>=0.12.1"
 ]
 

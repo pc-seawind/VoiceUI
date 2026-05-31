@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import sys
+import types
 import unittest
 from collections.abc import Iterator
+from unittest.mock import patch
 
 from voiceui.models import VadConfig
-from voiceui.vad import EnergyVadRecorder
+from voiceui.vad import EnergyVadRecorder, WebRtcVadRecorder, _pcm16_frames
 
 
 class FakeAudio:
@@ -16,6 +19,14 @@ class FakeAudio:
 
     def chunks(self) -> Iterator[bytes]:
         yield from self._chunks
+
+
+class FakeWebRtcVad:
+    def __init__(self, mode: int):
+        self.mode = mode
+
+    def is_speech(self, frame: bytes, sample_rate: int) -> bool:
+        return any(frame)
 
 
 class VadTests(unittest.TestCase):
@@ -47,6 +58,35 @@ class VadTests(unittest.TestCase):
         )
 
         self.assertGreater(utterance.duration_ms, 0)
+
+    def test_pcm16_frames_splits_larger_audio_chunks(self) -> None:
+        first_frame = b"\x01\x00" * 320
+        second_frame = b"\x02\x00" * 320
+        frames = list(_pcm16_frames(FakeAudio([first_frame + second_frame]), frame_ms=20))
+
+        self.assertEqual(frames, [first_frame, second_frame])
+
+    def test_webrtc_vad_records_until_trailing_silence(self) -> None:
+        recorder = WebRtcVadRecorder(
+            VadConfig(
+                engine="webrtc",
+                min_speech_ms=40,
+                silence_ms=40,
+                pre_roll_ms=20,
+                frame_ms=20,
+            )
+        )
+        silence = b"\x00\x00" * 320
+        speech = (2000).to_bytes(2, "little", signed=True) * 320
+        fake_webrtcvad = types.SimpleNamespace(Vad=FakeWebRtcVad)
+
+        with patch.dict(sys.modules, {"webrtcvad": fake_webrtcvad}):
+            utterance = recorder.record(
+                FakeAudio([silence + speech + speech + speech + silence + silence])
+            )
+
+        self.assertEqual(utterance.duration_ms, 80)
+        self.assertEqual(utterance.sample_rate, 16000)
 
 
 if __name__ == "__main__":

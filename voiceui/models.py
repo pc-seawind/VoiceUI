@@ -43,12 +43,14 @@ class WakeAckConfig:
 
 @dataclass(slots=True)
 class VadConfig:
-    engine: Literal["energy", "silero"] = "energy"
+    engine: Literal["energy", "silero", "webrtc"] = "energy"
     threshold: int = 450
     min_speech_ms: int = 250
     silence_ms: int = 800
     max_speech_ms: int = 15000
     pre_roll_ms: int = 240
+    frame_ms: int = 20
+    webrtc_mode: int = 2
 
 
 @dataclass(slots=True)
@@ -89,6 +91,7 @@ class TtsConfig:
     audio_format: str = "pcm"
     sample_rate: int = 24000
     style_prompt: str = "自然、清晰、适合智能音箱的中文播报。"
+    stream: bool = False
     piper_url: str = "http://localhost:5000"
     piper_model: str | None = None
     playback_device: str | int | None = None

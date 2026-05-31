@@ -22,6 +22,9 @@ For the wake-word demo:
 pip install -e ".[demo,wake]"
 ```
 
+Re-run that install after pulling updates; the demo now uses `webrtcvad-wheels`
+for endpointing.
+
 ## 2. Confirm Audio Devices
 
 ```powershell
@@ -57,6 +60,11 @@ python -m voiceui --config config.demo.mock.yaml --calibrate-vad --seconds 10
 Set `vad.threshold` in the demo config to the returned
 `recommended_vad_threshold`. Use at least 10 seconds for a stable value because
 short smoke tests can be skewed by transient noise.
+
+For `config.demo.mify.yaml` and `config.demo.wake.yaml`, VAD is now
+`engine: webrtc`. WebRTC ignores `vad.threshold`; if it still clips endings,
+raise `vad.silence_ms` first. If it misses speech, try lowering
+`vad.webrtc_mode` from `2` to `1`.
 
 ## 5. Verify ASR Separately
 
@@ -107,6 +115,10 @@ Flow:
 With `config.demo.mify.yaml`, TTS also uses Mify/MiMo through
 `xiaomi/mimo-v2.5-tts`. If you only want local OS speech while testing LLM/ASR, change
 `tts.provider` back to `system`.
+
+Current MiMo-V2.5-TTS low-latency streaming is not available yet. VoiceUI has
+an optional `tts.stream: true` path for compatibility testing, but the MiMo API
+currently returns the audio after inference completes.
 
 To re-test ASR with a saved turn:
 

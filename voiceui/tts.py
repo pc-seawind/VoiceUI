@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import base64
 import io
+import json
 import subprocess
 import sys
 import tempfile
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Iterator
 from pathlib import Path
 
 from voiceui.http_utils import post_json, require_api_key
@@ -58,20 +62,84 @@ class MimoTextToSpeech(TextToSpeech):
 
     def speak(self, text: str) -> None:
         print(f"assistant> {text}")
+        if self.config.stream:
+            self.speak_streaming(text)
+            return
+
+        synth_started = time.monotonic()
         audio_data = self.synthesize(text)
+        print(f"tts> synth_latency_ms={int((time.monotonic() - synth_started) * 1000)}")
+        playback_started = time.monotonic()
         _play_audio_bytes(
             audio_data.data,
             audio_format=audio_data.format,
             sample_rate=self.config.sample_rate,
             device=self.config.playback_device,
         )
+        print(f"tts> playback_latency_ms={int((time.monotonic() - playback_started) * 1000)}")
 
     def synthesize(self, text: str) -> "SynthesizedAudio":
+        headers = self._headers()
+        data = _post_json(
+            _chat_completions_url(self.config.endpoint),
+            self._payload(text, stream=False),
+            headers=headers,
+            timeout=self.config.timeout_seconds,
+        )
+        return _extract_audio(data, fallback_format=self.config.audio_format)
+
+    def speak_streaming(self, text: str) -> None:
+        request_started = time.monotonic()
+        first_audio_ms: int | None = None
+        chunks = 0
+
+        def audio_chunks() -> Iterator[bytes]:
+            nonlocal first_audio_ms, chunks
+            for event in _post_json_stream(
+                _chat_completions_url(self.config.endpoint),
+                self._payload(text, stream=True),
+                headers=self._headers(),
+                timeout=self.config.timeout_seconds,
+            ):
+                audio = _extract_stream_audio(event)
+                if not audio:
+                    continue
+                audio_format = _normalize_audio_format(
+                    str(audio.get("format") or self.config.audio_format)
+                )
+                if audio_format not in ("pcm", "pcm16"):
+                    raise RuntimeError(f"Streaming TTS requires PCM audio, got {audio_format}")
+                encoded = audio.get("data")
+                if not encoded:
+                    continue
+                if first_audio_ms is None:
+                    first_audio_ms = int((time.monotonic() - request_started) * 1000)
+                chunks += 1
+                yield base64.b64decode(str(encoded))
+
+        playback_started = time.monotonic()
+        written_chunks = _play_pcm_stream(
+            audio_chunks(),
+            sample_rate=self.config.sample_rate,
+            device=self.config.playback_device,
+        )
+        if written_chunks == 0:
+            raise RuntimeError("Streaming TTS response did not contain audio chunks.")
+        print(
+            "tts> stream_first_audio_ms="
+            f"{first_audio_ms if first_audio_ms is not None else 0} "
+            f"stream_chunks={chunks} "
+            f"playback_latency_ms={int((time.monotonic() - playback_started) * 1000)}"
+        )
+
+    def _headers(self) -> dict[str, str]:
         headers = {}
         if self.config.api_key_env:
             api_key = require_api_key(self.config.api_key_env)
             headers["api-key"] = api_key
+        return headers
 
+    def _payload(self, text: str, stream: bool) -> dict:
         messages: list[dict[str, str]] = []
         if self.config.style_prompt:
             messages.append({"role": "user", "content": self.config.style_prompt})
@@ -81,17 +149,13 @@ class MimoTextToSpeech(TextToSpeech):
             "model": self.config.model,
             "messages": messages,
             "audio": {
-                "format": self.config.audio_format,
+                "format": _mimo_audio_format(self.config.audio_format, stream=stream),
                 "voice": self.config.voice,
             },
         }
-        data = _post_json(
-            _chat_completions_url(self.config.endpoint),
-            payload,
-            headers=headers,
-            timeout=self.config.timeout_seconds,
-        )
-        return _extract_audio(data, fallback_format=self.config.audio_format)
+        if stream:
+            payload["stream"] = True
+        return payload
 
 
 class PiperHttpTextToSpeech(TextToSpeech):
@@ -164,6 +228,39 @@ def _post_json(
     )
 
 
+def _post_json_stream(
+    url: str,
+    payload: dict,
+    headers: dict[str, str] | None = None,
+    timeout: float = 60.0,
+) -> Iterator[dict]:
+    body = json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(
+        url,
+        data=body,
+        headers={"Content-Type": "application/json", **(headers or {})},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            for raw_line in response:
+                line = raw_line.decode("utf-8", errors="replace").strip()
+                if not line or line.startswith(":"):
+                    continue
+                if line.startswith("data:"):
+                    line = line[len("data:") :].strip()
+                if line == "[DONE]":
+                    break
+                yield json.loads(line)
+    except urllib.error.HTTPError as exc:
+        error_body = exc.read().decode("utf-8", errors="replace").strip()
+        raise RuntimeError(
+            f"TTS streaming request failed: {url}: HTTP {exc.code}: {error_body or exc.reason}"
+        ) from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"TTS streaming request failed: {url}: {exc}") from exc
+
+
 def _chat_completions_url(endpoint: str) -> str:
     base = endpoint.rstrip("/")
     if base.endswith("/chat/completions"):
@@ -188,8 +285,33 @@ def _extract_audio(data: dict, fallback_format: str) -> SynthesizedAudio:
     encoded = audio.get("data")
     if not encoded:
         raise RuntimeError("TTS response did not contain message.audio.data.")
-    audio_format = str(audio.get("format") or fallback_format or "pcm").lower()
+    audio_format = _normalize_audio_format(str(audio.get("format") or fallback_format or "pcm"))
     return SynthesizedAudio(base64.b64decode(str(encoded)), audio_format)
+
+
+def _extract_stream_audio(data: dict) -> dict | None:
+    choices = data.get("choices", [])
+    if not choices:
+        return None
+    choice = choices[0]
+    delta = choice.get("delta") or {}
+    message = choice.get("message") or {}
+    audio = delta.get("audio") or message.get("audio")
+    return audio if isinstance(audio, dict) else None
+
+
+def _normalize_audio_format(audio_format: str) -> str:
+    normalized = audio_format.lower().lstrip(".")
+    if normalized in ("pcm_s16le", "s16le"):
+        return "pcm16"
+    return normalized
+
+
+def _mimo_audio_format(audio_format: str, stream: bool) -> str:
+    normalized = _normalize_audio_format(audio_format)
+    if stream and normalized in ("pcm", "pcm16"):
+        return "pcm16"
+    return audio_format
 
 
 def _play_audio_bytes(
@@ -207,9 +329,9 @@ def _play_audio_bytes(
             "Install with: pip install -e \".[tts]\""
         ) from exc
 
-    normalized_format = audio_format.lower().lstrip(".")
+    normalized_format = _normalize_audio_format(audio_format)
     playback_device = None if device == "default" else device
-    if normalized_format == "pcm":
+    if normalized_format in ("pcm", "pcm16"):
         import numpy as np  # type: ignore[import-untyped]
 
         data = np.frombuffer(audio_data, dtype="<i2").astype("float32") / 32768.0
@@ -224,3 +346,38 @@ def _play_audio_bytes(
         return
 
     raise RuntimeError(f"Unsupported TTS audio format: {audio_format}")
+
+
+def _play_pcm_stream(
+    chunks: Iterator[bytes],
+    sample_rate: int = 24000,
+    device: str | int | None = None,
+) -> int:
+    try:
+        import sounddevice as sd  # type: ignore[import-untyped]
+    except ImportError as exc:
+        raise RuntimeError(
+            "Streaming audio playback requires sounddevice. "
+            "Install with: pip install -e \".[tts]\""
+        ) from exc
+
+    playback_device = None if device == "default" else device
+    written_chunks = 0
+    stream = None
+    try:
+        for chunk in chunks:
+            if stream is None:
+                stream = sd.RawOutputStream(
+                    samplerate=sample_rate,
+                    channels=1,
+                    dtype="int16",
+                    device=playback_device,
+                )
+                stream.start()
+            stream.write(chunk)
+            written_chunks += 1
+    finally:
+        if stream is not None:
+            stream.stop()
+            stream.close()
+    return written_chunks
