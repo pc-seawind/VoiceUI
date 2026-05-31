@@ -31,7 +31,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--calibrate-vad",
         action="store_true",
-        help="Record room noise and print RMS statistics for vad.threshold",
+        help="Record room noise and print RMS statistics for energy vad.threshold",
     )
     parser.add_argument("--seconds", type=float, default=5.0, help="Seconds for recording commands")
     parser.add_argument(

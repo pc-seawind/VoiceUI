@@ -45,7 +45,7 @@ class WakeAckConfig:
 @dataclass(slots=True)
 class VadConfig:
     engine: Literal["energy", "silero", "webrtc"] = "energy"
-    threshold: int = 450
+    threshold: float = 450.0
     min_speech_ms: int = 250
     silence_ms: int = 800
     max_speech_ms: int = 15000

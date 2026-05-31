@@ -53,7 +53,7 @@ Implementation:
 
 - `voiceui.audio`: audio capture and device listing.
 - `voiceui.wake`: disabled/manual/openWakeWord adapters.
-- `voiceui.vad`: energy VAD first, Silero adapter later.
+- `voiceui.vad`: energy, Silero, and WebRTC VAD adapters.
 - `voiceui.stt`: mock, faster-whisper, MiMo audio-understanding, and
   OpenAI-compatible multipart ASR adapters.
 - `voiceui.llm`: Ollama, MiMo/Mify chat completions, OpenAI-compatible chat

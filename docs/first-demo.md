@@ -52,21 +52,25 @@ diagnostic value because it can clip.
 
 ## 4. Calibrate VAD
 
-Run this while the room is quiet:
+The demo configs now use `engine: silero`. In this mode `vad.threshold` is a
+speech probability; start with `0.6`, raise it toward `0.7` if background noise
+starts turns, or lower it toward `0.5` if it misses speech.
+
+If you switch a config back to `engine: energy`, run this while the room is
+quiet:
 
 ```powershell
 python -m voiceui --config config.demo.mock.yaml --calibrate-vad --seconds 10
 ```
 
-Set `vad.threshold` in the demo config to the returned
+Then set `vad.threshold` in the energy config to the returned
 `recommended_vad_threshold`. Use at least 10 seconds for a stable value because
 short smoke tests can be skewed by transient noise.
 
 `config.demo.mock.yaml`, `config.demo.mify.yaml`, and
-`config.demo.wake.yaml` all use `engine: energy`. If background noise triggers
-speech, raise `vad.threshold` or re-run calibration in the real room. If command
-endings are clipped, raise `vad.silence_ms`; if the assistant waits too long
-after you stop speaking, lower it gradually.
+`config.demo.wake.yaml` all use `engine: silero`. If command endings are
+clipped, raise `vad.silence_ms`; if the assistant waits too long after you stop
+speaking, lower it gradually.
 
 ## 5. Verify ASR Separately
 

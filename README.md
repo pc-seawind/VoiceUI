@@ -30,7 +30,8 @@ python -m venv .venv
 pip install -e ".[config,audio,wake,stt,tts]"
 ```
 
-For the manual first demo, the smaller dependency set is enough:
+For the manual first demo, the demo extra includes Silero VAD and the audio
+playback dependencies:
 
 ```powershell
 pip install -e ".[demo]"
@@ -64,15 +65,19 @@ Transcribe a saved WAV through the configured ASR backend:
 python -m voiceui --config config.demo.mify.yaml --transcribe-wav recordings\command.wav
 ```
 
-Estimate an initial `vad.threshold` from room noise:
+The current demo configs use Silero VAD. `vad.threshold` is a speech
+probability in this mode; start with `0.6`, raise it toward `0.7` if background
+noise starts turns, or lower it toward `0.5` if it misses speech.
+
+If you switch a config back to `vad.engine: energy`, estimate an initial
+RMS-based `vad.threshold` from room noise:
 
 ```powershell
 python -m voiceui --config config.example.yaml --calibrate-vad --seconds 10
 ```
 
-The demo configs use `vad.engine: energy`, so this calibration directly tunes
-the active endpointing threshold. WebRTC VAD remains available as an optional
-engine, but it is no longer the default for the hardware demo.
+WebRTC VAD remains available as an optional engine, but it is no longer the
+default for the hardware demo.
 
 Run once with a config file:
 
@@ -171,10 +176,10 @@ Each audio turn writes debug artifacts under `debug_sessions/` when
 For the first XVF3800 prototype:
 
 - Wake word: `openwakeword` with `hey_jarvis`.
-- Endpointing: energy VAD for the current hardware demo. Calibrate
-  `vad.threshold` in the target room, raise it if background noise triggers
-  speech, and adjust `vad.silence_ms` if command endings are clipped or the
-  assistant waits too long.
+- Endpointing: Silero VAD for the current hardware demo. Tune
+  `vad.threshold` as a probability threshold, raise it if background noise
+  triggers speech, and adjust `vad.silence_ms` if command endings are clipped
+  or the assistant waits too long.
 - STT: `faster_whisper` on GPU if available, otherwise CPU `int8` with a smaller
   model.
 - LLM: Ollama or any OpenAI-compatible endpoint.

@@ -7,7 +7,7 @@ from collections.abc import Iterator
 from unittest.mock import patch
 
 from voiceui.models import VadConfig
-from voiceui.vad import EnergyVadRecorder, WebRtcVadRecorder, _pcm16_frames
+from voiceui.vad import EnergyVadRecorder, SileroVadRecorder, WebRtcVadRecorder, _pcm16_frames
 
 
 class FakeAudio:
@@ -27,6 +27,29 @@ class FakeWebRtcVad:
 
     def is_speech(self, frame: bytes, sample_rate: int) -> bool:
         return any(frame)
+
+
+class FakeSileroModel:
+    def __init__(self):
+        self.reset_count = 0
+
+    def reset_states(self) -> None:
+        self.reset_count += 1
+
+    def __call__(self, samples, sample_rate: int):
+        return types.SimpleNamespace(item=lambda: 0.9 if any(samples) else 0.0)
+
+
+class FakeTorch:
+    float32 = "float32"
+
+    @staticmethod
+    def set_num_threads(_threads: int) -> None:
+        return None
+
+    @staticmethod
+    def tensor(samples, dtype=None):
+        return samples
 
 
 class VadTests(unittest.TestCase):
@@ -86,6 +109,28 @@ class VadTests(unittest.TestCase):
             )
 
         self.assertEqual(utterance.duration_ms, 80)
+        self.assertEqual(utterance.sample_rate, 16000)
+
+    def test_silero_vad_records_until_trailing_silence(self) -> None:
+        recorder = SileroVadRecorder(
+            VadConfig(
+                engine="silero",
+                threshold=0.6,
+                min_speech_ms=64,
+                silence_ms=64,
+                pre_roll_ms=32,
+            )
+        )
+        silence = b"\x00\x00" * 512
+        speech = (2000).to_bytes(2, "little", signed=True) * 512
+        fake_silero = types.SimpleNamespace(load_silero_vad=FakeSileroModel)
+
+        with patch.dict(sys.modules, {"silero_vad": fake_silero, "torch": FakeTorch}):
+            utterance = recorder.record(
+                FakeAudio([silence + speech + speech + speech + silence + silence])
+            )
+
+        self.assertEqual(utterance.duration_ms, 128)
         self.assertEqual(utterance.sample_rate, 16000)
 
 

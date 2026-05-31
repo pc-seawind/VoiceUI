@@ -18,12 +18,13 @@ wake:
   engine: manual
 
 vad:
-  engine: energy
-  threshold: 650
+  engine: silero
+  threshold: 0.6
   min_speech_ms: 250
-  silence_ms: 900
+  silence_ms: 800
   max_speech_ms: 15000
   pre_roll_ms: 240
+  frame_ms: 32
 
 stt:
   provider: mify
