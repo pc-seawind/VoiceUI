@@ -33,7 +33,7 @@ stt:
   endpoint: https://api.xiaomimimo.com/v1
   api_key_env: MIFY_API_KEY
   timeout_seconds: 60
-  model: mimo-v2.5
+  model: xiaomi/mimo-v2.5
   language: zh
 
 llm:
@@ -41,7 +41,7 @@ llm:
   # MiMo-compatible chat completions base URL. Replace with your Mify endpoint.
   endpoint: https://api.xiaomimimo.com/v1
   api_key_env: MIFY_API_KEY
-  model: mimo-v2.5
+  model: xiaomi/mimo-v2.5
   temperature: 0.3
   system_prompt: >
     You are a concise Chinese home voice assistant. Keep replies short and ask
@@ -53,7 +53,7 @@ tts:
   endpoint: https://api.xiaomimimo.com/v1
   api_key_env: MIFY_API_KEY
   timeout_seconds: 60
-  model: mimo-v2.5-tts
+  model: xiaomi/mimo-v2.5-tts
   voice: mimo_default
   audio_format: wav
   style_prompt: 自然、清晰、适合智能音箱的中文播报。

@@ -96,7 +96,7 @@ Flow:
 4. Listen for the system TTS output.
 
 With `config.demo.mify.yaml`, TTS also uses Mify/MiMo through
-`mimo-v2.5-tts`. If you only want local OS speech while testing LLM/ASR, change
+`xiaomi/mimo-v2.5-tts`. If you only want local OS speech while testing LLM/ASR, change
 `tts.provider` back to `system`.
 
 For hardware-only smoke testing without Mify:

@@ -30,7 +30,7 @@ stt:
   endpoint: https://editdemo.ai.xiaomi.net/model/infer/xiaomi-mify/v1
   api_key_env: MIFY_API_KEY
   timeout_seconds: 60
-  model: mimo-v2.5
+  model: xiaomi/mimo-v2.5
   language: zh
 
 llm:
@@ -38,7 +38,7 @@ llm:
   # Replace this with your Mify MiMo-compatible endpoint when ready.
   endpoint: https://editdemo.ai.xiaomi.net/model/infer/xiaomi-mify/v1
   api_key_env: MIFY_API_KEY
-  model: mimo-v2.5
+  model: xiaomi/mimo-v2.5
   temperature: 0.3
   system_prompt: >
     You are a concise Chinese smart speaker assistant. Reply in short spoken
@@ -50,7 +50,7 @@ tts:
   endpoint: https://editdemo.ai.xiaomi.net/model/infer/xiaomi-mify/v1
   api_key_env: MIFY_API_KEY
   timeout_seconds: 60
-  model: mimo-v2.5-tts
+  model: xiaomi/mimo-v2.5-tts
   voice: mimo_default
   audio_format: wav
   style_prompt: 自然、清晰、适合智能音箱的中文播报。

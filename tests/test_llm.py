@@ -30,7 +30,7 @@ class LlmTests(unittest.TestCase):
             provider="mify",
             endpoint="https://api.xiaomimimo.com/v1",
             api_key_env="MIFY_API_KEY",
-            model="mimo-v2.5",
+            model="xiaomi/mimo-v2.5",
         )
         client = MimoChatClient(config)
         messages = [ChatMessage(role="user", content="hello")]
@@ -43,7 +43,7 @@ class LlmTests(unittest.TestCase):
         self.assertEqual(response, "hi")
         url, payload = post_json.call_args.args[:2]
         self.assertEqual(url, "https://api.xiaomimimo.com/v1/chat/completions")
-        self.assertEqual(payload["model"], "mimo-v2.5")
+        self.assertEqual(payload["model"], "xiaomi/mimo-v2.5")
         self.assertEqual(payload["messages"], [{"role": "user", "content": "hello"}])
         self.assertEqual(post_json.call_args.kwargs["headers"], {"api-key": "test-token"})
 
@@ -52,7 +52,7 @@ class LlmTests(unittest.TestCase):
             provider="mify",
             endpoint="https://api.xiaomimimo.com/v1",
             api_key_env="MIFY_API_KEY",
-            model="mimo-v2.5",
+            model="xiaomi/mimo-v2.5",
         )
         client = MimoChatClient(config)
 

@@ -108,8 +108,8 @@ For the first XVF3800 prototype:
 ## Mify / MiMo Backend
 
 VoiceUI cannot use the Codex session itself as a production LLM API. For the
-Mify/MiMo path, LLM and ASR use `mimo-v2.5`, while TTS uses
-`mimo-v2.5-tts`.
+Mify/MiMo path, LLM and ASR use `xiaomi/mimo-v2.5`, while TTS uses
+`xiaomi/mimo-v2.5-tts`.
 
 Example LLM config:
 
@@ -118,7 +118,7 @@ llm:
   provider: mify
   endpoint: https://api.xiaomimimo.com/v1
   api_key_env: MIFY_API_KEY
-  model: mimo-v2.5
+  model: xiaomi/mimo-v2.5
 ```
 
 Example ASR config:
@@ -128,7 +128,7 @@ stt:
   provider: mify
   endpoint: https://api.xiaomimimo.com/v1
   api_key_env: MIFY_API_KEY
-  model: mimo-v2.5
+  model: xiaomi/mimo-v2.5
   language: zh
 ```
 
@@ -144,7 +144,7 @@ tts:
   provider: mify
   endpoint: https://api.xiaomimimo.com/v1
   api_key_env: MIFY_API_KEY
-  model: mimo-v2.5-tts
+  model: xiaomi/mimo-v2.5-tts
   voice: mimo_default
   audio_format: wav
 ```

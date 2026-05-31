@@ -28,7 +28,7 @@ class TtsTests(unittest.TestCase):
             provider="mify",
             endpoint="https://api.xiaomimimo.com/v1",
             api_key_env="MIFY_API_KEY",
-            model="mimo-v2.5-tts",
+            model="xiaomi/mimo-v2.5-tts",
             voice="mimo_default",
             audio_format="wav",
             style_prompt="自然播报",
@@ -45,7 +45,7 @@ class TtsTests(unittest.TestCase):
         self.assertEqual(audio, b"RIFF")
         url, payload = post_json.call_args.args[:2]
         self.assertEqual(url, "https://api.xiaomimimo.com/v1/chat/completions")
-        self.assertEqual(payload["model"], "mimo-v2.5-tts")
+        self.assertEqual(payload["model"], "xiaomi/mimo-v2.5-tts")
         self.assertEqual(payload["messages"][-1], {"role": "assistant", "content": "你好"})
         self.assertEqual(payload["audio"], {"format": "wav", "voice": "mimo_default"})
         self.assertEqual(post_json.call_args.kwargs["headers"], {"api-key": "test-token"})

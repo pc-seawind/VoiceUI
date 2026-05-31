@@ -13,7 +13,7 @@ class SttTests(unittest.TestCase):
             provider="mify",
             endpoint="https://api.xiaomimimo.com/v1",
             api_key_env="MIFY_API_KEY",
-            model="mimo-v2.5",
+            model="xiaomi/mimo-v2.5",
             language="zh",
         )
         stt = MimoAudioUnderstandingSpeechToText(config)
@@ -27,14 +27,14 @@ class SttTests(unittest.TestCase):
         self.assertEqual(transcript, "你好")
         url, payload = post_json.call_args.args[:2]
         self.assertEqual(url, "https://api.xiaomimimo.com/v1/chat/completions")
-        self.assertEqual(payload["model"], "mimo-v2.5")
+        self.assertEqual(payload["model"], "xiaomi/mimo-v2.5")
         user_content = payload["messages"][1]["content"]
         self.assertEqual(user_content[0]["type"], "input_audio")
         self.assertTrue(user_content[0]["input_audio"]["data"].startswith("data:audio/wav;base64,"))
         self.assertEqual(post_json.call_args.kwargs["headers"], {"api-key": "test-token"})
 
     def test_mimo_stt_falls_back_to_reasoning_content(self) -> None:
-        config = SttConfig(provider="mify", endpoint="https://api.xiaomimimo.com/v1", model="mimo-v2.5")
+        config = SttConfig(provider="mify", endpoint="https://api.xiaomimimo.com/v1", model="xiaomi/mimo-v2.5")
         stt = MimoAudioUnderstandingSpeechToText(config)
         utterance = Utterance(pcm=b"\x00\x00" * 160, sample_rate=16000, duration_ms=10)
 
