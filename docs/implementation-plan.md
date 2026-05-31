@@ -54,8 +54,10 @@ Implementation:
 - `voiceui.audio`: audio capture and device listing.
 - `voiceui.wake`: disabled/manual/openWakeWord adapters.
 - `voiceui.vad`: energy VAD first, Silero adapter later.
-- `voiceui.stt`: mock, faster-whisper, and Mify/OpenAI-compatible ASR adapters.
-- `voiceui.llm`: Ollama, Mify/OpenAI-compatible, and mock adapters.
+- `voiceui.stt`: mock, faster-whisper, MiMo audio-understanding, and
+  OpenAI-compatible multipart ASR adapters.
+- `voiceui.llm`: Ollama, MiMo/Mify chat completions, OpenAI-compatible chat
+  completions, and mock adapters.
 - `voiceui.tts`: console, Piper HTTP, and Piper CLI adapters.
 - `voiceui.core`: conversation loop and state transitions.
 

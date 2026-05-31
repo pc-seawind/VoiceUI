@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-import tempfile
-import wave
+import base64
 import json
 import os
+import tempfile
+import wave
 import uuid
 from pathlib import Path
 import urllib.error
@@ -87,13 +88,72 @@ class OpenAICompatibleSpeechToText(SpeechToText):
             return str(data.get("text", "")).strip()
 
 
+class MimoAudioUnderstandingSpeechToText(SpeechToText):
+    def __init__(self, config: SttConfig):
+        self.config = config
+
+    def transcribe(self, utterance: Utterance) -> str:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            wav_path = Path(temp_dir) / "utterance.wav"
+            _write_wav(wav_path, utterance)
+            audio_b64 = base64.b64encode(wav_path.read_bytes()).decode("ascii")
+
+        headers = {}
+        if self.config.api_key_env:
+            api_key = os.environ.get(self.config.api_key_env)
+            if api_key:
+                headers["api-key"] = api_key
+
+        prompt = (
+            "请将这段音频逐字转写为简体中文文本。"
+            "只输出转写文本，不要解释，不要添加标点之外的额外内容。"
+        )
+        if self.config.language and self.config.language.lower() not in ("zh", "zh-cn", "chinese"):
+            prompt = (
+                f"Transcribe this audio in {self.config.language}. "
+                "Only output the transcript text."
+            )
+
+        payload = {
+            "model": self.config.model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "You are a precise speech transcription assistant.",
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_audio",
+                            "input_audio": {
+                                "data": f"data:audio/wav;base64,{audio_b64}",
+                            },
+                        },
+                        {"type": "text", "text": prompt},
+                    ],
+                },
+            ],
+            "max_completion_tokens": 1024,
+        }
+        data = _post_json(
+            _chat_completions_url(self.config.endpoint),
+            payload,
+            headers=headers,
+            timeout=self.config.timeout_seconds,
+        )
+        return _extract_chat_message_text(data)
+
+
 def create_stt(config: SttConfig) -> SpeechToText:
     if config.provider == "mock":
         return MockSpeechToText(config)
     if config.provider == "faster_whisper":
         return FasterWhisperSpeechToText(config)
-    if config.provider in ("openai_compatible", "mify"):
+    if config.provider == "openai_compatible":
         return OpenAICompatibleSpeechToText(config)
+    if config.provider in ("mify", "mimo"):
+        return MimoAudioUnderstandingSpeechToText(config)
     raise ValueError(f"Unsupported STT provider: {config.provider}")
 
 
@@ -148,3 +208,43 @@ def _post_multipart_json(
             return json.loads(response.read().decode("utf-8"))
     except urllib.error.URLError as exc:
         raise RuntimeError(f"STT request failed: {url}: {exc}") from exc
+
+
+def _post_json(
+    url: str,
+    payload: dict,
+    headers: dict[str, str] | None = None,
+    timeout: float = 60.0,
+) -> dict:
+    body = json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(
+        url,
+        data=body,
+        headers={"Content-Type": "application/json", **(headers or {})},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"STT request failed: {url}: {exc}") from exc
+
+
+def _chat_completions_url(endpoint: str) -> str:
+    base = endpoint.rstrip("/")
+    if base.endswith("/chat/completions"):
+        return base
+    if base.endswith("/v1"):
+        return f"{base}/chat/completions"
+    return f"{base}/v1/chat/completions"
+
+
+def _extract_chat_message_text(data: dict) -> str:
+    choices = data.get("choices", [])
+    if not choices:
+        return ""
+    message = choices[0].get("message", {})
+    content = str(message.get("content") or "").strip()
+    if content:
+        return content
+    return str(message.get("reasoning_content") or "").strip()

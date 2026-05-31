@@ -26,17 +26,19 @@ vad:
 
 stt:
   provider: mify
-  endpoint: http://localhost:8000/v1/audio/transcriptions
+  # Replace this with your Mify MiMo-compatible endpoint when ready.
+  endpoint: https://api.xiaomimimo.com/v1
   api_key_env: MIFY_API_KEY
   timeout_seconds: 60
-  model: whisper-large-v3
+  model: mimo-v2.5
   language: zh
 
 llm:
   provider: mify
-  endpoint: http://localhost:8000
+  # Replace this with your Mify MiMo-compatible endpoint when ready.
+  endpoint: https://api.xiaomimimo.com/v1
   api_key_env: MIFY_API_KEY
-  model: qwen2.5:7b-instruct
+  model: mimo-v2.5
   temperature: 0.3
   system_prompt: >
     You are a concise Chinese smart speaker assistant. Reply in short spoken

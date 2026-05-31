@@ -53,7 +53,9 @@ short smoke tests can be skewed by transient noise.
 
 ## 5. Verify ASR Separately
 
-For Mify or another OpenAI-compatible ASR backend:
+For Mify/MiMo ASR, VoiceUI uses the MiMo audio-understanding chat-completions
+format. The captured WAV is sent as `input_audio` using
+`data:audio/wav;base64,...`.
 
 ```powershell
 $env:MIFY_API_KEY="your-token-if-required"

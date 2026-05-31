@@ -107,18 +107,18 @@ For the first XVF3800 prototype:
 
 ## Mify / OpenAI-Compatible Backend
 
-VoiceUI cannot use the Codex session itself as a production LLM API. For runtime
-LLM and ASR, point the config at Mify, Dify, OpenAI, or another
-OpenAI-compatible backend.
+VoiceUI cannot use the Codex session itself as a production LLM API. For the
+Mify/MiMo path, both LLM and ASR use the MiMo chat-completions audio
+understanding format with `mimo-v2.5`.
 
 Example LLM config:
 
 ```yaml
 llm:
   provider: mify
-  endpoint: http://localhost:8000
+  endpoint: https://api.xiaomimimo.com/v1
   api_key_env: MIFY_API_KEY
-  model: qwen2.5:7b-instruct
+  model: mimo-v2.5
 ```
 
 Example ASR config:
@@ -126,11 +126,16 @@ Example ASR config:
 ```yaml
 stt:
   provider: mify
-  endpoint: http://localhost:8000/v1/audio/transcriptions
+  endpoint: https://api.xiaomimimo.com/v1
   api_key_env: MIFY_API_KEY
-  model: whisper-large-v3
+  model: mimo-v2.5
   language: zh
 ```
+
+For ASR, VoiceUI sends the captured WAV as `input_audio` with a
+`data:audio/wav;base64,...` payload and asks MiMo to output only the transcript.
+The MiMo-compatible path uses an `api-key` header populated from `api_key_env`.
+Replace `endpoint` with your Mify MiMo-compatible base URL when you have it.
 
 Full templates are available in [config.demo.mify.yaml](config.demo.mify.yaml)
 and [config.mify.example.yaml](config.mify.example.yaml). The runnable first

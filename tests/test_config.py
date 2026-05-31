@@ -30,6 +30,8 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.llm.provider, "mify")
         self.assertEqual(config.stt.api_key_env, "MIFY_API_KEY")
         self.assertEqual(config.llm.api_key_env, "MIFY_API_KEY")
+        self.assertEqual(config.stt.model, "mimo-v2.5")
+        self.assertEqual(config.llm.model, "mimo-v2.5")
 
     def test_demo_configs_load(self) -> None:
         mock_config = load_config("config.demo.mock.yaml")
@@ -39,6 +41,8 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(mock_config.tts.provider, "system")
         self.assertEqual(mify_config.wake.engine, "manual")
         self.assertEqual(mify_config.stt.provider, "mify")
+        self.assertEqual(mify_config.stt.model, "mimo-v2.5")
+        self.assertEqual(mify_config.llm.model, "mimo-v2.5")
 
 
 if __name__ == "__main__":

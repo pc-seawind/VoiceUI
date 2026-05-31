@@ -64,15 +64,38 @@ class OpenAICompatibleChatClient(ChatClient):
             "stream": False,
         }
         data = _post_json(
-            f"{self.config.endpoint.rstrip('/')}/v1/chat/completions",
+            _chat_completions_url(self.config.endpoint),
             payload,
             headers=headers,
             timeout=self.config.timeout_seconds,
         )
-        choices = data.get("choices", [])
-        if not choices:
-            return ""
-        return str(choices[0].get("message", {}).get("content", "")).strip()
+        return _extract_chat_message_text(data)
+
+
+class MimoChatClient(ChatClient):
+    def __init__(self, config: LlmConfig):
+        self.config = config
+
+    def complete(self, messages: list[ChatMessage]) -> str:
+        headers = {}
+        if self.config.api_key_env:
+            api_key = os.environ.get(self.config.api_key_env)
+            if api_key:
+                headers["api-key"] = api_key
+
+        payload = {
+            "model": self.config.model,
+            "messages": _messages_payload(messages),
+            "temperature": self.config.temperature,
+            "stream": False,
+        }
+        data = _post_json(
+            _chat_completions_url(self.config.endpoint),
+            payload,
+            headers=headers,
+            timeout=self.config.timeout_seconds,
+        )
+        return _extract_chat_message_text(data)
 
 
 def create_chat_client(config: LlmConfig) -> ChatClient:
@@ -80,13 +103,35 @@ def create_chat_client(config: LlmConfig) -> ChatClient:
         return MockChatClient()
     if config.provider == "ollama":
         return OllamaChatClient(config)
-    if config.provider in ("openai_compatible", "mify"):
+    if config.provider == "openai_compatible":
         return OpenAICompatibleChatClient(config)
+    if config.provider in ("mify", "mimo"):
+        return MimoChatClient(config)
     raise ValueError(f"Unsupported LLM provider: {config.provider}")
 
 
 def _messages_payload(messages: list[ChatMessage]) -> list[dict[str, str]]:
     return [{"role": message.role, "content": message.content} for message in messages]
+
+
+def _chat_completions_url(endpoint: str) -> str:
+    base = endpoint.rstrip("/")
+    if base.endswith("/chat/completions"):
+        return base
+    if base.endswith("/v1"):
+        return f"{base}/chat/completions"
+    return f"{base}/v1/chat/completions"
+
+
+def _extract_chat_message_text(data: dict) -> str:
+    choices = data.get("choices", [])
+    if not choices:
+        return ""
+    message = choices[0].get("message", {})
+    content = str(message.get("content") or "").strip()
+    if content:
+        return content
+    return str(message.get("reasoning_content") or "").strip()
 
 
 def _post_json(

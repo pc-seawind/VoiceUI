@@ -45,7 +45,7 @@ class VadConfig:
 
 @dataclass(slots=True)
 class SttConfig:
-    provider: Literal["mock", "faster_whisper", "openai_compatible", "mify"] = "mock"
+    provider: Literal["mock", "faster_whisper", "openai_compatible", "mify", "mimo"] = "mock"
     endpoint: str = "http://localhost:8000/v1/audio/transcriptions"
     api_key_env: str | None = None
     timeout_seconds: float = 60.0
@@ -58,7 +58,7 @@ class SttConfig:
 
 @dataclass(slots=True)
 class LlmConfig:
-    provider: Literal["mock", "ollama", "openai_compatible", "mify"] = "mock"
+    provider: Literal["mock", "ollama", "openai_compatible", "mify", "mimo"] = "mock"
     endpoint: str = "http://localhost:11434"
     model: str = "qwen2.5:7b-instruct"
     api_key_env: str | None = None
