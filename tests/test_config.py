@@ -54,7 +54,7 @@ class ConfigTests(unittest.TestCase):
         self.assertTrue(wake_config.wake_ack.enabled)
         self.assertEqual(wake_config.wake_ack.wav_path, "default")
         self.assertEqual(wake_config.vad.engine, "webrtc")
-        self.assertEqual(wake_config.vad.webrtc_mode, 2)
+        self.assertEqual(wake_config.vad.webrtc_mode, 3)
         self.assertEqual(wake_config.stt.model, "xiaomi/mimo-v2.5")
 
 

@@ -65,7 +65,7 @@ For `config.demo.mify.yaml` and `config.demo.wake.yaml`, VAD is now
 `engine: webrtc`. WebRTC ignores `vad.threshold`; if it clips endings, raise
 `vad.silence_ms` from `700` toward `900`. If the assistant waits too long after
 you stop speaking, lower it toward `500`. If it misses speech, try lowering
-`vad.webrtc_mode` from `2` to `1`.
+`vad.webrtc_mode` from `3` to `2`.
 
 ## 5. Verify ASR Separately
 

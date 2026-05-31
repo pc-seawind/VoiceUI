@@ -168,6 +168,7 @@ For the first XVF3800 prototype:
 - Endpointing: WebRTC VAD for the current hardware demo. The default
   `vad.silence_ms` is tuned for lower latency; raise it toward `900` if endings
   are clipped, or lower it toward `500` if the assistant still waits too long.
+  `vad.webrtc_mode: 3` is the strictest setting; lower it if speech is missed.
 - STT: `faster_whisper` on GPU if available, otherwise CPU `int8` with a smaller
   model.
 - LLM: Ollama or any OpenAI-compatible endpoint.

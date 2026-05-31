@@ -33,7 +33,7 @@ vad:
   max_speech_ms: 15000
   pre_roll_ms: 200
   frame_ms: 20
-  webrtc_mode: 2
+  webrtc_mode: 3
 
 stt:
   provider: mify
