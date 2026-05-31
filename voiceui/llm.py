@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-import json
-import os
-import urllib.error
-import urllib.request
 from dataclasses import dataclass
 
+from voiceui.http_utils import post_json, require_api_key
 from voiceui.models import LlmConfig
 
 
@@ -53,9 +50,8 @@ class OpenAICompatibleChatClient(ChatClient):
     def complete(self, messages: list[ChatMessage]) -> str:
         headers = {}
         if self.config.api_key_env:
-            api_key = os.environ.get(self.config.api_key_env)
-            if api_key:
-                headers["Authorization"] = f"Bearer {api_key}"
+            api_key = require_api_key(self.config.api_key_env)
+            headers["Authorization"] = f"Bearer {api_key}"
 
         payload = {
             "model": self.config.model,
@@ -79,9 +75,8 @@ class MimoChatClient(ChatClient):
     def complete(self, messages: list[ChatMessage]) -> str:
         headers = {}
         if self.config.api_key_env:
-            api_key = os.environ.get(self.config.api_key_env)
-            if api_key:
-                headers["api-key"] = api_key
+            api_key = require_api_key(self.config.api_key_env)
+            headers["api-key"] = api_key
 
         payload = {
             "model": self.config.model,
@@ -140,15 +135,10 @@ def _post_json(
     headers: dict[str, str] | None = None,
     timeout: float = 60.0,
 ) -> dict:
-    body = json.dumps(payload).encode("utf-8")
-    request = urllib.request.Request(
+    return post_json(
         url,
-        data=body,
-        headers={"Content-Type": "application/json", **(headers or {})},
-        method="POST",
+        payload,
+        headers=headers,
+        timeout=timeout,
+        error_prefix="LLM request failed",
     )
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            return json.loads(response.read().decode("utf-8"))
-    except urllib.error.URLError as exc:
-        raise RuntimeError(f"LLM request failed: {url}: {exc}") from exc

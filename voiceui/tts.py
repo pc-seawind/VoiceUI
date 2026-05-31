@@ -1,16 +1,14 @@
 from __future__ import annotations
 
 import base64
-import json
-import os
 import subprocess
 import sys
 import tempfile
-import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
 
+from voiceui.http_utils import post_json, require_api_key
 from voiceui.models import TtsConfig
 
 
@@ -65,9 +63,8 @@ class MimoTextToSpeech(TextToSpeech):
     def synthesize(self, text: str) -> bytes:
         headers = {}
         if self.config.api_key_env:
-            api_key = os.environ.get(self.config.api_key_env)
-            if api_key:
-                headers["api-key"] = api_key
+            api_key = require_api_key(self.config.api_key_env)
+            headers["api-key"] = api_key
 
         messages: list[dict[str, str]] = []
         if self.config.style_prompt:
@@ -152,18 +149,13 @@ def _post_json(
     headers: dict[str, str] | None = None,
     timeout: float = 60.0,
 ) -> dict:
-    body = json.dumps(payload).encode("utf-8")
-    request = urllib.request.Request(
+    return post_json(
         url,
-        data=body,
-        headers={"Content-Type": "application/json", **(headers or {})},
-        method="POST",
+        payload,
+        headers=headers,
+        timeout=timeout,
+        error_prefix="TTS request failed",
     )
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            return json.loads(response.read().decode("utf-8"))
-    except urllib.error.URLError as exc:
-        raise RuntimeError(f"TTS request failed: {url}: {exc}") from exc
 
 
 def _chat_completions_url(endpoint: str) -> str:

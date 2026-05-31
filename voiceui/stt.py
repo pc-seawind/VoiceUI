@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import base64
 import json
-import os
 import tempfile
 import wave
 import uuid
@@ -10,6 +9,7 @@ from pathlib import Path
 import urllib.error
 import urllib.request
 
+from voiceui.http_utils import post_json, require_api_key
 from voiceui.models import SttConfig, Utterance
 
 
@@ -71,9 +71,8 @@ class OpenAICompatibleSpeechToText(SpeechToText):
                 fields["language"] = self.config.language
             headers = {}
             if self.config.api_key_env:
-                api_key = os.environ.get(self.config.api_key_env)
-                if api_key:
-                    headers["Authorization"] = f"Bearer {api_key}"
+                api_key = require_api_key(self.config.api_key_env)
+                headers["Authorization"] = f"Bearer {api_key}"
 
             data = _post_multipart_json(
                 self.config.endpoint,
@@ -100,9 +99,8 @@ class MimoAudioUnderstandingSpeechToText(SpeechToText):
 
         headers = {}
         if self.config.api_key_env:
-            api_key = os.environ.get(self.config.api_key_env)
-            if api_key:
-                headers["api-key"] = api_key
+            api_key = require_api_key(self.config.api_key_env)
+            headers["api-key"] = api_key
 
         prompt = (
             "请将这段音频逐字转写为简体中文文本。"
@@ -206,6 +204,11 @@ def _post_multipart_json(
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        error_body = exc.read().decode("utf-8", errors="replace").strip()
+        raise RuntimeError(
+            f"STT request failed: {url}: HTTP {exc.code}: {error_body or exc.reason}"
+        ) from exc
     except urllib.error.URLError as exc:
         raise RuntimeError(f"STT request failed: {url}: {exc}") from exc
 
@@ -216,18 +219,13 @@ def _post_json(
     headers: dict[str, str] | None = None,
     timeout: float = 60.0,
 ) -> dict:
-    body = json.dumps(payload).encode("utf-8")
-    request = urllib.request.Request(
+    return post_json(
         url,
-        data=body,
-        headers={"Content-Type": "application/json", **(headers or {})},
-        method="POST",
+        payload,
+        headers=headers,
+        timeout=timeout,
+        error_prefix="STT request failed",
     )
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            return json.loads(response.read().decode("utf-8"))
-    except urllib.error.URLError as exc:
-        raise RuntimeError(f"STT request failed: {url}: {exc}") from exc
 
 
 def _chat_completions_url(endpoint: str) -> str:

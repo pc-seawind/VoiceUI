@@ -47,6 +47,19 @@ class LlmTests(unittest.TestCase):
         self.assertEqual(payload["messages"], [{"role": "user", "content": "hello"}])
         self.assertEqual(post_json.call_args.kwargs["headers"], {"api-key": "test-token"})
 
+    def test_mimo_client_requires_configured_api_key_env(self) -> None:
+        config = LlmConfig(
+            provider="mify",
+            endpoint="https://api.xiaomimimo.com/v1",
+            api_key_env="MIFY_API_KEY",
+            model="mimo-v2.5",
+        )
+        client = MimoChatClient(config)
+
+        with patch.dict("os.environ", {}, clear=True):
+            with self.assertRaisesRegex(RuntimeError, "MIFY_API_KEY"):
+                client.complete([ChatMessage(role="user", content="hello")])
+
     def test_ollama_client_serializes_slot_messages(self) -> None:
         config = LlmConfig(provider="ollama", endpoint="http://ollama.local", model="demo-model")
         client = OllamaChatClient(config)
