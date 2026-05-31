@@ -7,6 +7,7 @@ import sys
 from voiceui.audio import list_audio_devices
 from voiceui.config import config_to_dict, load_config
 from voiceui.core import VoiceAssistant
+from voiceui.diagnostics import calibrate_vad, record_wav
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -14,6 +15,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--config", help="Path to YAML or JSON config file")
     parser.add_argument("--dry-run", action="store_true", help="Print resolved config and exit")
     parser.add_argument("--list-audio-devices", action="store_true", help="List audio devices and exit")
+    parser.add_argument("--record-wav", help="Record a mono WAV from the configured audio device")
+    parser.add_argument(
+        "--calibrate-vad",
+        action="store_true",
+        help="Record room noise and print RMS statistics for vad.threshold",
+    )
+    parser.add_argument("--seconds", type=float, default=5.0, help="Seconds for recording commands")
+    parser.add_argument(
+        "--audio-purpose",
+        choices=["command", "wake"],
+        default="command",
+        help="Use command_stream_channel or wake_stream_channel",
+    )
+    parser.add_argument("--audio-channel", type=int, help="Override configured audio channel")
     parser.add_argument("--text", help="Run one text-only turn")
     parser.add_argument("--once", action="store_true", help="Run a single turn")
     args = parser.parse_args(argv)
@@ -31,6 +46,27 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.dry_run:
             print(json.dumps(config_to_dict(config), indent=2, ensure_ascii=True))
+            return 0
+
+        if args.record_wav:
+            path = record_wav(
+                config,
+                output_path=args.record_wav,
+                seconds=args.seconds,
+                purpose=args.audio_purpose,
+                channel_override=args.audio_channel,
+            )
+            print(f"recorded> {path}")
+            return 0
+
+        if args.calibrate_vad:
+            summary = calibrate_vad(
+                config,
+                seconds=args.seconds,
+                purpose=args.audio_purpose,
+                channel_override=args.audio_channel,
+            )
+            print(summary.to_json())
             return 0
 
         assistant = VoiceAssistant(config)

@@ -36,6 +36,18 @@ List audio devices:
 python -m voiceui --list-audio-devices
 ```
 
+Record from the configured XVF3800 command stream:
+
+```powershell
+python -m voiceui --config config.example.yaml --record-wav recordings\command.wav --seconds 5
+```
+
+Estimate an initial `vad.threshold` from room noise:
+
+```powershell
+python -m voiceui --config config.example.yaml --calibrate-vad --seconds 10
+```
+
 Run once with a config file:
 
 ```powershell
@@ -86,6 +98,9 @@ stt:
   model: whisper-large-v3
   language: zh
 ```
+
+A full Mify-oriented template is available in
+[config.mify.example.yaml](config.mify.example.yaml).
 
 See [docs/implementation-plan.md](docs/implementation-plan.md) and
 [docs/xvf3800.md](docs/xvf3800.md) for the detailed plan.

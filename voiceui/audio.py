@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import math
+import wave
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Protocol
 
 from voiceui.models import AudioConfig
@@ -95,6 +97,16 @@ def pcm16_rms(pcm: bytes) -> float:
         sample = int.from_bytes(pcm[index : index + 2], "little", signed=True)
         total += sample * sample
     return math.sqrt(total / sample_count)
+
+
+def write_pcm16_wav(path: str | Path, pcm: bytes, sample_rate: int) -> None:
+    output_path = Path(path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with wave.open(str(output_path), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(sample_rate)
+        wav.writeframes(pcm)
 
 
 def select_pcm16_channel(pcm: bytes, channels: int, selected_channel: int) -> bytes:
