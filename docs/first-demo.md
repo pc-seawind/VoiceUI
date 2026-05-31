@@ -151,6 +151,13 @@ prints:
 wake> engine=openwakeword label=hey_jarvis confidence=... latency_ms=...
 ```
 
+To regenerate the local "我在" WAV with MiMo TTS:
+
+```powershell
+$env:MIFY_API_KEY="your-token-if-required"
+python -m voiceui --config config.demo.wake.yaml --generate-wake-ack
+```
+
 If it does not trigger reliably, try these in order:
 
 1. Confirm `audio.device`, `audio.channels`, and `audio.wake_stream_channel`.

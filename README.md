@@ -146,6 +146,16 @@ wake_ack:
 clip. Replace `wav_path` with another 16-bit PCM WAV if you want a different
 phrase or voice.
 
+Regenerate the bundled acknowledgement with the configured MiMo TTS backend:
+
+```powershell
+$env:MIFY_API_KEY="your-token-if-required"
+python -m voiceui --config config.demo.wake.yaml --generate-wake-ack
+```
+
+Use `--wake-ack-text` or `--wake-ack-output` if you want a different phrase or
+file.
+
 Each audio turn writes debug artifacts under `debug_sessions/` when
 `debug.enabled` is true. The folder contains `utterance.wav` and
 `metadata.json` with wake/VAD/STT/LLM/TTS timings, transcript, and reply.

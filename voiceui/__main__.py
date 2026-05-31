@@ -11,8 +11,14 @@ from voiceui.core import VoiceAssistant
 from voiceui.diagnostics import calibrate_vad, record_wav
 from voiceui.models import Utterance
 from voiceui.stt import create_stt
+from voiceui.tts import synthesize_to_wav
 from voiceui.wake import create_wake_detector
-from voiceui.wake_ack import create_wake_ack_player
+from voiceui.wake_ack import create_wake_ack_player, resolve_wake_ack_path
+
+_DEFAULT_WAKE_ACK_STYLE = (
+    "自然、清晰、亲切、短促，适合智能音箱被唤醒后的中文回应。"
+    "语速稍快，不拖尾，不要夸张。"
+)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -36,6 +42,18 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--audio-channel", type=int, help="Override configured audio channel")
     parser.add_argument("--wake-test", action="store_true", help="Wait for one wake word and exit")
+    parser.add_argument(
+        "--generate-wake-ack",
+        action="store_true",
+        help="Synthesize the local wake acknowledgement WAV with the configured TTS backend",
+    )
+    parser.add_argument("--wake-ack-text", default="我在", help="Text for --generate-wake-ack")
+    parser.add_argument("--wake-ack-output", help="Output WAV path for --generate-wake-ack")
+    parser.add_argument(
+        "--wake-ack-style-prompt",
+        default=_DEFAULT_WAKE_ACK_STYLE,
+        help="Temporary TTS style prompt used by --generate-wake-ack",
+    )
     parser.add_argument("--text", help="Run one text-only turn")
     parser.add_argument("--once", action="store_true", help="Run a single turn")
     args = parser.parse_args(argv)
@@ -53,6 +71,18 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.dry_run:
             print(json.dumps(config_to_dict(config), indent=2, ensure_ascii=True))
+            return 0
+
+        if args.generate_wake_ack:
+            output_path = (
+                args.wake_ack_output
+                if args.wake_ack_output
+                else resolve_wake_ack_path(config.wake_ack.wav_path)
+            )
+            original_style_prompt = config.tts.style_prompt
+            config.tts.style_prompt = args.wake_ack_style_prompt or original_style_prompt
+            path = synthesize_to_wav(config.tts, args.wake_ack_text, output_path)
+            print(f"wake_ack> generated={path}")
             return 0
 
         if args.record_wav:

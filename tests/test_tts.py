@@ -3,7 +3,10 @@ from __future__ import annotations
 import base64
 import contextlib
 import io
+import tempfile
 import unittest
+import wave
+from pathlib import Path
 from unittest.mock import patch
 
 from voiceui.models import TtsConfig
@@ -14,6 +17,7 @@ from voiceui.tts import (
     _extract_stream_audio,
     _play_audio_bytes,
     create_tts,
+    synthesize_to_wav,
 )
 
 
@@ -112,6 +116,27 @@ class TtsTests(unittest.TestCase):
             _extract_stream_audio({"choices": [{"message": {"audio": message_audio}}]}),
             message_audio,
         )
+
+    def test_synthesize_to_wav_writes_pcm_audio_as_wav(self) -> None:
+        class FakeSynthesizer:
+            def synthesize(self, text: str):
+                self.text = text
+                return type("Audio", (), {"data": b"\x00\x00\x00\x40", "format": "pcm"})()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "ack.wav"
+            with patch("voiceui.tts.create_tts", return_value=FakeSynthesizer()):
+                path = synthesize_to_wav(
+                    TtsConfig(provider="mify", sample_rate=24000),
+                    "我在",
+                    output_path,
+                )
+
+            with wave.open(str(path), "rb") as wav:
+                self.assertEqual(wav.getframerate(), 24000)
+                self.assertEqual(wav.getsampwidth(), 2)
+                self.assertEqual(wav.getnchannels(), 1)
+                self.assertEqual(wav.readframes(wav.getnframes()), b"\x00\x00\x00\x40")
 
     def test_play_pcm_audio_bytes(self) -> None:
         with patch("sounddevice.play") as play, patch("sounddevice.wait") as wait:

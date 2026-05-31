@@ -13,6 +13,7 @@ import urllib.request
 from collections.abc import Iterator
 from pathlib import Path
 
+from voiceui.audio import write_pcm16_wav
 from voiceui.http_utils import post_json, require_api_key
 from voiceui.models import TtsConfig
 
@@ -202,6 +203,25 @@ def create_tts(config: TtsConfig) -> TextToSpeech:
     if config.provider == "piper_cli":
         return PiperCliTextToSpeech(config)
     raise ValueError(f"Unsupported TTS provider: {config.provider}")
+
+
+def synthesize_to_wav(config: TtsConfig, text: str, output_path: str | Path) -> Path:
+    tts = create_tts(config)
+    synthesize = getattr(tts, "synthesize", None)
+    if synthesize is None:
+        raise RuntimeError(f"tts.provider={config.provider} does not support offline synthesis.")
+
+    audio_data = synthesize(text)
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    normalized_format = _normalize_audio_format(audio_data.format)
+    if normalized_format == "wav" or audio_data.data.startswith(b"RIFF"):
+        path.write_bytes(audio_data.data)
+        return path
+    if normalized_format in ("pcm", "pcm16"):
+        write_pcm16_wav(path, audio_data.data, sample_rate=config.sample_rate)
+        return path
+    raise RuntimeError(f"Cannot save unsupported TTS audio format as WAV: {audio_data.format}")
 
 
 def _run_tts_command(command: list[str], text: str) -> None:
