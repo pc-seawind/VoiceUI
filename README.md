@@ -42,9 +42,6 @@ For wake-word testing, install the wake extra as well:
 pip install -e ".[demo,wake]"
 ```
 
-The demo extra includes `webrtcvad-wheels`, which is used by the current
-Mify/wake configs for endpointing.
-
 List audio devices:
 
 ```powershell
@@ -73,9 +70,9 @@ Estimate an initial `vad.threshold` from room noise:
 python -m voiceui --config config.example.yaml --calibrate-vad --seconds 10
 ```
 
-This calibration is only useful for `vad.engine: energy`. WebRTC VAD ignores
-`vad.threshold`; tune `vad.webrtc_mode`, `vad.silence_ms`, and
-`vad.min_speech_ms` instead.
+The demo configs use `vad.engine: energy`, so this calibration directly tunes
+the active endpointing threshold. WebRTC VAD remains available as an optional
+engine, but it is no longer the default for the hardware demo.
 
 Run once with a config file:
 
@@ -174,10 +171,10 @@ Each audio turn writes debug artifacts under `debug_sessions/` when
 For the first XVF3800 prototype:
 
 - Wake word: `openwakeword` with `hey_jarvis`.
-- Endpointing: WebRTC VAD for the current hardware demo. The default
-  `vad.silence_ms` is tuned for lower latency; raise it toward `900` if endings
-  are clipped, or lower it toward `500` if the assistant still waits too long.
-  `vad.webrtc_mode: 3` is the strictest setting; lower it if speech is missed.
+- Endpointing: energy VAD for the current hardware demo. Calibrate
+  `vad.threshold` in the target room, raise it if background noise triggers
+  speech, and adjust `vad.silence_ms` if command endings are clipped or the
+  assistant waits too long.
 - STT: `faster_whisper` on GPU if available, otherwise CPU `int8` with a smaller
   model.
 - LLM: Ollama or any OpenAI-compatible endpoint.

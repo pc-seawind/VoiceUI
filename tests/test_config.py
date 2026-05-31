@@ -43,7 +43,8 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(mock_config.tts.provider, "system")
         self.assertEqual(mock_config.audio.input_gain_db, 0.0)
         self.assertEqual(mify_config.wake.engine, "manual")
-        self.assertEqual(mify_config.vad.engine, "webrtc")
+        self.assertEqual(mify_config.vad.engine, "energy")
+        self.assertEqual(mify_config.vad.threshold, 650)
         self.assertEqual(mify_config.stt.provider, "mify")
         self.assertEqual(mify_config.stt.model, "xiaomi/mimo-v2.5")
         self.assertEqual(mify_config.llm.model, "xiaomi/mimo-v2.5")
@@ -56,8 +57,8 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(wake_config.wake.inference_framework, "onnx")
         self.assertTrue(wake_config.wake_ack.enabled)
         self.assertEqual(wake_config.wake_ack.wav_path, "default")
-        self.assertEqual(wake_config.vad.engine, "webrtc")
-        self.assertEqual(wake_config.vad.webrtc_mode, 3)
+        self.assertEqual(wake_config.vad.engine, "energy")
+        self.assertEqual(wake_config.vad.threshold, 650)
         self.assertEqual(wake_config.stt.model, "xiaomi/mimo-v2.5")
 
 

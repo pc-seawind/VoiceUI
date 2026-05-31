@@ -27,14 +27,12 @@ wake_ack:
   playback_device: default
 
 vad:
-  engine: webrtc
+  engine: energy
   threshold: 450
-  min_speech_ms: 120
-  silence_ms: 700
+  min_speech_ms: 250
+  silence_ms: 800
   max_speech_ms: 15000
-  pre_roll_ms: 200
-  frame_ms: 20
-  webrtc_mode: 3
+  pre_roll_ms: 240
 
 stt:
   provider: mify

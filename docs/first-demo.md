@@ -22,9 +22,6 @@ For the wake-word demo:
 pip install -e ".[demo,wake]"
 ```
 
-Re-run that install after pulling updates; the demo now uses `webrtcvad-wheels`
-for endpointing.
-
 ## 2. Confirm Audio Devices
 
 ```powershell
@@ -65,11 +62,11 @@ Set `vad.threshold` in the demo config to the returned
 `recommended_vad_threshold`. Use at least 10 seconds for a stable value because
 short smoke tests can be skewed by transient noise.
 
-For `config.demo.mify.yaml` and `config.demo.wake.yaml`, VAD is now
-`engine: webrtc`. WebRTC ignores `vad.threshold`; if it clips endings, raise
-`vad.silence_ms` from `700` toward `900`. If the assistant waits too long after
-you stop speaking, lower it toward `500`. If it misses speech, try lowering
-`vad.webrtc_mode` from `3` to `2`.
+`config.demo.mock.yaml`, `config.demo.mify.yaml`, and
+`config.demo.wake.yaml` all use `engine: energy`. If background noise triggers
+speech, raise `vad.threshold` or re-run calibration in the real room. If command
+endings are clipped, raise `vad.silence_ms`; if the assistant waits too long
+after you stop speaking, lower it gradually.
 
 ## 5. Verify ASR Separately
 
