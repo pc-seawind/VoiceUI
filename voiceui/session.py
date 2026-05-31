@@ -8,8 +8,12 @@ class ConversationSession:
     def __init__(self, llm_config: LlmConfig, conversation_config: ConversationConfig):
         self.llm_config = llm_config
         self.conversation_config = conversation_config
+        self.messages: list[ChatMessage] = []
+        self.reset()
+
+    def reset(self) -> None:
         self.messages: list[ChatMessage] = [
-            ChatMessage(role="system", content=llm_config.system_prompt)
+            ChatMessage(role="system", content=self.llm_config.system_prompt)
         ]
 
     def add_user(self, text: str) -> None:

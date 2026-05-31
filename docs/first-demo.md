@@ -158,3 +158,8 @@ Flow:
 2. Wait for the `wake>` log.
 3. Speak one command.
 4. Wait for `vad>`, `stt>`, `llm>`, `tts>`, and the spoken answer.
+5. When `session> listening_for_follow_up seconds=10` appears, speak the next
+   turn directly. The next turn keeps the same LLM message history.
+6. If you stay silent for 10 seconds, VoiceUI prints
+   `session> follow_up_timeout returning_to_wake` and waits for the wake word
+   again.

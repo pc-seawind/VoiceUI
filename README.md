@@ -78,6 +78,12 @@ Run continuously:
 python -m voiceui --config config.example.yaml
 ```
 
+In continuous audio mode, one wake word starts a conversation session. After
+each answer, VoiceUI listens for a follow-up for `conversation.follow_up_seconds`
+without requiring another wake word. If no speech starts before the timeout, it
+returns to wake-word listening. `--once` is intentionally still a single-turn
+smoke test.
+
 ## First Demo
 
 Use the mock demo first to prove that the microphone, VAD, and speaker path
@@ -116,7 +122,9 @@ python -m voiceui --config config.demo.wake.yaml
 ```
 
 Flow: say "hey jarvis", speak one command after the wake log appears, then wait
-for VAD, ASR, LLM, and TTS.
+for VAD, ASR, LLM, and TTS. After the answer, speak the next turn within
+`conversation.follow_up_seconds` to continue the same LLM conversation without
+another wake word.
 
 Each audio turn writes debug artifacts under `debug_sessions/` when
 `debug.enabled` is true. The folder contains `utterance.wav` and
