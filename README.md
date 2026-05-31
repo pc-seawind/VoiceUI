@@ -57,9 +57,9 @@ Record from the configured XVF3800 command stream:
 python -m voiceui --config config.example.yaml --record-wav recordings\command.wav --seconds 5
 ```
 
-The demo configs apply `audio.input_gain_db: 20.0` before wake detection, VAD,
-ASR, and recorded debug WAVs. Lower it if `utterance.wav` sounds clipped or
-distorted.
+The demo configs keep `audio.input_gain_db: 0.0` by default. Raise it only for
+input-level experiments; if `utterance.wav` sounds clipped or distorted, bring
+it back down.
 
 Transcribe a saved WAV through the configured ASR backend:
 
@@ -128,8 +128,8 @@ confidence, and latency, then plays the local wake acknowledgement WAV.
 For hardware bring-up, `config.demo.wake.yaml` uses `wake.threshold: 0.35`.
 Lower it toward `0.25` if wake is still difficult; raise it toward `0.5` if it
 false-wakes.
-If input level is low, keep `audio.input_gain_db: 20.0`; if it clips, try
-`12.0` or `6.0`.
+If input level is low, try `audio.input_gain_db: 6.0` or `12.0` first. Use
+`20.0` only as an aggressive diagnostic value because it can clip.
 
 Then run the wake-word Mify demo:
 

@@ -22,7 +22,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.input.mode, "audio")
         self.assertEqual(config.audio.channels, 2)
         self.assertEqual(config.audio.wake_stream_channel, 1)
-        self.assertEqual(config.audio.input_gain_db, 20.0)
+        self.assertEqual(config.audio.input_gain_db, 0.0)
 
     def test_mify_config_loads_backend_values(self) -> None:
         config = load_config("config.mify.example.yaml")
@@ -41,7 +41,7 @@ class ConfigTests(unittest.TestCase):
 
         self.assertEqual(mock_config.wake.engine, "manual")
         self.assertEqual(mock_config.tts.provider, "system")
-        self.assertEqual(mock_config.audio.input_gain_db, 20.0)
+        self.assertEqual(mock_config.audio.input_gain_db, 0.0)
         self.assertEqual(mify_config.wake.engine, "manual")
         self.assertEqual(mify_config.vad.engine, "webrtc")
         self.assertEqual(mify_config.stt.provider, "mify")
