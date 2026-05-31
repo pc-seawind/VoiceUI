@@ -146,7 +146,8 @@ tts:
   api_key_env: MIFY_API_KEY
   model: xiaomi/mimo-v2.5-tts
   voice: mimo_default
-  audio_format: wav
+  audio_format: pcm
+  sample_rate: 24000
 ```
 
 For TTS, VoiceUI puts the text to synthesize in an `assistant` message and sends

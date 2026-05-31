@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import io
 import subprocess
 import sys
 import tempfile
@@ -57,10 +58,15 @@ class MimoTextToSpeech(TextToSpeech):
 
     def speak(self, text: str) -> None:
         print(f"assistant> {text}")
-        wav_data = self.synthesize(text)
-        _play_wav_bytes(wav_data, self.config.playback_device)
+        audio_data = self.synthesize(text)
+        _play_audio_bytes(
+            audio_data.data,
+            audio_format=audio_data.format,
+            sample_rate=self.config.sample_rate,
+            device=self.config.playback_device,
+        )
 
-    def synthesize(self, text: str) -> bytes:
+    def synthesize(self, text: str) -> "SynthesizedAudio":
         headers = {}
         if self.config.api_key_env:
             api_key = require_api_key(self.config.api_key_env)
@@ -85,7 +91,7 @@ class MimoTextToSpeech(TextToSpeech):
             headers=headers,
             timeout=self.config.timeout_seconds,
         )
-        return _extract_audio_bytes(data)
+        return _extract_audio(data, fallback_format=self.config.audio_format)
 
 
 class PiperHttpTextToSpeech(TextToSpeech):
@@ -96,7 +102,7 @@ class PiperHttpTextToSpeech(TextToSpeech):
         url = f"{self.config.piper_url.rstrip('/')}?{urllib.parse.urlencode({'text': text})}"
         with urllib.request.urlopen(url, timeout=30) as response:
             wav_data = response.read()
-        _play_wav_bytes(wav_data, self.config.playback_device)
+        _play_audio_bytes(wav_data, audio_format="wav", device=self.config.playback_device)
 
 
 class PiperCliTextToSpeech(TextToSpeech):
@@ -117,7 +123,7 @@ class PiperCliTextToSpeech(TextToSpeech):
                 str(wav_path),
             ]
             subprocess.run(command, input=text, text=True, check=True)
-            _play_wav_bytes(wav_path.read_bytes(), self.config.playback_device)
+            _play_audio_bytes(wav_path.read_bytes(), audio_format="wav", device=self.config.playback_device)
 
 
 def create_tts(config: TtsConfig) -> TextToSpeech:
@@ -167,7 +173,13 @@ def _chat_completions_url(endpoint: str) -> str:
     return f"{base}/v1/chat/completions"
 
 
-def _extract_audio_bytes(data: dict) -> bytes:
+class SynthesizedAudio:
+    def __init__(self, data: bytes, audio_format: str):
+        self.data = data
+        self.format = audio_format
+
+
+def _extract_audio(data: dict, fallback_format: str) -> SynthesizedAudio:
     choices = data.get("choices", [])
     if not choices:
         raise RuntimeError("TTS response did not contain choices.")
@@ -176,10 +188,16 @@ def _extract_audio_bytes(data: dict) -> bytes:
     encoded = audio.get("data")
     if not encoded:
         raise RuntimeError("TTS response did not contain message.audio.data.")
-    return base64.b64decode(str(encoded))
+    audio_format = str(audio.get("format") or fallback_format or "pcm").lower()
+    return SynthesizedAudio(base64.b64decode(str(encoded)), audio_format)
 
 
-def _play_wav_bytes(wav_data: bytes, device: str | int | None) -> None:
+def _play_audio_bytes(
+    audio_data: bytes,
+    audio_format: str,
+    device: str | int | None = None,
+    sample_rate: int = 24000,
+) -> None:
     try:
         import sounddevice as sd  # type: ignore[import-untyped]
         import soundfile as sf  # type: ignore[import-untyped]
@@ -189,9 +207,20 @@ def _play_wav_bytes(wav_data: bytes, device: str | int | None) -> None:
             "Install with: pip install -e \".[tts]\""
         ) from exc
 
-    with tempfile.NamedTemporaryFile(suffix=".wav") as temp_file:
-        temp_file.write(wav_data)
-        temp_file.flush()
-        data, sample_rate = sf.read(temp_file.name, dtype="float32")
-        sd.play(data, sample_rate, device=None if device == "default" else device)
+    normalized_format = audio_format.lower().lstrip(".")
+    playback_device = None if device == "default" else device
+    if normalized_format == "pcm":
+        import numpy as np  # type: ignore[import-untyped]
+
+        data = np.frombuffer(audio_data, dtype="<i2").astype("float32") / 32768.0
+        sd.play(data, sample_rate, device=playback_device)
         sd.wait()
+        return
+
+    if normalized_format == "wav" or audio_data.startswith(b"RIFF"):
+        data, wav_sample_rate = sf.read(io.BytesIO(audio_data), dtype="float32")
+        sd.play(data, wav_sample_rate, device=playback_device)
+        sd.wait()
+        return
+
+    raise RuntimeError(f"Unsupported TTS audio format: {audio_format}")

@@ -78,7 +78,8 @@ class TtsConfig:
     timeout_seconds: float = 60.0
     model: str = "mimo-v2.5-tts"
     voice: str = "mimo_default"
-    audio_format: str = "wav"
+    audio_format: str = "pcm"
+    sample_rate: int = 24000
     style_prompt: str = "自然、清晰、适合智能音箱的中文播报。"
     piper_url: str = "http://localhost:5000"
     piper_model: str | None = None
