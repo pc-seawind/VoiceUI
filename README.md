@@ -105,11 +105,11 @@ For the first XVF3800 prototype:
 - LLM: Ollama or any OpenAI-compatible endpoint.
 - TTS: console for bring-up, Piper HTTP or Piper CLI for local speech output.
 
-## Mify / OpenAI-Compatible Backend
+## Mify / MiMo Backend
 
 VoiceUI cannot use the Codex session itself as a production LLM API. For the
-Mify/MiMo path, both LLM and ASR use the MiMo chat-completions audio
-understanding format with `mimo-v2.5`.
+Mify/MiMo path, LLM and ASR use `mimo-v2.5`, while TTS uses
+`mimo-v2.5-tts`.
 
 Example LLM config:
 
@@ -136,6 +136,22 @@ For ASR, VoiceUI sends the captured WAV as `input_audio` with a
 `data:audio/wav;base64,...` payload and asks MiMo to output only the transcript.
 The MiMo-compatible path uses an `api-key` header populated from `api_key_env`.
 Replace `endpoint` with your Mify MiMo-compatible base URL when you have it.
+
+Example TTS config:
+
+```yaml
+tts:
+  provider: mify
+  endpoint: https://api.xiaomimimo.com/v1
+  api_key_env: MIFY_API_KEY
+  model: mimo-v2.5-tts
+  voice: mimo_default
+  audio_format: wav
+```
+
+For TTS, VoiceUI puts the text to synthesize in an `assistant` message and sends
+`audio: {format, voice}`. The returned `message.audio.data` is base64-decoded
+and played through the configured speaker.
 
 Full templates are available in [config.demo.mify.yaml](config.demo.mify.yaml)
 and [config.mify.example.yaml](config.mify.example.yaml). The runnable first

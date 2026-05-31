@@ -27,7 +27,7 @@ vad:
 stt:
   provider: mify
   # Replace this with your Mify MiMo-compatible endpoint when ready.
-  endpoint: https://api.xiaomimimo.com/v1
+  endpoint: https://editdemo.ai.xiaomi.net/model/infer/xiaomi-mify/v1
   api_key_env: MIFY_API_KEY
   timeout_seconds: 60
   model: mimo-v2.5
@@ -36,7 +36,7 @@ stt:
 llm:
   provider: mify
   # Replace this with your Mify MiMo-compatible endpoint when ready.
-  endpoint: https://api.xiaomimimo.com/v1
+  endpoint: https://editdemo.ai.xiaomi.net/model/infer/xiaomi-mify/v1
   api_key_env: MIFY_API_KEY
   model: mimo-v2.5
   temperature: 0.3
@@ -45,7 +45,15 @@ llm:
     Chinese. Ask for confirmation before sensitive home actions.
 
 tts:
-  provider: system
+  provider: mify
+  # Replace this with your Mify MiMo-compatible endpoint when ready.
+  endpoint: https://editdemo.ai.xiaomi.net/model/infer/xiaomi-mify/v1
+  api_key_env: MIFY_API_KEY
+  timeout_seconds: 60
+  model: mimo-v2.5-tts
+  voice: mimo_default
+  audio_format: wav
+  style_prompt: 自然、清晰、适合智能音箱的中文播报。
   piper_url: http://localhost:5000
   piper_model: models/voice.onnx
   playback_device: default

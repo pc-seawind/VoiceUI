@@ -43,6 +43,8 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(mify_config.stt.provider, "mify")
         self.assertEqual(mify_config.stt.model, "mimo-v2.5")
         self.assertEqual(mify_config.llm.model, "mimo-v2.5")
+        self.assertEqual(mify_config.tts.provider, "mify")
+        self.assertEqual(mify_config.tts.model, "mimo-v2.5-tts")
 
 
 if __name__ == "__main__":

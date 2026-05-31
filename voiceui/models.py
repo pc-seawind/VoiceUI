@@ -72,7 +72,14 @@ class LlmConfig:
 
 @dataclass(slots=True)
 class TtsConfig:
-    provider: Literal["console", "system", "piper_http", "piper_cli"] = "console"
+    provider: Literal["console", "system", "mify", "mimo", "piper_http", "piper_cli"] = "console"
+    endpoint: str = "https://api.xiaomimimo.com/v1"
+    api_key_env: str | None = None
+    timeout_seconds: float = 60.0
+    model: str = "mimo-v2.5-tts"
+    voice: str = "mimo_default"
+    audio_format: str = "wav"
+    style_prompt: str = "自然、清晰、适合智能音箱的中文播报。"
     piper_url: str = "http://localhost:5000"
     piper_model: str | None = None
     playback_device: str | int | None = None
