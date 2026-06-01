@@ -166,6 +166,17 @@ def create_wake_detector(config: WakeConfig) -> WakeDetector:
     raise ValueError(f"Unsupported wake engine: {config.engine}")
 
 
+def list_openwakeword_models() -> list[str]:
+    try:
+        import openwakeword  # type: ignore[import-untyped]
+    except ImportError as exc:
+        raise RuntimeError(
+            "openWakeWord is required to list wake models. "
+            "Install with: pip install -e \".[wake]\""
+        ) from exc
+    return sorted(getattr(openwakeword, "MODELS", {}).keys())
+
+
 def _best_prediction(predictions: dict[str, float]) -> tuple[str, float]:
     if not predictions:
         return "", 0.0

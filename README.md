@@ -157,6 +157,20 @@ Use the debug fields like this:
 - healthy audio but very low scores: the current wake word/model is not a good
   match for the utterance or the XVF3800 output channel.
 
+If `hey_jarvis` is too strict, compare the built-in openWakeWord models:
+
+```powershell
+python -m voiceui --list-wake-models
+python -m voiceui --config config.demo.wake.aliyun.yaml --wake-monitor --wake-model any --seconds 20
+```
+
+During `--wake-monitor`, try "alexa", "hey mycroft", "hey rhasspy", "timer",
+and "weather". Use the model whose `top=` score is highest and most repeatable:
+
+```powershell
+python -m voiceui --config config.demo.wake.aliyun.yaml --wake-model alexa --wake-threshold 0.25
+```
+
 Then run the wake-word Mify demo:
 
 ```powershell

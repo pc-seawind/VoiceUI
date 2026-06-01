@@ -13,7 +13,7 @@ from voiceui.env import load_dotenv
 from voiceui.models import Utterance
 from voiceui.stt import create_stt
 from voiceui.tts import synthesize_to_wav
-from voiceui.wake import create_wake_detector
+from voiceui.wake import create_wake_detector, list_openwakeword_models
 from voiceui.wake_ack import create_wake_ack_player, resolve_wake_ack_path
 
 _DEFAULT_WAKE_ACK_STYLE = (
@@ -44,6 +44,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--audio-channel", type=int, help="Override configured audio channel")
     parser.add_argument("--wake-test", action="store_true", help="Wait for one wake word and exit")
     parser.add_argument(
+        "--wake-monitor",
+        action="store_true",
+        help="Print wake scores for --seconds without triggering the assistant",
+    )
+    parser.add_argument(
+        "--list-wake-models",
+        action="store_true",
+        help="List available openWakeWord built-in models and exit",
+    )
+    parser.add_argument("--wake-model", help="Override wake.model, e.g. any, alexa, hey_mycroft")
+    parser.add_argument("--wake-threshold", type=float, help="Override wake.threshold")
+    parser.add_argument(
         "--wake-debug",
         action="store_true",
         help="Print periodic wake score and audio-level diagnostics",
@@ -69,8 +81,16 @@ def main(argv: list[str] | None = None) -> int:
         if args.list_audio_devices:
             print(list_audio_devices())
             return 0
+        if args.list_wake_models:
+            for model_name in list_openwakeword_models():
+                print(model_name)
+            return 0
 
         config = load_config(args.config)
+        if args.wake_model:
+            config.wake.model = args.wake_model
+        if args.wake_threshold is not None:
+            config.wake.threshold = args.wake_threshold
         if args.wake_debug:
             config.wake.debug = True
 
@@ -130,7 +150,7 @@ def main(argv: list[str] | None = None) -> int:
             print(summary.to_json())
             return 0
 
-        if args.wake_test:
+        if args.wake_test or args.wake_monitor:
             channel = (
                 args.audio_channel
                 if args.audio_channel is not None
@@ -138,12 +158,33 @@ def main(argv: list[str] | None = None) -> int:
             )
             audio = create_audio_input(config.audio, enabled=True, selected_channel=channel)
             started = time.monotonic()
-            wake = create_wake_detector(config.wake).wait(audio)
+            if args.wake_monitor:
+                config.wake.debug = True
+                config.wake.model = args.wake_model or "any"
+                config.wake.threshold = (
+                    args.wake_threshold if args.wake_threshold is not None else 1.1
+                )
+                config.wake.max_wait_seconds = max(0.1, args.seconds)
+                config.wake.debug_top_predictions = max(config.wake.debug_top_predictions, 10)
+                print(
+                    "wake_monitor> "
+                    f"seconds={config.wake.max_wait_seconds:g} "
+                    f"model={config.wake.model} threshold={config.wake.threshold:.3f}"
+                )
+            try:
+                wake = create_wake_detector(config.wake).wait(audio)
+            except TimeoutError:
+                if args.wake_monitor:
+                    print("wake_monitor> done")
+                    return 0
+                raise
             latency_ms = int((time.monotonic() - started) * 1000)
             print(
                 f"wake> engine={wake.engine} label={wake.label} "
                 f"confidence={wake.confidence:.3f} latency_ms={latency_ms}"
             )
+            if args.wake_monitor:
+                return 0
             ack_started = time.monotonic()
             try:
                 create_wake_ack_player(
