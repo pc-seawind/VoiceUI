@@ -4,6 +4,8 @@ import json
 import urllib.error
 import urllib.request
 
+from voiceui.env import load_dotenv
+
 
 def post_json(
     url: str,
@@ -35,11 +37,12 @@ def require_api_key(env_name: str | None) -> str | None:
 
     import os
 
+    load_dotenv()
     value = os.environ.get(env_name)
     if not value:
         raise RuntimeError(
             f"Missing API key environment variable: {env_name}. "
-            f"Set it in PowerShell with: $env:{env_name}=\"your-token\""
+            f"Set it in .env or PowerShell with: $env:{env_name}=\"your-token\""
         )
     return value
 

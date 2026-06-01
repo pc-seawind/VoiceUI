@@ -9,6 +9,7 @@ from voiceui.audio import create_audio_input, list_audio_devices, read_pcm16_wav
 from voiceui.config import config_to_dict, load_config
 from voiceui.core import VoiceAssistant
 from voiceui.diagnostics import calibrate_vad, record_wav
+from voiceui.env import load_dotenv
 from voiceui.models import Utterance
 from voiceui.stt import create_stt
 from voiceui.tts import synthesize_to_wav
@@ -59,6 +60,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
+        load_dotenv()
         if args.list_audio_devices:
             print(list_audio_devices())
             return 0

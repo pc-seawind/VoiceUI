@@ -43,6 +43,15 @@ For wake-word testing, install the wake extra as well:
 pip install -e ".[demo,wake]"
 ```
 
+Create local secrets from the template:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Then fill `MIFY_API_KEY` in `.env`. The real `.env` is ignored by git and is
+loaded automatically by the CLI.
+
 List audio devices:
 
 ```powershell
@@ -109,7 +118,6 @@ python -m voiceui --config config.demo.mock.yaml
 Then run the real Mify-backed demo:
 
 ```powershell
-$env:MIFY_API_KEY="your-token-if-required"
 python -m voiceui --config config.demo.mify.yaml --text "你好，介绍一下你自己"
 python -m voiceui --config config.demo.mify.yaml --transcribe-wav recordings\command.wav
 python -m voiceui --config config.demo.mify.yaml
@@ -160,7 +168,6 @@ phrase or voice.
 Regenerate the bundled acknowledgement with the configured MiMo TTS backend:
 
 ```powershell
-$env:MIFY_API_KEY="your-token-if-required"
 python -m voiceui --config config.demo.wake.yaml --generate-wake-ack
 ```
 
@@ -216,6 +223,8 @@ For ASR, VoiceUI sends the captured WAV as `input_audio` with a
 `data:audio/wav;base64,...` payload and asks MiMo to output only the transcript.
 The MiMo-compatible path uses an `api-key` header populated from `api_key_env`.
 Replace `endpoint` with your Mify MiMo-compatible base URL when you have it.
+`api_key_env: MIFY_API_KEY` resolves from either the process environment or the
+local `.env` file.
 
 Example TTS config:
 

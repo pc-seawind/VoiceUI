@@ -22,6 +22,15 @@ For the wake-word demo:
 pip install -e ".[demo,wake]"
 ```
 
+Create a local `.env` and fill in the Mify token:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Set `MIFY_API_KEY=...` inside `.env`. This file is ignored by git and is loaded
+automatically by the CLI.
+
 ## 2. Confirm Audio Devices
 
 ```powershell
@@ -79,7 +88,6 @@ format. The captured WAV is sent as `input_audio` using
 `data:audio/wav;base64,...`.
 
 ```powershell
-$env:MIFY_API_KEY="your-token-if-required"
 python -m voiceui --config config.demo.mify.yaml --transcribe-wav recordings\smoke.wav
 ```
 
@@ -161,7 +169,6 @@ wake> engine=openwakeword label=hey_jarvis confidence=... latency_ms=...
 To regenerate the local "我在" WAV with MiMo TTS:
 
 ```powershell
-$env:MIFY_API_KEY="your-token-if-required"
 python -m voiceui --config config.demo.wake.yaml --generate-wake-ack
 ```
 
@@ -176,7 +183,6 @@ If it does not trigger reliably, try these in order:
 ## 9. Run the Wake-Word Full Chain
 
 ```powershell
-$env:MIFY_API_KEY="your-token-if-required"
 python -m voiceui --config config.demo.wake.yaml
 ```
 
