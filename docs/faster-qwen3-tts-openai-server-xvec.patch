@@ -1,8 +1,17 @@
 diff --git a/examples/openai_server.py b/examples/openai_server.py
-index 2199e14..0b704fd 100644
+index 2199e14..54d0a5d 100644
 --- a/examples/openai_server.py
 +++ b/examples/openai_server.py
-@@ -184,6 +184,7 @@ async def _stream_chunks(voice_cfg: dict, text: str) -> AsyncGenerator[bytes, No
+@@ -178,15 +178,38 @@ async def _stream_chunks(voice_cfg: dict, text: str) -> AsyncGenerator[bytes, No
+ 
+     def producer():
+         try:
++            emitted_samples = 0
++            max_audio_seconds = float(voice_cfg.get("max_audio_seconds", 8.0))
++            max_samples = int(max_audio_seconds * SAMPLE_RATE) if max_audio_seconds > 0 else None
+             with _model_lock:
+                 for chunk, _sr, _timing in tts_model.generate_voice_clone_streaming(
+                     text=text,
                      language=voice_cfg.get("language", "Auto"),
                      ref_audio=voice_cfg["ref_audio"],
                      ref_text=voice_cfg.get("ref_text", ""),
@@ -10,7 +19,29 @@ index 2199e14..0b704fd 100644
                      chunk_size=voice_cfg.get("chunk_size", 12),
                      non_streaming_mode=False,
                  ):
-@@ -249,6 +250,7 @@ async def create_speech(req: SpeechRequest):
++                    if max_samples is not None:
++                        remaining = max_samples - emitted_samples
++                        if remaining <= 0:
++                            logger.warning(
++                                "Stopping TTS stream after %.2f seconds for text=%r",
++                                max_audio_seconds,
++                                text,
++                            )
++                            break
++                        if len(chunk) > remaining:
++                            chunk = chunk[:remaining]
++                            q.put(chunk)
++                            logger.warning(
++                                "Truncated TTS stream after %.2f seconds for text=%r",
++                                max_audio_seconds,
++                                text,
++                            )
++                            break
++                    emitted_samples += len(chunk)
+                     q.put(chunk)
+         except Exception as exc:
+             q.put(exc)
+@@ -249,6 +272,7 @@ async def create_speech(req: SpeechRequest):
                      language=voice_cfg.get("language", "Auto"),
                      ref_audio=voice_cfg["ref_audio"],
                      ref_text=voice_cfg.get("ref_text", ""),

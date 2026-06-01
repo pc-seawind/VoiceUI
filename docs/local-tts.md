@@ -32,8 +32,10 @@ python examples/openai_server.py `
 
 The provided voice config uses the bundled `ref_audio.wav` and its matching
 transcript from `faster-qwen3-tts`, sets `language: Chinese`, and enables
-`xvec_only: true` for cleaner cross-language output. Without those settings,
-short Chinese replies can turn into long or unintelligible audio.
+`xvec_only: true` for cleaner cross-language output. It also sets
+`max_audio_seconds: 8` so an occasional bad generation cannot hold the model
+lock indefinitely. Without those settings, short Chinese replies can turn into
+long or unintelligible audio.
 
 The stock `examples/openai_server.py` may need the local
 `faster-qwen3-tts-openai-server-xvec.patch` patch that passes

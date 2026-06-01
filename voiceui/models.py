@@ -56,9 +56,19 @@ class VadConfig:
 
 @dataclass(slots=True)
 class SttConfig:
-    provider: Literal["mock", "faster_whisper", "openai_compatible", "mify", "mimo"] = "mock"
+    provider: Literal[
+        "mock",
+        "faster_whisper",
+        "openai_compatible",
+        "mify",
+        "mimo",
+        "aliyun_nls",
+    ] = "mock"
     endpoint: str = "http://localhost:8000/v1/audio/transcriptions"
     api_key_env: str | None = None
+    access_key_id_env: str | None = None
+    access_key_secret_env: str | None = None
+    app_key_env: str | None = None
     timeout_seconds: float = 60.0
     model: str = "small"
     language: str | None = None

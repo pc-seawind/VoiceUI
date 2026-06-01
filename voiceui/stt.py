@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import base64
 import json
+import math
 import tempfile
+import time
 import wave
 import uuid
 from pathlib import Path
@@ -143,6 +145,34 @@ class MimoAudioUnderstandingSpeechToText(SpeechToText):
         return _extract_chat_message_text(data)
 
 
+class AliyunNlsSpeechToText(SpeechToText):
+    def __init__(self, config: SttConfig):
+        self.config = config
+        self._token: str | None = None
+
+    def transcribe(self, utterance: Utterance) -> str:
+        app_key = require_api_key(self.config.app_key_env or "ALIYUN_NLS_APPKEY")
+        access_key_id = require_api_key(
+            self.config.access_key_id_env or "ALIYUN_AccessKeyId"
+        )
+        access_key_secret = require_api_key(
+            self.config.access_key_secret_env or "ALIYUN_AccessKeySecret"
+        )
+        if self._token is None:
+            self._token = _get_aliyun_nls_token(access_key_id, access_key_secret)
+
+        sample_rate = 16000
+        pcm = _ensure_pcm16_sample_rate(utterance.pcm, utterance.sample_rate, sample_rate)
+        return _run_aliyun_speech_recognizer(
+            url=self.config.endpoint,
+            token=self._token,
+            app_key=app_key,
+            pcm=pcm,
+            sample_rate=sample_rate,
+            timeout_seconds=self.config.timeout_seconds,
+        ).strip()
+
+
 def create_stt(config: SttConfig) -> SpeechToText:
     if config.provider == "mock":
         return MockSpeechToText(config)
@@ -152,6 +182,8 @@ def create_stt(config: SttConfig) -> SpeechToText:
         return OpenAICompatibleSpeechToText(config)
     if config.provider in ("mify", "mimo"):
         return MimoAudioUnderstandingSpeechToText(config)
+    if config.provider == "aliyun_nls":
+        return AliyunNlsSpeechToText(config)
     raise ValueError(f"Unsupported STT provider: {config.provider}")
 
 
@@ -246,3 +278,103 @@ def _extract_chat_message_text(data: dict) -> str:
     if content:
         return content
     return str(message.get("reasoning_content") or "").strip()
+
+
+def _get_aliyun_nls_token(access_key_id: str, access_key_secret: str) -> str:
+    try:
+        from nls.token import getToken  # type: ignore[import-untyped]
+    except ImportError as exc:
+        raise RuntimeError(
+            "Aliyun NLS SDK is not installed. Install with: "
+            "pip install aliyun-python-sdk-core websocket-client "
+            "git+https://github.com/aliyun/alibabacloud-nls-python-sdk.git"
+        ) from exc
+
+    return str(getToken(access_key_id, access_key_secret))
+
+
+def _run_aliyun_speech_recognizer(
+    *,
+    url: str,
+    token: str,
+    app_key: str,
+    pcm: bytes,
+    sample_rate: int,
+    timeout_seconds: float,
+) -> str:
+    try:
+        import nls  # type: ignore[import-untyped]
+    except ImportError as exc:
+        raise RuntimeError(
+            "Aliyun NLS SDK is not installed. Install with: "
+            "pip install git+https://github.com/aliyun/alibabacloud-nls-python-sdk.git"
+        ) from exc
+
+    results: list[str] = []
+    errors: list[str] = []
+
+    def on_completed(message: str, *_args: object) -> None:
+        text = _extract_aliyun_result(message)
+        if text:
+            results.append(text)
+
+    def on_error(message: str, *_args: object) -> None:
+        errors.append(message)
+
+    recognizer = nls.NlsSpeechRecognizer(
+        url=url,
+        token=token,
+        appkey=app_key,
+        on_completed=on_completed,
+        on_error=on_error,
+        callback_args=[],
+    )
+    try:
+        start_result = recognizer.start(
+            aformat="pcm",
+            sample_rate=sample_rate,
+            ch=1,
+            enable_intermediate_result=False,
+            enable_punctuation_prediction=True,
+            enable_inverse_text_normalization=True,
+            timeout=max(1, math.ceil(timeout_seconds)),
+            ping_interval=8,
+            ping_timeout=None,
+        )
+        if start_result is False:
+            raise RuntimeError("Aliyun NLS recognizer failed to start.")
+        frame_bytes = max(2, int(sample_rate * 2 * 0.02))
+        for index in range(0, len(pcm), frame_bytes):
+            chunk = pcm[index : index + frame_bytes]
+            if chunk:
+                recognizer.send_audio(chunk)
+                time.sleep(0.01)
+        recognizer.stop(timeout=max(1, math.ceil(timeout_seconds)))
+    finally:
+        recognizer.shutdown()
+
+    if errors:
+        raise RuntimeError(f"Aliyun NLS STT failed: {errors[-1]}")
+    return results[-1] if results else ""
+
+
+def _extract_aliyun_result(message: str) -> str:
+    try:
+        data = json.loads(message)
+    except json.JSONDecodeError:
+        return ""
+    payload = data.get("payload", {})
+    if not isinstance(payload, dict):
+        return ""
+    return str(payload.get("result") or "").strip()
+
+
+def _ensure_pcm16_sample_rate(pcm: bytes, source_rate: int, target_rate: int) -> bytes:
+    if source_rate == target_rate:
+        return pcm
+    try:
+        import audioop
+    except ImportError as exc:
+        raise RuntimeError("Audio resampling requires the Python audioop module.") from exc
+    converted, _state = audioop.ratecv(pcm, 2, 1, source_rate, target_rate, None)
+    return converted

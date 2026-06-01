@@ -39,6 +39,7 @@ class ConfigTests(unittest.TestCase):
         mify_config = load_config("config.demo.mify.yaml")
         wake_config = load_config("config.demo.wake.yaml")
         local_tts_config = load_config("config.demo.wake.local-tts.yaml")
+        aliyun_asr_config = load_config("config.demo.aliyun-asr.yaml")
 
         self.assertEqual(mock_config.wake.engine, "manual")
         self.assertEqual(mock_config.tts.provider, "system")
@@ -71,6 +72,12 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(local_tts_config.tts.endpoint, "http://127.0.0.1:8000")
         self.assertEqual(local_tts_config.tts.audio_format, "pcm")
         self.assertTrue(local_tts_config.tts.stream)
+        self.assertEqual(aliyun_asr_config.stt.provider, "aliyun_nls")
+        self.assertEqual(aliyun_asr_config.stt.app_key_env, "ALIYUN_NLS_APPKEY")
+        self.assertEqual(
+            aliyun_asr_config.stt.endpoint,
+            "wss://nls-gateway-cn-shanghai.aliyuncs.com/ws/v1",
+        )
 
 
 if __name__ == "__main__":

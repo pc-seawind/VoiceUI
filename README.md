@@ -236,6 +236,26 @@ Replace `endpoint` with your Mify MiMo-compatible base URL when you have it.
 `api_key_env: MIFY_API_KEY` resolves from either the process environment or the
 local `.env` file.
 
+Aliyun NLS can be used as a non-LLM ASR backend. Install its SDK dependencies
+with `pip install -e ".[aliyun]"`, then put these values in `.env`:
+`ALIYUN_AccessKeyId`, `ALIYUN_AccessKeySecret`, and `ALIYUN_NLS_APPKEY`.
+
+```yaml
+stt:
+  provider: aliyun_nls
+  endpoint: wss://nls-gateway-cn-shanghai.aliyuncs.com/ws/v1
+  access_key_id_env: ALIYUN_AccessKeyId
+  access_key_secret_env: ALIYUN_AccessKeySecret
+  app_key_env: ALIYUN_NLS_APPKEY
+  timeout_seconds: 20
+```
+
+Run a quick file transcription test:
+
+```powershell
+python -m voiceui --config config.demo.aliyun-asr.yaml --transcribe-wav recordings\command.wav
+```
+
 Example TTS config:
 
 ```yaml
