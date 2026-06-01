@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import threading
 from collections import deque
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 
 from voiceui.audio import AudioInput, pcm16_rms
 from voiceui.models import Utterance, VadConfig
@@ -12,7 +13,13 @@ class SpeechStartTimeoutError(TimeoutError):
 
 
 class VadRecorder:
-    def record(self, audio: AudioInput, start_timeout_seconds: float = 0.0) -> Utterance:
+    def record(
+        self,
+        audio: AudioInput,
+        start_timeout_seconds: float = 0.0,
+        stop_event: threading.Event | None = None,
+        on_speech_start: Callable[[], None] | None = None,
+    ) -> Utterance:
         raise NotImplementedError
 
 
@@ -20,7 +27,13 @@ class EnergyVadRecorder(VadRecorder):
     def __init__(self, config: VadConfig):
         self.config = config
 
-    def record(self, audio: AudioInput, start_timeout_seconds: float = 0.0) -> Utterance:
+    def record(
+        self,
+        audio: AudioInput,
+        start_timeout_seconds: float = 0.0,
+        stop_event: threading.Event | None = None,
+        on_speech_start: Callable[[], None] | None = None,
+    ) -> Utterance:
         chunk_ms = audio.block_ms
         pre_roll_chunks = max(1, self.config.pre_roll_ms // chunk_ms)
         min_speech_chunks = max(1, self.config.min_speech_ms // chunk_ms)
@@ -36,6 +49,8 @@ class EnergyVadRecorder(VadRecorder):
         waited_ms = 0
 
         for chunk in audio.chunks():
+            if _stop_requested(stop_event):
+                raise SpeechStartTimeoutError("Stopped waiting for speech.")
             rms = pcm16_rms(chunk)
             speech = rms >= self.config.threshold
             if not is_recording:
@@ -51,6 +66,7 @@ class EnergyVadRecorder(VadRecorder):
                 if speech_chunks >= min_speech_chunks:
                     is_recording = True
                     recorded.extend(pre_roll)
+                    _notify_speech_start(on_speech_start)
                 elif start_timeout_ms and waited_ms >= start_timeout_ms and speech_chunks == 0:
                     raise SpeechStartTimeoutError("Timed out waiting for speech.")
                 continue
@@ -80,7 +96,13 @@ class SileroVadRecorder(VadRecorder):
         self._model = None
         self._torch = None
 
-    def record(self, audio: AudioInput, start_timeout_seconds: float = 0.0) -> Utterance:
+    def record(
+        self,
+        audio: AudioInput,
+        start_timeout_seconds: float = 0.0,
+        stop_event: threading.Event | None = None,
+        on_speech_start: Callable[[], None] | None = None,
+    ) -> Utterance:
         if audio.sample_rate not in self._VALID_SAMPLE_RATES:
             raise RuntimeError(
                 "silero VAD requires sample_rate to be 8000 or 16000, "
@@ -109,6 +131,8 @@ class SileroVadRecorder(VadRecorder):
         waited_ms = 0
 
         for frame in _pcm16_sample_windows(audio, window_samples=window_samples):
+            if _stop_requested(stop_event):
+                raise SpeechStartTimeoutError("Stopped waiting for speech.")
             probability = _silero_speech_probability(model, torch, frame, audio.sample_rate)
             if not is_recording:
                 waited_ms += window_ms
@@ -123,6 +147,7 @@ class SileroVadRecorder(VadRecorder):
                 if speech_frames >= min_speech_frames:
                     is_recording = True
                     recorded.extend(pre_roll)
+                    _notify_speech_start(on_speech_start)
                 elif start_timeout_ms and waited_ms >= start_timeout_ms and speech_frames == 0:
                     raise SpeechStartTimeoutError("Timed out waiting for speech.")
                 continue
@@ -173,7 +198,13 @@ class WebRtcVadRecorder(VadRecorder):
         if config.webrtc_mode < 0 or config.webrtc_mode > 3:
             raise ValueError("webrtc VAD mode must be between 0 and 3.")
 
-    def record(self, audio: AudioInput, start_timeout_seconds: float = 0.0) -> Utterance:
+    def record(
+        self,
+        audio: AudioInput,
+        start_timeout_seconds: float = 0.0,
+        stop_event: threading.Event | None = None,
+        on_speech_start: Callable[[], None] | None = None,
+    ) -> Utterance:
         if audio.sample_rate not in self._VALID_SAMPLE_RATES:
             raise RuntimeError(
                 "webrtc VAD requires sample_rate to be one of "
@@ -203,6 +234,8 @@ class WebRtcVadRecorder(VadRecorder):
         waited_ms = 0
 
         for frame in _pcm16_frames(audio, frame_ms=frame_ms):
+            if _stop_requested(stop_event):
+                raise SpeechStartTimeoutError("Stopped waiting for speech.")
             speech = detector.is_speech(frame, audio.sample_rate)
             if not is_recording:
                 waited_ms += frame_ms
@@ -217,6 +250,7 @@ class WebRtcVadRecorder(VadRecorder):
                 if speech_frames >= min_speech_frames:
                     is_recording = True
                     recorded.extend(pre_roll)
+                    _notify_speech_start(on_speech_start)
                 elif start_timeout_ms and waited_ms >= start_timeout_ms and speech_frames == 0:
                     raise SpeechStartTimeoutError("Timed out waiting for speech.")
                 continue
@@ -276,3 +310,12 @@ def _silero_speech_probability(model, torch, pcm: bytes, sample_rate: int) -> fl
     if hasattr(prediction, "item"):
         return float(prediction.item())
     return float(prediction)
+
+
+def _notify_speech_start(callback: Callable[[], None] | None) -> None:
+    if callback is not None:
+        callback()
+
+
+def _stop_requested(stop_event: threading.Event | None) -> bool:
+    return bool(stop_event is not None and stop_event.is_set())

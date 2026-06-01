@@ -67,6 +67,8 @@ tts:
 conversation:
   follow_up_seconds: 10
   max_turns: 12
+  barge_in_enabled: true
+  barge_in_check_seconds: 0.25
 
 home_assistant:
   enabled: false

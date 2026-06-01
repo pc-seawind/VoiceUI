@@ -67,6 +67,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(wake_config.wake_ack.wav_path, "default")
         self.assertEqual(wake_config.vad.engine, "silero")
         self.assertEqual(wake_config.vad.threshold, 0.6)
+        self.assertTrue(wake_config.conversation.barge_in_enabled)
         self.assertEqual(wake_config.stt.model, "xiaomi/mimo-v2.5")
         self.assertEqual(wake_config.tts.model, "xiaomi/mimo-v2-tts")
         self.assertTrue(wake_config.tts.stream)
@@ -74,6 +75,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(local_tts_config.tts.endpoint, "http://127.0.0.1:8000")
         self.assertEqual(local_tts_config.tts.audio_format, "pcm")
         self.assertTrue(local_tts_config.tts.stream)
+        self.assertTrue(local_tts_config.conversation.barge_in_enabled)
         self.assertEqual(aliyun_asr_config.stt.provider, "aliyun_nls")
         self.assertEqual(aliyun_asr_config.stt.app_key_env, "ALIYUN_NLS_APPKEY")
         self.assertEqual(
@@ -94,6 +96,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(aliyun_wake_config.llm.provider, "mify")
         self.assertEqual(aliyun_wake_config.tts.provider, "aliyun_nls")
         self.assertTrue(aliyun_wake_config.tts.stream)
+        self.assertTrue(aliyun_wake_config.conversation.barge_in_enabled)
 
 
 if __name__ == "__main__":

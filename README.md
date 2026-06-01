@@ -104,7 +104,9 @@ In continuous audio mode, one wake word starts a conversation session. After
 each answer, VoiceUI listens for a follow-up for `conversation.follow_up_seconds`
 without requiring another wake word. If no speech starts before the timeout, it
 returns to wake-word listening. `--once` is intentionally still a single-turn
-smoke test.
+smoke test. Wake demo configs also enable `conversation.barge_in_enabled`, so
+VoiceUI keeps VAD active while streaming TTS is playing. When speech starts, the
+current playback is stopped and the captured utterance becomes the next turn.
 
 ## First Demo
 
@@ -194,7 +196,8 @@ python -m voiceui --config config.demo.wake.aliyun.yaml
 Flow: say "hey jarvis", wait for the local "我在" acknowledgement, then speak.
 This config uses Aliyun NLS for ASR and TTS, keeps Mify for LLM, and keeps
 `conversation.follow_up_seconds: 10` for follow-up turns without another wake
-word.
+word. It also enables `conversation.barge_in_enabled: true`, so you can speak
+over a TTS answer to interrupt it and start the next turn.
 
 Each audio turn writes debug artifacts under `debug_sessions/` when
 `debug.enabled` is true. The folder contains `utterance.wav` and

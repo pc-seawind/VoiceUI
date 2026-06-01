@@ -192,9 +192,12 @@ Flow:
 2. Wait for the `wake>` log and the local "我在" acknowledgement.
 3. Speak one command.
 4. Wait for `vad>`, `stt>`, `llm>`, `tts>`, and the spoken answer.
-5. When `session> listening_for_follow_up seconds=10` appears, speak the next
+5. You can interrupt a streaming TTS answer by speaking over it. VoiceUI prints
+   `barge_in> speech_start`, stops playback, captures your utterance, and starts
+   the next turn.
+6. When `session> listening_for_follow_up seconds=10` appears, speak the next
    turn directly. The next turn keeps the same LLM message history.
-6. If you stay silent for 10 seconds, VoiceUI prints
+7. If you stay silent for 10 seconds, VoiceUI prints
    `session> follow_up_timeout returning_to_wake` and waits for the wake word
    again.
 

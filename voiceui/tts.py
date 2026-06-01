@@ -22,18 +22,20 @@ from voiceui.models import TtsConfig
 
 
 class TextToSpeech:
-    def speak(self, text: str) -> None:
+    def speak(self, text: str, stop_event: threading.Event | None = None) -> None:
         raise NotImplementedError
 
 
 class ConsoleTextToSpeech(TextToSpeech):
-    def speak(self, text: str) -> None:
+    def speak(self, text: str, stop_event: threading.Event | None = None) -> None:
         print(f"assistant> {text}")
 
 
 class SystemTextToSpeech(TextToSpeech):
-    def speak(self, text: str) -> None:
+    def speak(self, text: str, stop_event: threading.Event | None = None) -> None:
         print(f"assistant> {text}")
+        if _stop_requested(stop_event):
+            return
         if sys.platform == "win32":
             _run_tts_command(
                 [
@@ -64,10 +66,10 @@ class MimoTextToSpeech(TextToSpeech):
     def __init__(self, config: TtsConfig):
         self.config = config
 
-    def speak(self, text: str) -> None:
+    def speak(self, text: str, stop_event: threading.Event | None = None) -> None:
         print(f"assistant> {text}")
         if self.config.stream:
-            self.speak_streaming(text)
+            self.speak_streaming(text, stop_event=stop_event)
             return
 
         synth_started = time.monotonic()
@@ -79,6 +81,7 @@ class MimoTextToSpeech(TextToSpeech):
             audio_format=audio_data.format,
             sample_rate=self.config.sample_rate,
             device=self.config.playback_device,
+            stop_event=stop_event,
         )
         print(f"tts> playback_latency_ms={int((time.monotonic() - playback_started) * 1000)}")
 
@@ -92,7 +95,11 @@ class MimoTextToSpeech(TextToSpeech):
         )
         return _extract_audio(data, fallback_format=self.config.audio_format)
 
-    def speak_streaming(self, text: str) -> None:
+    def speak_streaming(
+        self,
+        text: str,
+        stop_event: threading.Event | None = None,
+    ) -> None:
         request_started = time.monotonic()
         first_audio_ms: int | None = None
         chunks = 0
@@ -106,6 +113,8 @@ class MimoTextToSpeech(TextToSpeech):
                 headers=self._headers(),
                 timeout=self.config.timeout_seconds,
             ):
+                if _stop_requested(stop_event):
+                    break
                 audio = _extract_stream_audio(event)
                 if not audio:
                     continue
@@ -127,8 +136,9 @@ class MimoTextToSpeech(TextToSpeech):
             audio_chunks(),
             sample_rate=self.config.sample_rate,
             device=self.config.playback_device,
+            stop_event=stop_event,
         )
-        if written_chunks == 0:
+        if written_chunks == 0 and not _stop_requested(stop_event):
             raise RuntimeError("Streaming TTS response did not contain audio chunks.")
         print(
             "tts> stream_first_audio_ms="
@@ -167,10 +177,10 @@ class OpenAISpeechTextToSpeech(TextToSpeech):
     def __init__(self, config: TtsConfig):
         self.config = config
 
-    def speak(self, text: str) -> None:
+    def speak(self, text: str, stop_event: threading.Event | None = None) -> None:
         print(f"assistant> {text}")
         if self.config.stream:
-            self.speak_streaming(text)
+            self.speak_streaming(text, stop_event=stop_event)
             return
 
         request_started = time.monotonic()
@@ -189,10 +199,15 @@ class OpenAISpeechTextToSpeech(TextToSpeech):
             audio_format=audio_format,
             sample_rate=self.config.sample_rate,
             device=self.config.playback_device,
+            stop_event=stop_event,
         )
         print(f"tts> playback_latency_ms={int((time.monotonic() - playback_started) * 1000)}")
 
-    def speak_streaming(self, text: str) -> None:
+    def speak_streaming(
+        self,
+        text: str,
+        stop_event: threading.Event | None = None,
+    ) -> None:
         request_started = time.monotonic()
         first_audio_ms: int | None = None
         chunks = 0
@@ -208,6 +223,8 @@ class OpenAISpeechTextToSpeech(TextToSpeech):
                 timeout=self.config.timeout_seconds,
                 error_prefix="OpenAI-compatible streaming TTS request failed",
             ):
+                if _stop_requested(stop_event):
+                    break
                 if not chunk:
                     continue
                 data = pending + chunk
@@ -225,8 +242,9 @@ class OpenAISpeechTextToSpeech(TextToSpeech):
             audio_chunks(),
             sample_rate=self.config.sample_rate,
             device=self.config.playback_device,
+            stop_event=stop_event,
         )
-        if written_chunks == 0:
+        if written_chunks == 0 and not _stop_requested(stop_event):
             raise RuntimeError("Streaming TTS response did not contain audio chunks.")
         print(
             "tts> stream_first_audio_ms="
@@ -256,10 +274,10 @@ class AliyunNlsTextToSpeech(TextToSpeech):
         self.config = config
         self._token: str | None = None
 
-    def speak(self, text: str) -> None:
+    def speak(self, text: str, stop_event: threading.Event | None = None) -> None:
         print(f"assistant> {text}")
         if self.config.stream:
-            self.speak_streaming(text)
+            self.speak_streaming(text, stop_event=stop_event)
             return
 
         request_started = time.monotonic()
@@ -271,6 +289,7 @@ class AliyunNlsTextToSpeech(TextToSpeech):
             audio_format=audio_data.format,
             sample_rate=self.config.sample_rate,
             device=self.config.playback_device,
+            stop_event=stop_event,
         )
         print(f"tts> playback_latency_ms={int((time.monotonic() - playback_started) * 1000)}")
 
@@ -286,7 +305,11 @@ class AliyunNlsTextToSpeech(TextToSpeech):
             raise RuntimeError("Aliyun NLS TTS response did not contain audio data.")
         return SynthesizedAudio(b"".join(chunks), _aliyun_tts_audio_format(self.config.audio_format))
 
-    def speak_streaming(self, text: str) -> None:
+    def speak_streaming(
+        self,
+        text: str,
+        stop_event: threading.Event | None = None,
+    ) -> None:
         request_started = time.monotonic()
         first_audio_ms: int | None = None
         chunks = 0
@@ -297,7 +320,10 @@ class AliyunNlsTextToSpeech(TextToSpeech):
                 config=self.config,
                 token=self._token_or_create(),
                 text=text,
+                stop_event=stop_event,
             ):
+                if _stop_requested(stop_event):
+                    break
                 if first_audio_ms is None:
                     first_audio_ms = int((time.monotonic() - request_started) * 1000)
                 chunks += 1
@@ -308,8 +334,9 @@ class AliyunNlsTextToSpeech(TextToSpeech):
             audio_chunks(),
             sample_rate=self.config.sample_rate,
             device=self.config.playback_device,
+            stop_event=stop_event,
         )
-        if written_chunks == 0:
+        if written_chunks == 0 and not _stop_requested(stop_event):
             raise RuntimeError("Aliyun NLS streaming TTS response did not contain audio chunks.")
         print(
             "tts> stream_first_audio_ms="
@@ -334,20 +361,27 @@ class PiperHttpTextToSpeech(TextToSpeech):
     def __init__(self, config: TtsConfig):
         self.config = config
 
-    def speak(self, text: str) -> None:
+    def speak(self, text: str, stop_event: threading.Event | None = None) -> None:
         url = f"{self.config.piper_url.rstrip('/')}?{urllib.parse.urlencode({'text': text})}"
         with urllib.request.urlopen(url, timeout=30) as response:
             wav_data = response.read()
-        _play_audio_bytes(wav_data, audio_format="wav", device=self.config.playback_device)
+        _play_audio_bytes(
+            wav_data,
+            audio_format="wav",
+            device=self.config.playback_device,
+            stop_event=stop_event,
+        )
 
 
 class PiperCliTextToSpeech(TextToSpeech):
     def __init__(self, config: TtsConfig):
         self.config = config
 
-    def speak(self, text: str) -> None:
+    def speak(self, text: str, stop_event: threading.Event | None = None) -> None:
         if not self.config.piper_model:
             raise RuntimeError("tts.piper_model is required for piper_cli.")
+        if _stop_requested(stop_event):
+            return
 
         with tempfile.TemporaryDirectory() as temp_dir:
             wav_path = Path(temp_dir) / "reply.wav"
@@ -359,7 +393,12 @@ class PiperCliTextToSpeech(TextToSpeech):
                 str(wav_path),
             ]
             subprocess.run(command, input=text, text=True, check=True)
-            _play_audio_bytes(wav_path.read_bytes(), audio_format="wav", device=self.config.playback_device)
+            _play_audio_bytes(
+                wav_path.read_bytes(),
+                audio_format="wav",
+                device=self.config.playback_device,
+                stop_event=stop_event,
+            )
 
 
 def create_tts(config: TtsConfig) -> TextToSpeech:
@@ -537,6 +576,7 @@ def _aliyun_stream_input_tts_chunks(
     config: TtsConfig,
     token: str,
     text: str,
+    stop_event: threading.Event | None = None,
 ) -> Iterator[bytes]:
     try:
         import nls  # type: ignore[import-untyped]
@@ -552,7 +592,7 @@ def _aliyun_stream_input_tts_chunks(
     done = object()
 
     def on_data(data: bytes, *_args: object) -> None:
-        if data:
+        if data and not _stop_requested(stop_event):
             items.put(bytes(data))
 
     def on_error(message: str, *_args: object) -> None:
@@ -577,6 +617,8 @@ def _aliyun_stream_input_tts_chunks(
                 pitch_rate=config.pitch_rate,
             )
             for text_chunk in _split_stream_input_text(text):
+                if _stop_requested(stop_event):
+                    break
                 synthesizer.sendStreamInputTts(text_chunk)
                 time.sleep(0.05)
             synthesizer.stopStreamInputTts()
@@ -593,6 +635,8 @@ def _aliyun_stream_input_tts_chunks(
     thread.start()
     deadline = time.monotonic() + max(1.0, config.timeout_seconds)
     while True:
+        if _stop_requested(stop_event) and items.empty():
+            break
         timeout = max(0.1, min(1.0, deadline - time.monotonic()))
         try:
             item = items.get(timeout=timeout)
@@ -616,12 +660,24 @@ def _aliyun_tts_audio_format(audio_format: str) -> str:
     raise RuntimeError(f"Unsupported Aliyun NLS TTS audio format: {audio_format}")
 
 
+_STREAM_SENTENCE_BREAKS = {
+    "\u3002",
+    "\uff01",
+    "\uff1f",
+    "\uff1b",
+    "!",
+    "?",
+    ";",
+    "\n",
+}
+
+
 def _split_stream_input_text(text: str, max_chars: int = 40) -> list[str]:
     parts: list[str] = []
     current = ""
     for char in text.strip():
         current += char
-        if char in "。！？!?；;" or len(current) >= max_chars:
+        if char in _STREAM_SENTENCE_BREAKS or len(current) >= max_chars:
             parts.append(current)
             current = ""
     if current:
@@ -686,6 +742,7 @@ def _play_audio_bytes(
     audio_format: str,
     device: str | int | None = None,
     sample_rate: int = 24000,
+    stop_event: threading.Event | None = None,
 ) -> None:
     try:
         import sounddevice as sd  # type: ignore[import-untyped]
@@ -698,7 +755,18 @@ def _play_audio_bytes(
 
     normalized_format = _normalize_audio_format(audio_format)
     playback_device = None if device == "default" else device
+    if _stop_requested(stop_event):
+        return
     if normalized_format in ("pcm", "pcm16"):
+        if stop_event is not None:
+            _play_pcm_stream(
+                _iter_pcm_chunks(audio_data, sample_rate=sample_rate),
+                sample_rate=sample_rate,
+                device=device,
+                stop_event=stop_event,
+            )
+            return
+
         import numpy as np  # type: ignore[import-untyped]
 
         data = np.frombuffer(audio_data, dtype="<i2").astype("float32") / 32768.0
@@ -719,6 +787,7 @@ def _play_pcm_stream(
     chunks: Iterator[bytes],
     sample_rate: int = 24000,
     device: str | int | None = None,
+    stop_event: threading.Event | None = None,
 ) -> int:
     try:
         import sounddevice as sd  # type: ignore[import-untyped]
@@ -733,18 +802,41 @@ def _play_pcm_stream(
     stream = None
     try:
         for chunk in chunks:
-            if stream is None:
-                stream = sd.RawOutputStream(
-                    samplerate=sample_rate,
-                    channels=1,
-                    dtype="int16",
-                    device=playback_device,
-                )
-                stream.start()
-            stream.write(chunk)
-            written_chunks += 1
+            for playable_chunk in _iter_pcm_chunks(chunk, sample_rate=sample_rate):
+                if _stop_requested(stop_event):
+                    break
+                if stream is None:
+                    stream = sd.RawOutputStream(
+                        samplerate=sample_rate,
+                        channels=1,
+                        dtype="int16",
+                        device=playback_device,
+                    )
+                    stream.start()
+                stream.write(playable_chunk)
+                written_chunks += 1
+                if _stop_requested(stop_event):
+                    break
+            if _stop_requested(stop_event):
+                break
     finally:
         if stream is not None:
             stream.stop()
             stream.close()
     return written_chunks
+
+
+def _iter_pcm_chunks(
+    audio_data: bytes,
+    sample_rate: int = 24000,
+    chunk_ms: int = 20,
+) -> Iterator[bytes]:
+    chunk_bytes = max(2, int(sample_rate * chunk_ms / 1000) * 2)
+    chunk_bytes -= chunk_bytes % 2
+    playable_len = len(audio_data) - (len(audio_data) % 2)
+    for offset in range(0, playable_len, chunk_bytes):
+        yield audio_data[offset : offset + chunk_bytes]
+
+
+def _stop_requested(stop_event: threading.Event | None) -> bool:
+    return bool(stop_event is not None and stop_event.is_set())
