@@ -33,6 +33,9 @@ class WakeConfig:
     threshold: float = 0.5
     max_wait_seconds: float = 0.0
     inference_framework: Literal["onnx", "tflite"] = "onnx"
+    debug: bool = False
+    debug_interval_seconds: float = 1.0
+    debug_top_predictions: int = 5
 
 
 @dataclass(slots=True)

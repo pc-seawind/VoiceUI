@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Iterable
 from pathlib import Path
@@ -88,10 +89,51 @@ class OpenWakeWordDetector(WakeDetector):
             self._model = self._load_model()
 
         started = time.monotonic()
+        debug_enabled = self.config.debug
+        debug_interval = max(0.1, self.config.debug_interval_seconds)
+        next_debug_at = started + debug_interval
+        debug_window = _WakeDebugWindow()
+        if debug_enabled:
+            print(
+                "wake_debug> enabled "
+                f"{_describe_audio_input(audio)} "
+                f"model={self.config.model} threshold={self.config.threshold:.3f} "
+                f"framework={self.config.inference_framework}"
+            )
+
         for chunk in audio.chunks():
-            predictions = self._model.predict(np.frombuffer(chunk, dtype=np.int16))
+            samples = np.frombuffer(chunk, dtype=np.int16)
+            predict_started = time.monotonic()
+            predictions = self._model.predict(samples)
+            predict_ms = (time.monotonic() - predict_started) * 1000
             label, confidence = _best_prediction(predictions)
+            if debug_enabled:
+                now = time.monotonic()
+                debug_window.update(
+                    samples=samples,
+                    predictions=predictions,
+                    label=label,
+                    confidence=confidence,
+                    predict_ms=predict_ms,
+                    audio_ms=int(len(samples) / audio.sample_rate * 1000),
+                )
+                if now >= next_debug_at:
+                    elapsed = now - started
+                    print(
+                        "wake_debug> "
+                        f"elapsed_s={elapsed:.1f} "
+                        f"{debug_window.format(self.config.threshold, self.config.debug_top_predictions)}"
+                    )
+                    debug_window.reset()
+                    next_debug_at = now + debug_interval
             if confidence >= self.config.threshold:
+                if debug_enabled:
+                    elapsed = time.monotonic() - started
+                    print(
+                        "wake_debug> detected "
+                        f"elapsed_s={elapsed:.2f} label={label} confidence={confidence:.3f} "
+                        f"threshold={self.config.threshold:.3f}"
+                    )
                 return WakeEvent(engine="openwakeword", confidence=confidence, label=label)
             if self.config.max_wait_seconds > 0:
                 elapsed = time.monotonic() - started
@@ -129,6 +171,115 @@ def _best_prediction(predictions: dict[str, float]) -> tuple[str, float]:
         return "", 0.0
     label, confidence = max(predictions.items(), key=lambda item: item[1])
     return label, float(confidence)
+
+
+class _WakeDebugWindow:
+    def __init__(self) -> None:
+        self.reset()
+
+    def reset(self) -> None:
+        self.chunks = 0
+        self.audio_ms = 0
+        self.predict_total_ms = 0.0
+        self.predict_max_ms = 0.0
+        self.best_label = ""
+        self.best_confidence = 0.0
+        self.last_label = ""
+        self.last_confidence = 0.0
+        self.last_predictions: dict[str, float] = {}
+        self.last_stats = {
+            "rms": 0.0,
+            "peak": 0,
+            "dbfs": -120.0,
+            "near_zero_pct": 100.0,
+            "clipped_pct": 0.0,
+        }
+
+    def update(
+        self,
+        *,
+        samples,
+        predictions: dict[str, float],
+        label: str,
+        confidence: float,
+        predict_ms: float,
+        audio_ms: int,
+    ) -> None:
+        self.chunks += 1
+        self.audio_ms += audio_ms
+        self.predict_total_ms += predict_ms
+        self.predict_max_ms = max(self.predict_max_ms, predict_ms)
+        self.last_label = label
+        self.last_confidence = confidence
+        self.last_predictions = predictions
+        if confidence > self.best_confidence:
+            self.best_label = label
+            self.best_confidence = confidence
+        self.last_stats = _pcm16_stats(samples)
+
+    def format(self, threshold: float, top_predictions: int) -> str:
+        avg_predict_ms = self.predict_total_ms / self.chunks if self.chunks else 0.0
+        stats = self.last_stats
+        return (
+            f"chunks={self.chunks} audio_ms={self.audio_ms} "
+            f"rms={stats['rms']:.1f} peak={stats['peak']} dbfs={stats['dbfs']:.1f} "
+            f"near_zero_pct={stats['near_zero_pct']:.1f} clipped_pct={stats['clipped_pct']:.2f} "
+            f"last={self.last_label}:{self.last_confidence:.3f} "
+            f"best_window={self.best_label}:{self.best_confidence:.3f} "
+            f"threshold={threshold:.3f} "
+            f"top={_format_predictions(self.last_predictions, top_predictions)} "
+            f"predict_avg_ms={avg_predict_ms:.1f} predict_max_ms={self.predict_max_ms:.1f}"
+        )
+
+
+def _pcm16_stats(samples) -> dict[str, float | int]:
+    if len(samples) == 0:
+        return {
+            "rms": 0.0,
+            "peak": 0,
+            "dbfs": -120.0,
+            "near_zero_pct": 100.0,
+            "clipped_pct": 0.0,
+        }
+    int_samples = samples.astype("int32")
+    abs_samples = abs(int_samples)
+    peak = int(abs_samples.max())
+    rms = float(math.sqrt(float((int_samples.astype("float64") ** 2).mean())))
+    dbfs = 20.0 * math.log10(max(rms, 1.0) / 32768.0)
+    near_zero_pct = float((abs_samples <= 3).mean() * 100.0)
+    clipped_pct = float((abs_samples >= 32760).mean() * 100.0)
+    return {
+        "rms": rms,
+        "peak": peak,
+        "dbfs": dbfs,
+        "near_zero_pct": near_zero_pct,
+        "clipped_pct": clipped_pct,
+    }
+
+
+def _format_predictions(predictions: dict[str, float], limit: int) -> str:
+    if not predictions:
+        return "-"
+    top_items = sorted(predictions.items(), key=lambda item: item[1], reverse=True)
+    top_items = top_items[: max(1, limit)]
+    return ",".join(f"{label}:{float(confidence):.3f}" for label, confidence in top_items)
+
+
+def _describe_audio_input(audio: AudioInput) -> str:
+    config = getattr(audio, "config", None)
+    selected_channel = getattr(audio, "selected_channel", "?")
+    if config is None:
+        return (
+            f"sample_rate={audio.sample_rate} block_ms={audio.block_ms} "
+            f"selected_channel={selected_channel}"
+        )
+    return (
+        f"device={getattr(config, 'device', None)} "
+        f"channels={getattr(config, 'channels', '?')} "
+        f"selected_channel={selected_channel} "
+        f"input_gain_db={getattr(config, 'input_gain_db', 0.0)} "
+        f"sample_rate={audio.sample_rate} block_ms={audio.block_ms}"
+    )
 
 
 def _normalize_openwakeword_label(value: str) -> str:

@@ -20,6 +20,9 @@ wake:
   threshold: 0.35
   max_wait_seconds: 0
   inference_framework: onnx
+  debug: true
+  debug_interval_seconds: 1.0
+  debug_top_predictions: 5
 
 wake_ack:
   enabled: true

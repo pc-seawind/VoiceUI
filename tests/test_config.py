@@ -63,6 +63,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(wake_config.wake.model, "hey_jarvis")
         self.assertEqual(wake_config.wake.threshold, 0.35)
         self.assertEqual(wake_config.wake.inference_framework, "onnx")
+        self.assertTrue(wake_config.wake.debug)
         self.assertTrue(wake_config.wake_ack.enabled)
         self.assertEqual(wake_config.wake_ack.wav_path, "default")
         self.assertEqual(wake_config.vad.engine, "silero")
@@ -75,6 +76,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(local_tts_config.tts.endpoint, "http://127.0.0.1:8000")
         self.assertEqual(local_tts_config.tts.audio_format, "pcm")
         self.assertTrue(local_tts_config.tts.stream)
+        self.assertTrue(local_tts_config.wake.debug)
         self.assertTrue(local_tts_config.conversation.barge_in_enabled)
         self.assertEqual(aliyun_asr_config.stt.provider, "aliyun_nls")
         self.assertEqual(aliyun_asr_config.stt.app_key_env, "ALIYUN_NLS_APPKEY")
@@ -89,6 +91,7 @@ class ConfigTests(unittest.TestCase):
             "wss://nls-gateway-cn-beijing.aliyuncs.com/ws/v1",
         )
         self.assertEqual(aliyun_wake_config.wake.engine, "openwakeword")
+        self.assertTrue(aliyun_wake_config.wake.debug)
         self.assertTrue(aliyun_wake_config.wake_ack.enabled)
         self.assertEqual(aliyun_wake_config.vad.engine, "silero")
         self.assertEqual(aliyun_wake_config.vad.threshold, 0.6)

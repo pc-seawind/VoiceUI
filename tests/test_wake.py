@@ -8,6 +8,7 @@ from voiceui.wake import (
     ManualWakeDetector,
     OpenWakeWordDetector,
     _best_prediction,
+    _format_predictions,
     _normalize_openwakeword_label,
     _resolve_openwakeword_models,
     create_wake_detector,
@@ -36,6 +37,12 @@ class WakeTests(unittest.TestCase):
         self.assertEqual(label, "alexa")
         self.assertIsInstance(confidence, float)
         self.assertEqual(confidence, 0.7)
+
+    def test_format_predictions_orders_top_scores(self) -> None:
+        self.assertEqual(
+            _format_predictions({"low": 0.1, "high": 0.9, "mid": 0.5}, limit=2),
+            "high:0.900,mid:0.500",
+        )
 
     def test_openwakeword_model_name_normalization(self) -> None:
         self.assertEqual(_normalize_openwakeword_label("Hey Jarvis"), "hey_jarvis")

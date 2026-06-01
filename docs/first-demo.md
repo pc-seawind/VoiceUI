@@ -166,6 +166,23 @@ prints:
 wake> engine=openwakeword label=hey_jarvis confidence=... latency_ms=...
 ```
 
+The wake demo configs enable `wake.debug: true`, so you should also see
+periodic lines like:
+
+```text
+wake_debug> elapsed_s=1.0 chunks=13 audio_ms=1040 rms=... peak=... dbfs=... near_zero_pct=... clipped_pct=... last=hey_jarvis:... best_window=hey_jarvis:... threshold=0.350 top=hey_jarvis:... predict_avg_ms=...
+```
+
+Interpretation:
+
+1. `rms` and `peak` near zero means the selected input/channel is probably
+   wrong, muted, or too quiet.
+2. `clipped_pct` above 0 means the gain is too high.
+3. `best_window` close to but below `threshold` means the wake model hears
+   something similar; lower `wake.threshold` temporarily or improve placement.
+4. Healthy audio with very low scores usually points to a bad wake-word/model
+   match or the wrong XVF3800 output channel.
+
 To regenerate the local "我在" WAV with MiMo TTS:
 
 ```powershell

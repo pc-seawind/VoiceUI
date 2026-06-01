@@ -137,11 +137,25 @@ python -m voiceui --config config.demo.wake.yaml --wake-test
 Say "hey jarvis". The first run downloads the openWakeWord feature model and
 `hey_jarvis` ONNX model. A successful detection prints `wake>` with the label,
 confidence, and latency, then plays the local wake acknowledgement WAV.
+Wake demo configs enable `wake.debug: true`, so `--wake-test` and the full
+assistant loop print periodic `wake_debug>` lines with audio level, top model
+scores, threshold, and inference latency. You can also force this on for any
+config with `--wake-debug`.
 For hardware bring-up, `config.demo.wake.yaml` uses `wake.threshold: 0.35`.
 Lower it toward `0.25` if wake is still difficult; raise it toward `0.5` if it
 false-wakes.
 If input level is low, try `audio.input_gain_db: 6.0` or `12.0` first. Use
 `20.0` only as an aggressive diagnostic value because it can clip.
+
+Use the debug fields like this:
+
+- `rms` / `peak` near zero: wrong input device, wrong channel, muted input, or
+  capture level too low.
+- `clipped_pct` above 0: input gain is too high and may hurt wake detection.
+- `best_window` rises but stays below `threshold`: lower `wake.threshold` for
+  bring-up or improve microphone placement.
+- healthy audio but very low scores: the current wake word/model is not a good
+  match for the utterance or the XVF3800 output channel.
 
 Then run the wake-word Mify demo:
 

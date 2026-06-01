@@ -44,6 +44,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--audio-channel", type=int, help="Override configured audio channel")
     parser.add_argument("--wake-test", action="store_true", help="Wait for one wake word and exit")
     parser.add_argument(
+        "--wake-debug",
+        action="store_true",
+        help="Print periodic wake score and audio-level diagnostics",
+    )
+    parser.add_argument(
         "--generate-wake-ack",
         action="store_true",
         help="Synthesize the local wake acknowledgement WAV with the configured TTS backend",
@@ -66,6 +71,8 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         config = load_config(args.config)
+        if args.wake_debug:
+            config.wake.debug = True
 
         if args.text is not None:
             config.input.mode = "text"
