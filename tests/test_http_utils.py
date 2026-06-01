@@ -11,8 +11,9 @@ from voiceui.http_utils import post_json, require_api_key
 class HttpUtilsTests(unittest.TestCase):
     def test_require_api_key_reports_missing_env(self) -> None:
         with patch.dict("os.environ", {}, clear=True):
-            with self.assertRaisesRegex(RuntimeError, "Missing API key environment variable"):
-                require_api_key("MIFY_API_KEY")
+            with patch("voiceui.http_utils.load_dotenv", return_value=None):
+                with self.assertRaisesRegex(RuntimeError, "Missing API key environment variable"):
+                    require_api_key("MIFY_API_KEY")
 
     def test_post_json_includes_http_error_body(self) -> None:
         error = urllib.error.HTTPError(

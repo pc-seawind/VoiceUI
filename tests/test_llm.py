@@ -57,8 +57,9 @@ class LlmTests(unittest.TestCase):
         client = MimoChatClient(config)
 
         with patch.dict("os.environ", {}, clear=True):
-            with self.assertRaisesRegex(RuntimeError, "MIFY_API_KEY"):
-                client.complete([ChatMessage(role="user", content="hello")])
+            with patch("voiceui.http_utils.load_dotenv", return_value=None):
+                with self.assertRaisesRegex(RuntimeError, "MIFY_API_KEY"):
+                    client.complete([ChatMessage(role="user", content="hello")])
 
     def test_ollama_client_serializes_slot_messages(self) -> None:
         config = LlmConfig(provider="ollama", endpoint="http://ollama.local", model="demo-model")

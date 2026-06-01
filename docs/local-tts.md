@@ -44,7 +44,7 @@ The relevant config block is:
 ```yaml
 tts:
   provider: openai_speech
-  endpoint: http://localhost:8000
+  endpoint: http://127.0.0.1:8000
   model: tts-1
   voice: default
   audio_format: pcm
@@ -63,5 +63,8 @@ is directly comparable with the MiMo streaming path.
   starts playback from the first audio bytes.
 - Keep the local TTS server running between VoiceUI turns; cold model startup is
   much slower than per-turn TTFA.
+- The first request also captures CUDA graphs, so it can take several seconds.
+  Hot requests on the RTX 5090 test machine returned first audio in about
+  150-200 ms for short replies.
 - The 0.6B model is the first latency target. Try 1.7B only after the chain is
   stable.

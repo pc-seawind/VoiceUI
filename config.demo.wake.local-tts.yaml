@@ -55,7 +55,7 @@ llm:
 
 tts:
   provider: openai_speech
-  endpoint: http://localhost:8000
+  endpoint: http://127.0.0.1:8000
   timeout_seconds: 60
   model: tts-1
   voice: default

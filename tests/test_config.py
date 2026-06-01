@@ -68,7 +68,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(wake_config.tts.model, "xiaomi/mimo-v2-tts")
         self.assertTrue(wake_config.tts.stream)
         self.assertEqual(local_tts_config.tts.provider, "openai_speech")
-        self.assertEqual(local_tts_config.tts.endpoint, "http://localhost:8000")
+        self.assertEqual(local_tts_config.tts.endpoint, "http://127.0.0.1:8000")
         self.assertEqual(local_tts_config.tts.audio_format, "pcm")
         self.assertTrue(local_tts_config.tts.stream)
 
