@@ -16,21 +16,29 @@ Set it up outside this repo:
 git clone https://github.com/andimarafioti/faster-qwen3-tts
 cd faster-qwen3-tts
 setup_windows.bat
+git apply F:\Workspace\Projects\VocieUI\docs\faster-qwen3-tts-openai-server-xvec.patch
 ```
 
-Start the server with a small model first:
+Start the server with a small model first. For the Chinese VoiceUI demo, use a
+voice config instead of `--ref-text` command-line quoting:
 
 ```powershell
 python examples/openai_server.py `
   --model Qwen/Qwen3-TTS-12Hz-0.6B-Base `
-  --ref-audio ref_audio.wav `
-  --ref-text "reference audio transcript" `
-  --language Auto `
+  --voices F:\Workspace\Projects\VocieUI\docs\faster-qwen3-tts-voices.zh.json `
+  --host 127.0.0.1 `
   --port 8000
 ```
 
-Use a real reference WAV and matching transcript for quality. The server
-registers a `default` voice when `--ref-audio` is used.
+The provided voice config uses the bundled `ref_audio.wav` and its matching
+transcript from `faster-qwen3-tts`, sets `language: Chinese`, and enables
+`xvec_only: true` for cleaner cross-language output. Without those settings,
+short Chinese replies can turn into long or unintelligible audio.
+
+The stock `examples/openai_server.py` may need the local
+`faster-qwen3-tts-openai-server-xvec.patch` patch that passes
+`voice_cfg["xvec_only"]` into `generate_voice_clone_streaming()` and
+`generate_voice_clone()`. The local checkout used for this demo has that patch.
 
 Then run VoiceUI with the local-TTS config:
 
@@ -65,6 +73,9 @@ is directly comparable with the MiMo streaming path.
   much slower than per-turn TTFA.
 - The first request also captures CUDA graphs, so it can take several seconds.
   Hot requests on the RTX 5090 test machine returned first audio in about
-  150-200 ms for short replies.
+  270-320 ms for short Chinese replies with `xvec_only: true`.
+- Closed-loop check on the generated audio:
+  `好的，我在。有什么可以帮你？` was transcribed by MiMo ASR as
+  `好的，我在。有什么可以帮您。`
 - The 0.6B model is the first latency target. Try 1.7B only after the chain is
   stable.
