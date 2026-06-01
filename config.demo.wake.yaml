@@ -16,8 +16,8 @@ audio:
 
 wake:
   engine: openwakeword
-  model: hey_jarvis
-  threshold: 0.35
+  model: alexa
+  threshold: 0.25
   max_wait_seconds: 0
   inference_framework: onnx
   debug: true

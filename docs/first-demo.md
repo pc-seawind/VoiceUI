@@ -151,26 +151,26 @@ That confirms microphone, VAD, and speaker output but uses mock ASR/LLM text.
 
 ## 8. Verify Wake Word
 
-The wake demo uses openWakeWord with the built-in `hey_jarvis` model. VoiceUI
+The wake demo uses openWakeWord with the built-in `alexa` model. VoiceUI
 loads it through ONNXRuntime on Windows.
 
 ```powershell
 python -m voiceui --config config.demo.wake.yaml --wake-test
 ```
 
-Say "hey jarvis". On the first run, openWakeWord downloads its feature model and
-the `hey_jarvis` model. A successful detection plays the local "我在" WAV and
+Say "alexa". On the first run, openWakeWord downloads its feature model and
+the `alexa` model. A successful detection plays the local "我在" WAV and
 prints:
 
 ```text
-wake> engine=openwakeword label=hey_jarvis confidence=... latency_ms=...
+wake> engine=openwakeword label=alexa confidence=... latency_ms=...
 ```
 
 The wake demo configs enable `wake.debug: true`, so you should also see
 periodic lines like:
 
 ```text
-wake_debug> elapsed_s=1.0 chunks=13 audio_ms=1040 rms=... peak=... dbfs=... near_zero_pct=... clipped_pct=... last=hey_jarvis:... best_window=hey_jarvis:... threshold=0.350 top=hey_jarvis:... predict_avg_ms=...
+wake_debug> elapsed_s=1.0 chunks=13 audio_ms=1040 rms=... peak=... dbfs=... near_zero_pct=... clipped_pct=... last=alexa:... best_window=alexa:... threshold=0.250 top=alexa:... predict_avg_ms=...
 ```
 
 Interpretation:
@@ -183,7 +183,7 @@ Interpretation:
 4. Healthy audio with very low scores usually points to a bad wake-word/model
    match or the wrong XVF3800 output channel.
 
-If `hey_jarvis` is too strict, compare the built-in openWakeWord models:
+If `alexa` is still not reliable enough, compare the built-in openWakeWord models:
 
 ```powershell
 python -m voiceui --list-wake-models
@@ -207,8 +207,7 @@ If it does not trigger reliably, try these in order:
 
 1. Confirm `audio.device`, `audio.channels`, and `audio.wake_stream_channel`.
 2. Speak toward the XVF3800 at a normal smart-speaker distance.
-3. If it is still hard to wake, lower `wake.threshold` from `0.35` to `0.25`
-   for bring-up only. If it false-wakes, raise it toward `0.5`.
+3. If it false-wakes, raise `wake.threshold` from `0.25` toward `0.35` or `0.5`.
 4. Record `--audio-purpose wake` and inspect the saved WAV level.
 
 ## 9. Run the Wake-Word Full Chain
@@ -219,7 +218,7 @@ python -m voiceui --config config.demo.wake.yaml
 
 Flow:
 
-1. Say "hey jarvis".
+1. Say "alexa".
 2. Wait for the `wake>` log and the local "我在" acknowledgement.
 3. Speak one command.
 4. Wait for `vad>`, `stt>`, `llm>`, `tts>`, and the spoken answer.

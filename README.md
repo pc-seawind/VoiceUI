@@ -134,15 +134,15 @@ After the manual demo works, verify wake detection with openWakeWord:
 python -m voiceui --config config.demo.wake.yaml --wake-test
 ```
 
-Say "hey jarvis". The first run downloads the openWakeWord feature model and
-`hey_jarvis` ONNX model. A successful detection prints `wake>` with the label,
+Say "alexa". The first run downloads the openWakeWord feature model and
+`alexa` ONNX model. A successful detection prints `wake>` with the label,
 confidence, and latency, then plays the local wake acknowledgement WAV.
 Wake demo configs enable `wake.debug: true`, so `--wake-test` and the full
 assistant loop print periodic `wake_debug>` lines with audio level, top model
 scores, threshold, and inference latency. You can also force this on for any
 config with `--wake-debug`.
-For hardware bring-up, `config.demo.wake.yaml` uses `wake.threshold: 0.35`.
-Lower it toward `0.25` if wake is still difficult; raise it toward `0.5` if it
+For hardware bring-up, `config.demo.wake.yaml` uses `wake.threshold: 0.25`.
+Raise it toward `0.35` or `0.5` if it
 false-wakes.
 If input level is low, try `audio.input_gain_db: 6.0` or `12.0` first. Use
 `20.0` only as an aggressive diagnostic value because it can clip.
@@ -157,7 +157,7 @@ Use the debug fields like this:
 - healthy audio but very low scores: the current wake word/model is not a good
   match for the utterance or the XVF3800 output channel.
 
-If `hey_jarvis` is too strict, compare the built-in openWakeWord models:
+If `alexa` is still not reliable enough, compare the built-in openWakeWord models:
 
 ```powershell
 python -m voiceui --list-wake-models
@@ -177,7 +177,7 @@ Then run the wake-word Mify demo:
 python -m voiceui --config config.demo.wake.yaml
 ```
 
-Flow: say "hey jarvis", speak one command after the wake log appears, then wait
+Flow: say "alexa", speak one command after the wake log appears, then wait
 for VAD, ASR, LLM, and TTS. After the answer, speak the next turn within
 `conversation.follow_up_seconds` to continue the same LLM conversation without
 another wake word.
@@ -221,7 +221,7 @@ with Aliyun ASR/TTS, use:
 python -m voiceui --config config.demo.wake.aliyun.yaml
 ```
 
-Flow: say "hey jarvis", wait for the local "我在" acknowledgement, then speak.
+Flow: say "alexa", wait for the local "我在" acknowledgement, then speak.
 This config uses Aliyun NLS for ASR and TTS, keeps Mify for LLM, and keeps
 `conversation.follow_up_seconds: 10` for follow-up turns without another wake
 word. It also enables `conversation.barge_in_enabled: true`, so you can speak
@@ -235,7 +235,7 @@ Each audio turn writes debug artifacts under `debug_sessions/` when
 
 For the first XVF3800 prototype:
 
-- Wake word: `openwakeword` with `hey_jarvis`.
+- Wake word: `openwakeword` with `alexa`.
 - Endpointing: Silero VAD for the current hardware demo. Tune
   `vad.threshold` as a probability threshold, raise it if background noise
   triggers speech, and adjust `vad.silence_ms` if command endings are clipped

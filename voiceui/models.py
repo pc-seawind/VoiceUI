@@ -29,7 +29,7 @@ class AudioConfig:
 @dataclass(slots=True)
 class WakeConfig:
     engine: Literal["disabled", "manual", "openwakeword", "sherpa_onnx"] = "disabled"
-    model: str = "hey_jarvis"
+    model: str = "alexa"
     threshold: float = 0.5
     max_wait_seconds: float = 0.0
     inference_framework: Literal["onnx", "tflite"] = "onnx"
