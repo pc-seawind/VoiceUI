@@ -41,6 +41,7 @@ class ConfigTests(unittest.TestCase):
         local_tts_config = load_config("config.demo.wake.local-tts.yaml")
         aliyun_asr_config = load_config("config.demo.aliyun-asr.yaml")
         aliyun_tts_config = load_config("config.demo.aliyun-tts.yaml")
+        aliyun_wake_config = load_config("config.demo.wake.aliyun.yaml")
 
         self.assertEqual(mock_config.wake.engine, "manual")
         self.assertEqual(mock_config.tts.provider, "system")
@@ -85,6 +86,14 @@ class ConfigTests(unittest.TestCase):
             aliyun_tts_config.tts.endpoint,
             "wss://nls-gateway-cn-beijing.aliyuncs.com/ws/v1",
         )
+        self.assertEqual(aliyun_wake_config.wake.engine, "openwakeword")
+        self.assertTrue(aliyun_wake_config.wake_ack.enabled)
+        self.assertEqual(aliyun_wake_config.vad.engine, "silero")
+        self.assertEqual(aliyun_wake_config.vad.threshold, 0.6)
+        self.assertEqual(aliyun_wake_config.stt.provider, "aliyun_nls")
+        self.assertEqual(aliyun_wake_config.llm.provider, "mify")
+        self.assertEqual(aliyun_wake_config.tts.provider, "aliyun_nls")
+        self.assertTrue(aliyun_wake_config.tts.stream)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,88 @@
+node:
+  id: first_wake_demo_aliyun
+  room: demo_room
+
+input:
+  mode: audio
+
+audio:
+  sample_rate: 16000
+  channels: 1
+  block_ms: 80
+  device: default
+  wake_stream_channel: 0
+  command_stream_channel: 0
+  input_gain_db: 0.0
+
+wake:
+  engine: openwakeword
+  model: hey_jarvis
+  threshold: 0.35
+  max_wait_seconds: 0
+  inference_framework: onnx
+
+wake_ack:
+  enabled: true
+  wav_path: default
+  playback_device: default
+
+vad:
+  engine: silero
+  threshold: 0.6
+  min_speech_ms: 250
+  silence_ms: 800
+  max_speech_ms: 15000
+  pre_roll_ms: 240
+  frame_ms: 32
+
+stt:
+  provider: aliyun_nls
+  endpoint: wss://nls-gateway-cn-shanghai.aliyuncs.com/ws/v1
+  access_key_id_env: ALIYUN_AccessKeyId
+  access_key_secret_env: ALIYUN_AccessKeySecret
+  app_key_env: ALIYUN_NLS_APPKEY
+  timeout_seconds: 20
+  language: zh
+
+llm:
+  provider: mify
+  endpoint: https://editdemo.ai.xiaomi.net/model/infer/xiaomi-mify/v1
+  api_key_env: MIFY_API_KEY
+  model: xiaomi/mimo-v2.5
+  temperature: 0.3
+  system_prompt: >
+    You are a concise Chinese smart speaker assistant. Reply in short spoken
+    Chinese. Do not include English words unless the user explicitly asks.
+    Ask for confirmation before sensitive home actions.
+
+tts:
+  provider: aliyun_nls
+  endpoint: wss://nls-gateway-cn-beijing.aliyuncs.com/ws/v1
+  access_key_id_env: ALIYUN_AccessKeyId
+  access_key_secret_env: ALIYUN_AccessKeySecret
+  app_key_env: ALIYUN_NLS_APPKEY
+  timeout_seconds: 20
+  voice: longxiaochun
+  audio_format: pcm
+  sample_rate: 24000
+  stream: true
+  volume: 50
+  speech_rate: 0
+  pitch_rate: 0
+  playback_device: default
+
+conversation:
+  follow_up_seconds: 10
+  max_turns: 12
+
+home_assistant:
+  enabled: false
+  url: http://homeassistant.local:8123
+  token_env: HA_TOKEN
+  default_area: demo_room
+
+debug:
+  enabled: true
+  output_dir: debug_sessions
+  save_audio: true
+  save_metadata: true

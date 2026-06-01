@@ -184,6 +184,18 @@ That config keeps Mify ASR/LLM but routes TTS to a local OpenAI-compatible
 `/v1/audio/speech` server. Setup details are in
 [docs/local-tts.md](docs/local-tts.md).
 
+For the same wake-word, wake acknowledgement, Silero VAD, and multi-turn flow
+with Aliyun ASR/TTS, use:
+
+```powershell
+python -m voiceui --config config.demo.wake.aliyun.yaml
+```
+
+Flow: say "hey jarvis", wait for the local "我在" acknowledgement, then speak.
+This config uses Aliyun NLS for ASR and TTS, keeps Mify for LLM, and keeps
+`conversation.follow_up_seconds: 10` for follow-up turns without another wake
+word.
+
 Each audio turn writes debug artifacts under `debug_sessions/` when
 `debug.enabled` is true. The folder contains `utterance.wav` and
 `metadata.json` with wake/VAD/STT/LLM/TTS timings, transcript, and reply.
@@ -313,7 +325,8 @@ playback, so prefer sending pure Chinese assistant replies to TTS.
 Full templates are available in [config.demo.mify.yaml](config.demo.mify.yaml),
 [config.demo.wake.yaml](config.demo.wake.yaml),
 [config.demo.aliyun-asr.yaml](config.demo.aliyun-asr.yaml),
-[config.demo.aliyun-tts.yaml](config.demo.aliyun-tts.yaml), and
+[config.demo.aliyun-tts.yaml](config.demo.aliyun-tts.yaml),
+[config.demo.wake.aliyun.yaml](config.demo.wake.aliyun.yaml), and
 [config.mify.example.yaml](config.mify.example.yaml). The runnable first demo
 flow is documented in [docs/first-demo.md](docs/first-demo.md).
 Local streaming TTS setup is documented in [docs/local-tts.md](docs/local-tts.md).
