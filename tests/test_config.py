@@ -40,6 +40,7 @@ class ConfigTests(unittest.TestCase):
         wake_config = load_config("config.demo.wake.yaml")
         local_tts_config = load_config("config.demo.wake.local-tts.yaml")
         aliyun_asr_config = load_config("config.demo.aliyun-asr.yaml")
+        aliyun_tts_config = load_config("config.demo.aliyun-tts.yaml")
 
         self.assertEqual(mock_config.wake.engine, "manual")
         self.assertEqual(mock_config.tts.provider, "system")
@@ -77,6 +78,12 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(
             aliyun_asr_config.stt.endpoint,
             "wss://nls-gateway-cn-shanghai.aliyuncs.com/ws/v1",
+        )
+        self.assertEqual(aliyun_tts_config.tts.provider, "aliyun_nls")
+        self.assertEqual(aliyun_tts_config.tts.voice, "longxiaochun")
+        self.assertEqual(
+            aliyun_tts_config.tts.endpoint,
+            "wss://nls-gateway-cn-beijing.aliyuncs.com/ws/v1",
         )
 
 

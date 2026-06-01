@@ -3,9 +3,11 @@ from __future__ import annotations
 import base64
 import io
 import json
+import queue
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -13,6 +15,7 @@ import urllib.request
 from collections.abc import Iterator
 from pathlib import Path
 
+from voiceui.aliyun import get_aliyun_nls_token
 from voiceui.audio import write_pcm16_wav
 from voiceui.http_utils import post_json, require_api_key
 from voiceui.models import TtsConfig
@@ -248,6 +251,85 @@ class OpenAISpeechTextToSpeech(TextToSpeech):
         }
 
 
+class AliyunNlsTextToSpeech(TextToSpeech):
+    def __init__(self, config: TtsConfig):
+        self.config = config
+        self._token: str | None = None
+
+    def speak(self, text: str) -> None:
+        print(f"assistant> {text}")
+        if self.config.stream:
+            self.speak_streaming(text)
+            return
+
+        request_started = time.monotonic()
+        audio_data = self.synthesize(text)
+        print(f"tts> synth_latency_ms={int((time.monotonic() - request_started) * 1000)}")
+        playback_started = time.monotonic()
+        _play_audio_bytes(
+            audio_data.data,
+            audio_format=audio_data.format,
+            sample_rate=self.config.sample_rate,
+            device=self.config.playback_device,
+        )
+        print(f"tts> playback_latency_ms={int((time.monotonic() - playback_started) * 1000)}")
+
+    def synthesize(self, text: str) -> SynthesizedAudio:
+        chunks = list(
+            _aliyun_stream_input_tts_chunks(
+                config=self.config,
+                token=self._token_or_create(),
+                text=text,
+            )
+        )
+        if not chunks:
+            raise RuntimeError("Aliyun NLS TTS response did not contain audio data.")
+        return SynthesizedAudio(b"".join(chunks), _aliyun_tts_audio_format(self.config.audio_format))
+
+    def speak_streaming(self, text: str) -> None:
+        request_started = time.monotonic()
+        first_audio_ms: int | None = None
+        chunks = 0
+
+        def audio_chunks() -> Iterator[bytes]:
+            nonlocal first_audio_ms, chunks
+            for chunk in _aliyun_stream_input_tts_chunks(
+                config=self.config,
+                token=self._token_or_create(),
+                text=text,
+            ):
+                if first_audio_ms is None:
+                    first_audio_ms = int((time.monotonic() - request_started) * 1000)
+                chunks += 1
+                yield chunk
+
+        playback_started = time.monotonic()
+        written_chunks = _play_pcm_stream(
+            audio_chunks(),
+            sample_rate=self.config.sample_rate,
+            device=self.config.playback_device,
+        )
+        if written_chunks == 0:
+            raise RuntimeError("Aliyun NLS streaming TTS response did not contain audio chunks.")
+        print(
+            "tts> stream_first_audio_ms="
+            f"{first_audio_ms if first_audio_ms is not None else 0} "
+            f"stream_chunks={chunks} "
+            f"playback_latency_ms={int((time.monotonic() - playback_started) * 1000)}"
+        )
+
+    def _token_or_create(self) -> str:
+        if self._token is None:
+            access_key_id = require_api_key(
+                self.config.access_key_id_env or "ALIYUN_AccessKeyId"
+            )
+            access_key_secret = require_api_key(
+                self.config.access_key_secret_env or "ALIYUN_AccessKeySecret"
+            )
+            self._token = get_aliyun_nls_token(access_key_id, access_key_secret)
+        return self._token
+
+
 class PiperHttpTextToSpeech(TextToSpeech):
     def __init__(self, config: TtsConfig):
         self.config = config
@@ -289,6 +371,8 @@ def create_tts(config: TtsConfig) -> TextToSpeech:
         return MimoTextToSpeech(config)
     if config.provider in ("openai_speech", "openai_compatible_speech"):
         return OpenAISpeechTextToSpeech(config)
+    if config.provider == "aliyun_nls":
+        return AliyunNlsTextToSpeech(config)
     if config.provider == "piper_http":
         return PiperHttpTextToSpeech(config)
     if config.provider == "piper_cli":
@@ -446,6 +530,103 @@ def _openai_speech_url(endpoint: str) -> str:
     if base.endswith("/v1"):
         return f"{base}/audio/speech"
     return f"{base}/v1/audio/speech"
+
+
+def _aliyun_stream_input_tts_chunks(
+    *,
+    config: TtsConfig,
+    token: str,
+    text: str,
+) -> Iterator[bytes]:
+    try:
+        import nls  # type: ignore[import-untyped]
+    except ImportError as exc:
+        raise RuntimeError(
+            "Aliyun NLS SDK is not installed. Install with: "
+            "pip install git+https://github.com/aliyun/alibabacloud-nls-python-sdk.git"
+        ) from exc
+
+    app_key = require_api_key(config.app_key_env or "ALIYUN_NLS_APPKEY")
+    audio_format = _aliyun_tts_audio_format(config.audio_format)
+    items: queue.Queue[object] = queue.Queue()
+    done = object()
+
+    def on_data(data: bytes, *_args: object) -> None:
+        if data:
+            items.put(bytes(data))
+
+    def on_error(message: str, *_args: object) -> None:
+        items.put(RuntimeError(f"Aliyun NLS TTS failed: {message}"))
+
+    def producer() -> None:
+        synthesizer = nls.NlsStreamInputTtsSynthesizer(
+            url=config.endpoint,
+            token=token,
+            appkey=app_key,
+            on_data=on_data,
+            on_error=on_error,
+            callback_args=[],
+        )
+        try:
+            synthesizer.startStreamInputTts(
+                voice=config.voice,
+                aformat=audio_format,
+                sample_rate=config.sample_rate,
+                volume=config.volume,
+                speech_rate=config.speech_rate,
+                pitch_rate=config.pitch_rate,
+            )
+            for text_chunk in _split_stream_input_text(text):
+                synthesizer.sendStreamInputTts(text_chunk)
+                time.sleep(0.05)
+            synthesizer.stopStreamInputTts()
+        except Exception as exc:
+            items.put(exc)
+        finally:
+            try:
+                synthesizer.shutdown()
+            except Exception:
+                pass
+            items.put(done)
+
+    thread = threading.Thread(target=producer, daemon=True)
+    thread.start()
+    deadline = time.monotonic() + max(1.0, config.timeout_seconds)
+    while True:
+        timeout = max(0.1, min(1.0, deadline - time.monotonic()))
+        try:
+            item = items.get(timeout=timeout)
+        except queue.Empty:
+            if time.monotonic() >= deadline:
+                raise RuntimeError("Aliyun NLS TTS timed out.")
+            continue
+        if item is done:
+            break
+        if isinstance(item, Exception):
+            raise item
+        yield item  # type: ignore[misc]
+
+
+def _aliyun_tts_audio_format(audio_format: str) -> str:
+    normalized = _normalize_audio_format(audio_format)
+    if normalized in ("pcm", "pcm16"):
+        return "pcm"
+    if normalized in ("wav", "mp3", "opus"):
+        return normalized
+    raise RuntimeError(f"Unsupported Aliyun NLS TTS audio format: {audio_format}")
+
+
+def _split_stream_input_text(text: str, max_chars: int = 40) -> list[str]:
+    parts: list[str] = []
+    current = ""
+    for char in text.strip():
+        current += char
+        if char in "。！？!?；;" or len(current) >= max_chars:
+            parts.append(current)
+            current = ""
+    if current:
+        parts.append(current)
+    return [part for part in parts if part.strip()]
 
 
 class SynthesizedAudio:

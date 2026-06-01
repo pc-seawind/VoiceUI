@@ -11,6 +11,7 @@ from pathlib import Path
 import urllib.error
 import urllib.request
 
+from voiceui.aliyun import get_aliyun_nls_token as _get_aliyun_nls_token
 from voiceui.http_utils import post_json, require_api_key
 from voiceui.models import SttConfig, Utterance
 
@@ -278,19 +279,6 @@ def _extract_chat_message_text(data: dict) -> str:
     if content:
         return content
     return str(message.get("reasoning_content") or "").strip()
-
-
-def _get_aliyun_nls_token(access_key_id: str, access_key_secret: str) -> str:
-    try:
-        from nls.token import getToken  # type: ignore[import-untyped]
-    except ImportError as exc:
-        raise RuntimeError(
-            "Aliyun NLS SDK is not installed. Install with: "
-            "pip install aliyun-python-sdk-core websocket-client "
-            "git+https://github.com/aliyun/alibabacloud-nls-python-sdk.git"
-        ) from exc
-
-    return str(getToken(access_key_id, access_key_secret))
 
 
 def _run_aliyun_speech_recognizer(

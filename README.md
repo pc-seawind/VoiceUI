@@ -282,8 +282,38 @@ series still documents low-latency streaming as not yet available, so keep the
 V2 TTS model for this low-latency path unless your backend exposes a newer
 streaming-capable model.
 
-Full templates are available in [config.demo.mify.yaml](config.demo.mify.yaml)
-[config.demo.wake.yaml](config.demo.wake.yaml), and
+Aliyun NLS stream-input TTS is also available. It uses the same
+`ALIYUN_AccessKeyId`, `ALIYUN_AccessKeySecret`, and `ALIYUN_NLS_APPKEY`
+environment variables as Aliyun ASR. The stream-input TTS large-model voices are
+documented by Aliyun against the Beijing gateway, so the demo uses that endpoint.
+
+```yaml
+tts:
+  provider: aliyun_nls
+  endpoint: wss://nls-gateway-cn-beijing.aliyuncs.com/ws/v1
+  access_key_id_env: ALIYUN_AccessKeyId
+  access_key_secret_env: ALIYUN_AccessKeySecret
+  app_key_env: ALIYUN_NLS_APPKEY
+  voice: longxiaochun
+  audio_format: pcm
+  sample_rate: 24000
+  stream: true
+```
+
+Quick synthesis test:
+
+```powershell
+python -m voiceui --config config.demo.aliyun-tts.yaml --generate-wake-ack --wake-ack-text "你好，我在。" --wake-ack-output debug_sessions\aliyun_tts\ack.wav
+```
+
+In local tests, Chinese output was stable. Mixed English/Chinese text such as
+`Second time时间。` was understandable but not accurate enough for direct
+playback, so prefer sending pure Chinese assistant replies to TTS.
+
+Full templates are available in [config.demo.mify.yaml](config.demo.mify.yaml),
+[config.demo.wake.yaml](config.demo.wake.yaml),
+[config.demo.aliyun-asr.yaml](config.demo.aliyun-asr.yaml),
+[config.demo.aliyun-tts.yaml](config.demo.aliyun-tts.yaml), and
 [config.mify.example.yaml](config.mify.example.yaml). The runnable first demo
 flow is documented in [docs/first-demo.md](docs/first-demo.md).
 Local streaming TTS setup is documented in [docs/local-tts.md](docs/local-tts.md).

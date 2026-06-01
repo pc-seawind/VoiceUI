@@ -100,11 +100,15 @@ class TtsConfig:
         "mimo",
         "openai_speech",
         "openai_compatible_speech",
+        "aliyun_nls",
         "piper_http",
         "piper_cli",
     ] = "console"
     endpoint: str = "https://api.xiaomimimo.com/v1"
     api_key_env: str | None = None
+    access_key_id_env: str | None = None
+    access_key_secret_env: str | None = None
+    app_key_env: str | None = None
     timeout_seconds: float = 60.0
     model: str = "mimo-v2-tts"
     voice: str = "mimo_default"
@@ -112,6 +116,9 @@ class TtsConfig:
     sample_rate: int = 24000
     style_prompt: str = "自然、清晰、适合智能音箱的中文播报。"
     stream: bool = False
+    volume: int = 50
+    speech_rate: int = 0
+    pitch_rate: int = 0
     piper_url: str = "http://localhost:5000"
     piper_model: str | None = None
     playback_device: str | int | None = None

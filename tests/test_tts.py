@@ -11,14 +11,17 @@ from unittest.mock import patch
 
 from voiceui.models import TtsConfig
 from voiceui.tts import (
+    AliyunNlsTextToSpeech,
     ConsoleTextToSpeech,
     MimoTextToSpeech,
     OpenAISpeechTextToSpeech,
     SystemTextToSpeech,
+    _aliyun_tts_audio_format,
     _extract_stream_audio,
     _mimo_audio_format,
     _openai_speech_response_format,
     _play_audio_bytes,
+    _split_stream_input_text,
     create_tts,
     synthesize_to_wav,
 )
@@ -44,6 +47,11 @@ class TtsTests(unittest.TestCase):
         tts = create_tts(TtsConfig(provider="openai_speech"))
 
         self.assertIsInstance(tts, OpenAISpeechTextToSpeech)
+
+    def test_create_aliyun_nls_tts(self) -> None:
+        tts = create_tts(TtsConfig(provider="aliyun_nls"))
+
+        self.assertIsInstance(tts, AliyunNlsTextToSpeech)
 
     def test_mimo_tts_sends_assistant_text_and_decodes_audio(self) -> None:
         config = TtsConfig(
@@ -155,6 +163,51 @@ class TtsTests(unittest.TestCase):
         self.assertEqual(_openai_speech_response_format("pcm16", stream=True), "pcm")
         self.assertEqual(_openai_speech_response_format("pcm16", stream=False), "pcm")
         self.assertEqual(_openai_speech_response_format("wav", stream=False), "wav")
+
+    def test_aliyun_tts_audio_format_maps_pcm16_to_pcm(self) -> None:
+        self.assertEqual(_aliyun_tts_audio_format("pcm16"), "pcm")
+        self.assertEqual(_aliyun_tts_audio_format("wav"), "wav")
+
+    def test_split_stream_input_text(self) -> None:
+        self.assertEqual(
+            _split_stream_input_text("你好，我在。有什么可以帮你？"),
+            ["你好，我在。", "有什么可以帮你？"],
+        )
+
+    def test_aliyun_nls_synthesize_uses_env_credentials(self) -> None:
+        config = TtsConfig(
+            provider="aliyun_nls",
+            endpoint="wss://nls-gateway-cn-beijing.aliyuncs.com/ws/v1",
+            access_key_id_env="ALIYUN_AccessKeyId",
+            access_key_secret_env="ALIYUN_AccessKeySecret",
+            app_key_env="ALIYUN_NLS_APPKEY",
+            voice="longxiaochun",
+            audio_format="pcm",
+            sample_rate=24000,
+        )
+        tts = AliyunNlsTextToSpeech(config)
+
+        with patch.dict(
+            "os.environ",
+            {
+                "ALIYUN_AccessKeyId": "ak",
+                "ALIYUN_AccessKeySecret": "secret",
+                "ALIYUN_NLS_APPKEY": "appkey",
+            },
+        ):
+            with patch("voiceui.tts.get_aliyun_nls_token", return_value="token") as get_token:
+                with patch(
+                    "voiceui.tts._aliyun_stream_input_tts_chunks",
+                    return_value=iter([b"\x00\x00"]),
+                ) as stream_tts:
+                    audio = tts.synthesize("你好")
+
+        self.assertEqual(audio.data, b"\x00\x00")
+        self.assertEqual(audio.format, "pcm")
+        get_token.assert_called_once_with("ak", "secret")
+        self.assertEqual(stream_tts.call_args.kwargs["config"], config)
+        self.assertEqual(stream_tts.call_args.kwargs["token"], "token")
+        self.assertEqual(stream_tts.call_args.kwargs["text"], "你好")
 
     def test_extract_stream_audio_supports_delta_and_message_shapes(self) -> None:
         delta_audio = {"data": "delta"}
