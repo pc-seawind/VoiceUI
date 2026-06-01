@@ -93,6 +93,7 @@ class MimoTextToSpeech(TextToSpeech):
         request_started = time.monotonic()
         first_audio_ms: int | None = None
         chunks = 0
+        stream_audio_format = _mimo_audio_format(self.config.audio_format, stream=True)
 
         def audio_chunks() -> Iterator[bytes]:
             nonlocal first_audio_ms, chunks
@@ -106,7 +107,7 @@ class MimoTextToSpeech(TextToSpeech):
                 if not audio:
                     continue
                 audio_format = _normalize_audio_format(
-                    str(audio.get("format") or self.config.audio_format)
+                    str(audio.get("format") or stream_audio_format)
                 )
                 if audio_format not in ("pcm", "pcm16"):
                     raise RuntimeError(f"Streaming TTS requires PCM audio, got {audio_format}")
@@ -328,8 +329,7 @@ def _normalize_audio_format(audio_format: str) -> str:
 
 
 def _mimo_audio_format(audio_format: str, stream: bool) -> str:
-    normalized = _normalize_audio_format(audio_format)
-    if stream and normalized in ("pcm", "pcm16"):
+    if stream:
         return "pcm16"
     return audio_format
 

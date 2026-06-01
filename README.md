@@ -188,8 +188,8 @@ For the first XVF3800 prototype:
 ## Mify / MiMo Backend
 
 VoiceUI cannot use the Codex session itself as a production LLM API. For the
-Mify/MiMo path, LLM and ASR use `xiaomi/mimo-v2.5`, while TTS uses
-`xiaomi/mimo-v2.5-tts`.
+Mify/MiMo path, LLM and ASR use `xiaomi/mimo-v2.5`. For lower-latency TTS,
+the demo uses `xiaomi/mimo-v2-tts` with streaming enabled.
 
 Example LLM config:
 
@@ -224,23 +224,24 @@ tts:
   provider: mify
   endpoint: https://api.xiaomimimo.com/v1
   api_key_env: MIFY_API_KEY
-  model: xiaomi/mimo-v2.5-tts
+  model: xiaomi/mimo-v2-tts
   voice: mimo_default
-  audio_format: pcm
+  audio_format: pcm16
   sample_rate: 24000
-  stream: false
+  stream: true
 ```
 
 For TTS, VoiceUI puts the text to synthesize in an `assistant` message and sends
 `audio: {format, voice}`. The returned `message.audio.data` is base64-decoded
 and played through the configured speaker.
 
-MiMo-V2.5-TTS currently does not provide true low-latency streaming output. If
-`tts.stream: true` is enabled, VoiceUI sends `stream: true` and can play PCM
-chunks as they arrive, but the current MiMo API documents this as a
-compatibility mode that returns once after inference completes. VoiceUI logs
-`tts> synth_latency_ms`, `tts> playback_latency_ms`, and when streaming is
-enabled, `tts> stream_first_audio_ms` so the bottleneck is visible.
+When `tts.stream: true` is enabled, VoiceUI sends `stream: true` and requests
+`audio.format: pcm16`, then plays base64 PCM16 chunks as they arrive. VoiceUI
+logs `tts> stream_first_audio_ms`, `stream_chunks`, and
+`playback_latency_ms` so the streaming bottleneck is visible. The MiMo-V2.5-TTS
+series still documents low-latency streaming as not yet available, so keep the
+V2 TTS model for this low-latency path unless your backend exposes a newer
+streaming-capable model.
 
 Full templates are available in [config.demo.mify.yaml](config.demo.mify.yaml)
 [config.demo.wake.yaml](config.demo.wake.yaml), and

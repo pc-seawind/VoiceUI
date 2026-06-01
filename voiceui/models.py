@@ -87,7 +87,7 @@ class TtsConfig:
     endpoint: str = "https://api.xiaomimimo.com/v1"
     api_key_env: str | None = None
     timeout_seconds: float = 60.0
-    model: str = "mimo-v2.5-tts"
+    model: str = "mimo-v2-tts"
     voice: str = "mimo_default"
     audio_format: str = "pcm"
     sample_rate: int = 24000

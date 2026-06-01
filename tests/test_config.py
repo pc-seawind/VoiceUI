@@ -51,7 +51,9 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(mify_config.stt.model, "xiaomi/mimo-v2.5")
         self.assertEqual(mify_config.llm.model, "xiaomi/mimo-v2.5")
         self.assertEqual(mify_config.tts.provider, "mify")
-        self.assertEqual(mify_config.tts.model, "xiaomi/mimo-v2.5-tts")
+        self.assertEqual(mify_config.tts.model, "xiaomi/mimo-v2-tts")
+        self.assertEqual(mify_config.tts.audio_format, "pcm16")
+        self.assertTrue(mify_config.tts.stream)
         self.assertTrue(mify_config.debug.enabled)
         self.assertEqual(wake_config.wake.engine, "openwakeword")
         self.assertEqual(wake_config.wake.model, "hey_jarvis")
@@ -62,6 +64,8 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(wake_config.vad.engine, "silero")
         self.assertEqual(wake_config.vad.threshold, 0.6)
         self.assertEqual(wake_config.stt.model, "xiaomi/mimo-v2.5")
+        self.assertEqual(wake_config.tts.model, "xiaomi/mimo-v2-tts")
+        self.assertTrue(wake_config.tts.stream)
 
 
 if __name__ == "__main__":

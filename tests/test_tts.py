@@ -15,6 +15,7 @@ from voiceui.tts import (
     MimoTextToSpeech,
     SystemTextToSpeech,
     _extract_stream_audio,
+    _mimo_audio_format,
     _play_audio_bytes,
     create_tts,
     synthesize_to_wav,
@@ -42,7 +43,7 @@ class TtsTests(unittest.TestCase):
             provider="mify",
             endpoint="https://api.xiaomimimo.com/v1",
             api_key_env="MIFY_API_KEY",
-            model="xiaomi/mimo-v2.5-tts",
+            model="xiaomi/mimo-v2-tts",
             voice="mimo_default",
             audio_format="pcm",
             style_prompt="自然播报",
@@ -69,7 +70,7 @@ class TtsTests(unittest.TestCase):
         self.assertEqual(audio.format, "pcm")
         url, payload = post_json.call_args.args[:2]
         self.assertEqual(url, "https://api.xiaomimimo.com/v1/chat/completions")
-        self.assertEqual(payload["model"], "xiaomi/mimo-v2.5-tts")
+        self.assertEqual(payload["model"], "xiaomi/mimo-v2-tts")
         self.assertEqual(payload["messages"][-1], {"role": "assistant", "content": "你好"})
         self.assertEqual(payload["audio"], {"format": "pcm", "voice": "mimo_default"})
         self.assertEqual(post_json.call_args.kwargs["headers"], {"api-key": "test-token"})
@@ -79,7 +80,7 @@ class TtsTests(unittest.TestCase):
             provider="mify",
             endpoint="https://api.xiaomimimo.com/v1",
             api_key_env="MIFY_API_KEY",
-            model="xiaomi/mimo-v2.5-tts",
+            model="xiaomi/mimo-v2-tts",
             audio_format="pcm",
             stream=True,
         )
@@ -90,7 +91,7 @@ class TtsTests(unittest.TestCase):
             with patch("voiceui.tts._post_json_stream") as post_json_stream:
                 with patch("voiceui.tts._play_pcm_stream") as play_pcm_stream:
                     post_json_stream.return_value = iter(
-                        [{"choices": [{"delta": {"audio": {"data": chunk, "format": "pcm16"}}}]}]
+                        [{"choices": [{"delta": {"audio": {"data": chunk}}}]}]
                     )
                     play_pcm_stream.side_effect = lambda chunks, **_kwargs: sum(1 for _ in chunks)
 
@@ -99,10 +100,15 @@ class TtsTests(unittest.TestCase):
 
         url, payload = post_json_stream.call_args.args[:2]
         self.assertEqual(url, "https://api.xiaomimimo.com/v1/chat/completions")
+        self.assertEqual(payload["model"], "xiaomi/mimo-v2-tts")
         self.assertTrue(payload["stream"])
         self.assertEqual(payload["audio"]["format"], "pcm16")
         self.assertEqual(post_json_stream.call_args.kwargs["headers"], {"api-key": "test-token"})
         self.assertEqual(play_pcm_stream.call_args.kwargs["sample_rate"], 24000)
+
+    def test_mimo_streaming_tts_forces_pcm16_even_if_configured_wav(self) -> None:
+        self.assertEqual(_mimo_audio_format("wav", stream=True), "pcm16")
+        self.assertEqual(_mimo_audio_format("wav", stream=False), "wav")
 
     def test_extract_stream_audio_supports_delta_and_message_shapes(self) -> None:
         delta_audio = {"data": "delta"}

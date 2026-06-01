@@ -118,13 +118,14 @@ Flow:
 4. Listen for the TTS output.
 5. Check `debug_sessions\<timestamp>-0001\metadata.json` and `utterance.wav`.
 
-With `config.demo.mify.yaml`, TTS also uses Mify/MiMo through
-`xiaomi/mimo-v2.5-tts`. If you only want local OS speech while testing LLM/ASR, change
-`tts.provider` back to `system`.
+With `config.demo.mify.yaml`, TTS also uses Mify/MiMo through streaming
+`xiaomi/mimo-v2-tts`. If you only want local OS speech while testing LLM/ASR,
+change `tts.provider` back to `system`.
 
-Current MiMo-V2.5-TTS low-latency streaming is not available yet. VoiceUI has
-an optional `tts.stream: true` path for compatibility testing, but the MiMo API
-currently returns the audio after inference completes.
+For streaming TTS, VoiceUI requests `audio.format: pcm16` and plays chunks as
+they arrive. If you switch to a MiMo-V2.5-TTS model, note that the current
+MiMo-V2.5-TTS docs describe low-latency streaming as compatibility mode rather
+than true chunked output.
 
 To re-test ASR with a saved turn:
 

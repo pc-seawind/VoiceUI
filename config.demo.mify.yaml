@@ -52,12 +52,12 @@ tts:
   endpoint: https://editdemo.ai.xiaomi.net/model/infer/xiaomi-mify/v1
   api_key_env: MIFY_API_KEY
   timeout_seconds: 60
-  model: xiaomi/mimo-v2.5-tts
+  model: xiaomi/mimo-v2-tts
   voice: mimo_default
-  audio_format: pcm
+  audio_format: pcm16
   sample_rate: 24000
   style_prompt: 自然、清晰、适合智能音箱的中文播报。
-  stream: false
+  stream: true
   piper_url: http://localhost:5000
   piper_model: models/voice.onnx
   playback_device: default
