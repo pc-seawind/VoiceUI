@@ -160,6 +160,94 @@ class MimoTextToSpeech(TextToSpeech):
         return payload
 
 
+class OpenAISpeechTextToSpeech(TextToSpeech):
+    def __init__(self, config: TtsConfig):
+        self.config = config
+
+    def speak(self, text: str) -> None:
+        print(f"assistant> {text}")
+        if self.config.stream:
+            self.speak_streaming(text)
+            return
+
+        request_started = time.monotonic()
+        audio_format = _openai_speech_response_format(self.config.audio_format, stream=False)
+        audio_data = _post_binary(
+            _openai_speech_url(self.config.endpoint),
+            self._payload(text, audio_format),
+            headers=self._headers(),
+            timeout=self.config.timeout_seconds,
+            error_prefix="OpenAI-compatible TTS request failed",
+        )
+        print(f"tts> synth_latency_ms={int((time.monotonic() - request_started) * 1000)}")
+        playback_started = time.monotonic()
+        _play_audio_bytes(
+            audio_data,
+            audio_format=audio_format,
+            sample_rate=self.config.sample_rate,
+            device=self.config.playback_device,
+        )
+        print(f"tts> playback_latency_ms={int((time.monotonic() - playback_started) * 1000)}")
+
+    def speak_streaming(self, text: str) -> None:
+        request_started = time.monotonic()
+        first_audio_ms: int | None = None
+        chunks = 0
+        audio_format = _openai_speech_response_format(self.config.audio_format, stream=True)
+
+        def audio_chunks() -> Iterator[bytes]:
+            nonlocal first_audio_ms, chunks
+            pending = b""
+            for chunk in _post_binary_stream(
+                _openai_speech_url(self.config.endpoint),
+                self._payload(text, audio_format),
+                headers=self._headers(),
+                timeout=self.config.timeout_seconds,
+                error_prefix="OpenAI-compatible streaming TTS request failed",
+            ):
+                if not chunk:
+                    continue
+                data = pending + chunk
+                playable_len = len(data) - (len(data) % 2)
+                pending = data[playable_len:]
+                if not playable_len:
+                    continue
+                if first_audio_ms is None:
+                    first_audio_ms = int((time.monotonic() - request_started) * 1000)
+                chunks += 1
+                yield data[:playable_len]
+
+        playback_started = time.monotonic()
+        written_chunks = _play_pcm_stream(
+            audio_chunks(),
+            sample_rate=self.config.sample_rate,
+            device=self.config.playback_device,
+        )
+        if written_chunks == 0:
+            raise RuntimeError("Streaming TTS response did not contain audio chunks.")
+        print(
+            "tts> stream_first_audio_ms="
+            f"{first_audio_ms if first_audio_ms is not None else 0} "
+            f"stream_chunks={chunks} "
+            f"playback_latency_ms={int((time.monotonic() - playback_started) * 1000)}"
+        )
+
+    def _headers(self) -> dict[str, str]:
+        headers = {}
+        if self.config.api_key_env:
+            api_key = require_api_key(self.config.api_key_env)
+            headers["Authorization"] = f"Bearer {api_key}"
+        return headers
+
+    def _payload(self, text: str, audio_format: str) -> dict:
+        return {
+            "model": self.config.model,
+            "input": text,
+            "voice": self.config.voice,
+            "response_format": audio_format,
+        }
+
+
 class PiperHttpTextToSpeech(TextToSpeech):
     def __init__(self, config: TtsConfig):
         self.config = config
@@ -199,6 +287,8 @@ def create_tts(config: TtsConfig) -> TextToSpeech:
         return SystemTextToSpeech()
     if config.provider in ("mify", "mimo"):
         return MimoTextToSpeech(config)
+    if config.provider in ("openai_speech", "openai_compatible_speech"):
+        return OpenAISpeechTextToSpeech(config)
     if config.provider == "piper_http":
         return PiperHttpTextToSpeech(config)
     if config.provider == "piper_cli":
@@ -282,6 +372,64 @@ def _post_json_stream(
         raise RuntimeError(f"TTS streaming request failed: {url}: {exc}") from exc
 
 
+def _post_binary(
+    url: str,
+    payload: dict,
+    headers: dict[str, str] | None = None,
+    timeout: float = 60.0,
+    error_prefix: str = "Binary HTTP request failed",
+) -> bytes:
+    body = json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(
+        url,
+        data=body,
+        headers={"Content-Type": "application/json", **(headers or {})},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return response.read()
+    except urllib.error.HTTPError as exc:
+        error_body = exc.read().decode("utf-8", errors="replace").strip()
+        raise RuntimeError(
+            f"{error_prefix}: {url}: HTTP {exc.code}: {error_body or exc.reason}"
+        ) from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"{error_prefix}: {url}: {exc}") from exc
+
+
+def _post_binary_stream(
+    url: str,
+    payload: dict,
+    headers: dict[str, str] | None = None,
+    timeout: float = 60.0,
+    chunk_bytes: int = 1024,
+    error_prefix: str = "Streaming binary HTTP request failed",
+) -> Iterator[bytes]:
+    body = json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(
+        url,
+        data=body,
+        headers={"Content-Type": "application/json", **(headers or {})},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            read = getattr(response, "read1", response.read)
+            while True:
+                chunk = read(chunk_bytes)
+                if not chunk:
+                    break
+                yield chunk
+    except urllib.error.HTTPError as exc:
+        error_body = exc.read().decode("utf-8", errors="replace").strip()
+        raise RuntimeError(
+            f"{error_prefix}: {url}: HTTP {exc.code}: {error_body or exc.reason}"
+        ) from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"{error_prefix}: {url}: {exc}") from exc
+
+
 def _chat_completions_url(endpoint: str) -> str:
     base = endpoint.rstrip("/")
     if base.endswith("/chat/completions"):
@@ -289,6 +437,15 @@ def _chat_completions_url(endpoint: str) -> str:
     if base.endswith("/v1"):
         return f"{base}/chat/completions"
     return f"{base}/v1/chat/completions"
+
+
+def _openai_speech_url(endpoint: str) -> str:
+    base = endpoint.rstrip("/")
+    if base.endswith("/audio/speech"):
+        return base
+    if base.endswith("/v1"):
+        return f"{base}/audio/speech"
+    return f"{base}/v1/audio/speech"
 
 
 class SynthesizedAudio:
@@ -332,6 +489,15 @@ def _mimo_audio_format(audio_format: str, stream: bool) -> str:
     if stream:
         return "pcm16"
     return audio_format
+
+
+def _openai_speech_response_format(audio_format: str, stream: bool) -> str:
+    normalized = _normalize_audio_format(audio_format)
+    if stream:
+        return "pcm"
+    if normalized in ("pcm", "pcm16"):
+        return "pcm"
+    return normalized
 
 
 def _play_audio_bytes(

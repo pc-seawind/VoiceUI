@@ -174,6 +174,16 @@ python -m voiceui --config config.demo.wake.yaml --generate-wake-ack
 Use `--wake-ack-text` or `--wake-ack-output` if you want a different phrase or
 file.
 
+For lower TTS latency with a local Qwen3-TTS server, use:
+
+```powershell
+python -m voiceui --config config.demo.wake.local-tts.yaml
+```
+
+That config keeps Mify ASR/LLM but routes TTS to a local OpenAI-compatible
+`/v1/audio/speech` server. Setup details are in
+[docs/local-tts.md](docs/local-tts.md).
+
 Each audio turn writes debug artifacts under `debug_sessions/` when
 `debug.enabled` is true. The folder contains `utterance.wav` and
 `metadata.json` with wake/VAD/STT/LLM/TTS timings, transcript, and reply.
@@ -256,6 +266,7 @@ Full templates are available in [config.demo.mify.yaml](config.demo.mify.yaml)
 [config.demo.wake.yaml](config.demo.wake.yaml), and
 [config.mify.example.yaml](config.mify.example.yaml). The runnable first demo
 flow is documented in [docs/first-demo.md](docs/first-demo.md).
+Local streaming TTS setup is documented in [docs/local-tts.md](docs/local-tts.md).
 
 See [docs/implementation-plan.md](docs/implementation-plan.md) and
 [docs/xvf3800.md](docs/xvf3800.md) for the detailed plan.

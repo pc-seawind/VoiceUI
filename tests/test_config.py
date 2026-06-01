@@ -38,6 +38,7 @@ class ConfigTests(unittest.TestCase):
         mock_config = load_config("config.demo.mock.yaml")
         mify_config = load_config("config.demo.mify.yaml")
         wake_config = load_config("config.demo.wake.yaml")
+        local_tts_config = load_config("config.demo.wake.local-tts.yaml")
 
         self.assertEqual(mock_config.wake.engine, "manual")
         self.assertEqual(mock_config.tts.provider, "system")
@@ -66,6 +67,10 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(wake_config.stt.model, "xiaomi/mimo-v2.5")
         self.assertEqual(wake_config.tts.model, "xiaomi/mimo-v2-tts")
         self.assertTrue(wake_config.tts.stream)
+        self.assertEqual(local_tts_config.tts.provider, "openai_speech")
+        self.assertEqual(local_tts_config.tts.endpoint, "http://localhost:8000")
+        self.assertEqual(local_tts_config.tts.audio_format, "pcm")
+        self.assertTrue(local_tts_config.tts.stream)
 
 
 if __name__ == "__main__":

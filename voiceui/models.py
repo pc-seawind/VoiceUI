@@ -83,7 +83,16 @@ class LlmConfig:
 
 @dataclass(slots=True)
 class TtsConfig:
-    provider: Literal["console", "system", "mify", "mimo", "piper_http", "piper_cli"] = "console"
+    provider: Literal[
+        "console",
+        "system",
+        "mify",
+        "mimo",
+        "openai_speech",
+        "openai_compatible_speech",
+        "piper_http",
+        "piper_cli",
+    ] = "console"
     endpoint: str = "https://api.xiaomimimo.com/v1"
     api_key_env: str | None = None
     timeout_seconds: float = 60.0

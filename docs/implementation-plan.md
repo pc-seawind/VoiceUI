@@ -58,8 +58,8 @@ Implementation:
   OpenAI-compatible multipart ASR adapters.
 - `voiceui.llm`: Ollama, MiMo/Mify chat completions, OpenAI-compatible chat
   completions, and mock adapters.
-- `voiceui.tts`: console, OS system TTS, MiMo/Mify TTS, Piper HTTP, and Piper
-  CLI adapters.
+- `voiceui.tts`: console, OS system TTS, MiMo/Mify TTS,
+  OpenAI-compatible speech TTS, Piper HTTP, and Piper CLI adapters.
 - `voiceui.core`: conversation loop and state transitions.
 
 ## Phase 2: Smart-Speaker Behavior

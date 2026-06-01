@@ -13,9 +13,11 @@ from voiceui.models import TtsConfig
 from voiceui.tts import (
     ConsoleTextToSpeech,
     MimoTextToSpeech,
+    OpenAISpeechTextToSpeech,
     SystemTextToSpeech,
     _extract_stream_audio,
     _mimo_audio_format,
+    _openai_speech_response_format,
     _play_audio_bytes,
     create_tts,
     synthesize_to_wav,
@@ -37,6 +39,11 @@ class TtsTests(unittest.TestCase):
         tts = create_tts(TtsConfig(provider="mify"))
 
         self.assertIsInstance(tts, MimoTextToSpeech)
+
+    def test_create_openai_speech_tts(self) -> None:
+        tts = create_tts(TtsConfig(provider="openai_speech"))
+
+        self.assertIsInstance(tts, OpenAISpeechTextToSpeech)
 
     def test_mimo_tts_sends_assistant_text_and_decodes_audio(self) -> None:
         config = TtsConfig(
@@ -109,6 +116,45 @@ class TtsTests(unittest.TestCase):
     def test_mimo_streaming_tts_forces_pcm16_even_if_configured_wav(self) -> None:
         self.assertEqual(_mimo_audio_format("wav", stream=True), "pcm16")
         self.assertEqual(_mimo_audio_format("wav", stream=False), "wav")
+
+    def test_openai_speech_streaming_tts_plays_pcm_chunks(self) -> None:
+        config = TtsConfig(
+            provider="openai_speech",
+            endpoint="http://localhost:8000",
+            model="tts-1",
+            voice="default",
+            audio_format="pcm16",
+            stream=True,
+        )
+        tts = OpenAISpeechTextToSpeech(config)
+
+        with patch("voiceui.tts._post_binary_stream") as post_binary_stream:
+            with patch("voiceui.tts._play_pcm_stream") as play_pcm_stream:
+                played_chunks = []
+                post_binary_stream.return_value = iter([b"\x00", b"\x00\x01", b"\x00"])
+
+                def play(chunks, **_kwargs):
+                    played_chunks.extend(chunks)
+                    return len(played_chunks)
+
+                play_pcm_stream.side_effect = play
+
+                with contextlib.redirect_stdout(io.StringIO()):
+                    tts.speak("你好")
+
+        url, payload = post_binary_stream.call_args.args[:2]
+        self.assertEqual(url, "http://localhost:8000/v1/audio/speech")
+        self.assertEqual(payload["model"], "tts-1")
+        self.assertEqual(payload["input"], "你好")
+        self.assertEqual(payload["voice"], "default")
+        self.assertEqual(payload["response_format"], "pcm")
+        self.assertEqual(play_pcm_stream.call_args.kwargs["sample_rate"], 24000)
+        self.assertEqual(played_chunks, [b"\x00\x00", b"\x01\x00"])
+
+    def test_openai_speech_response_format_maps_pcm16_to_pcm_for_streaming(self) -> None:
+        self.assertEqual(_openai_speech_response_format("pcm16", stream=True), "pcm")
+        self.assertEqual(_openai_speech_response_format("pcm16", stream=False), "pcm")
+        self.assertEqual(_openai_speech_response_format("wav", stream=False), "wav")
 
     def test_extract_stream_audio_supports_delta_and_message_shapes(self) -> None:
         delta_audio = {"data": "delta"}

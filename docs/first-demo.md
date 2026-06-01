@@ -197,3 +197,12 @@ Flow:
 6. If you stay silent for 10 seconds, VoiceUI prints
    `session> follow_up_timeout returning_to_wake` and waits for the wake word
    again.
+
+To test local streaming TTS instead of cloud TTS, start a local
+OpenAI-compatible `/v1/audio/speech` server and run:
+
+```powershell
+python -m voiceui --config config.demo.wake.local-tts.yaml
+```
+
+See [local-tts.md](local-tts.md) for the faster-qwen3-tts setup.
