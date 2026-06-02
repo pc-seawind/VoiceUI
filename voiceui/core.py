@@ -61,6 +61,7 @@ class VoiceAssistant:
         self._pending_barge_utterance: Utterance | None = None
         if audio_enabled:
             self._warm_up_audio_path()
+        self._print_barge_in_config()
 
     def _warm_up_audio_path(self) -> None:
         warm_up_started = time.monotonic()
@@ -226,6 +227,30 @@ class VoiceAssistant:
             and self.config.conversation.barge_in_enabled
         )
 
+    def _print_barge_in_config(self) -> None:
+        enabled = self._should_listen_for_barge_in()
+        reason = "enabled"
+        if self.config.input.mode != "audio":
+            reason = f"input_mode_{self.config.input.mode}"
+        elif not self.config.conversation.barge_in_enabled:
+            reason = "conversation_disabled"
+        print(
+            "barge_in> "
+            f"enabled={str(enabled).lower()} reason={reason} "
+            f"input_mode={self.config.input.mode} "
+            f"conversation_enabled={str(self.config.conversation.barge_in_enabled).lower()} "
+            f"vad_engine={self.config.vad.engine} threshold={self.config.vad.threshold} "
+            f"command_channel={self.config.audio.command_stream_channel}"
+        )
+
+    def _print_barge_in_monitor_started(self, mode: str) -> None:
+        print(
+            "barge_in> monitor_started "
+            f"mode={mode} start_timeout_seconds=0.0 "
+            f"vad_engine={self.config.vad.engine} threshold={self.config.vad.threshold} "
+            f"command_channel={self.config.audio.command_stream_channel}"
+        )
+
     def _speak_with_barge_in(self, text: str) -> Utterance | None:
         playback_stop_event = threading.Event()
         monitor_stop_event = threading.Event()
@@ -256,6 +281,7 @@ class VoiceAssistant:
             name="voiceui-barge-in",
             daemon=True,
         )
+        self._print_barge_in_monitor_started("full")
         monitor_thread.start()
 
         try:
@@ -286,6 +312,7 @@ class VoiceAssistant:
         if isinstance(utterance, Utterance):
             print(f"barge_in> captured duration_ms={utterance.duration_ms}")
             return utterance
+        print("barge_in> no_speech")
         return None
 
     def _speak_text_stream_with_barge_in(
@@ -324,6 +351,7 @@ class VoiceAssistant:
             name="voiceui-barge-in",
             daemon=True,
         )
+        self._print_barge_in_monitor_started("stream")
         monitor_thread.start()
 
         try:
@@ -354,6 +382,7 @@ class VoiceAssistant:
         if isinstance(utterance, Utterance):
             print(f"barge_in> captured duration_ms={utterance.duration_ms}")
             return text, utterance
+        print("barge_in> no_speech")
         return text, None
 
     def _wait_for_wake(self) -> tuple[WakeEvent, int]:
