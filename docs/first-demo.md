@@ -45,9 +45,9 @@ reSpeaker XVF3800 4-Mic Array
 ```
 
 The demo configs pin the current machine's XVF3800 devices explicitly:
-`audio.device: 1` for capture and `playback_device: 4` for wake acknowledgement
-and TTS playback. If Windows changes the device indexes, update those fields
-from `python -m voiceui --list-audio-devices`.
+`audio.device: 24` for WASAPI capture and `playback_device: 22` for WASAPI wake
+acknowledgement and TTS playback. If Windows changes the device indexes, update
+those fields from `python -m voiceui --list-audio-devices`.
 
 ## 3. Record a Smoke Sample
 

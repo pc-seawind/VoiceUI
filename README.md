@@ -59,10 +59,10 @@ List audio devices:
 python -m voiceui --list-audio-devices
 ```
 
-The current demo configs explicitly select the reSpeaker XVF3800 instead of the
-system default. On this machine, the input device is index `1` and the output
-device is index `4`, so configs use `audio.device: 1` and
-`playback_device: 4`.
+The current demo configs explicitly select the reSpeaker XVF3800 WASAPI devices
+instead of the system default. On this machine, the input device is index `24`
+and the output device is index `22`, so configs use `audio.device: 24` and
+`playback_device: 22`.
 
 Record from the configured XVF3800 command stream:
 
@@ -196,7 +196,7 @@ The wake acknowledgement is configured separately from TTS:
 wake_ack:
   enabled: true
   wav_path: default
-  playback_device: 4
+  playback_device: 22
 ```
 
 `default` uses the bundled local `voiceui/resources/wake_ack_wo_zai.wav`

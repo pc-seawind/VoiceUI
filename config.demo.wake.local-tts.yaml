@@ -9,7 +9,7 @@ audio:
   sample_rate: 16000
   channels: 1
   block_ms: 80
-  device: 1
+  device: 24
   wake_stream_channel: 0
   command_stream_channel: 0
   input_gain_db: 0.0
@@ -27,7 +27,7 @@ wake:
 wake_ack:
   enabled: true
   wav_path: default
-  playback_device: 4
+  playback_device: 22
 
 vad:
   engine: silero
@@ -69,7 +69,7 @@ tts:
   audio_format: pcm
   sample_rate: 24000
   stream: true
-  playback_device: 4
+  playback_device: 22
 
 conversation:
   follow_up_seconds: 10

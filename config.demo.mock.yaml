@@ -9,7 +9,7 @@ audio:
   sample_rate: 16000
   channels: 1
   block_ms: 80
-  device: 1
+  device: 24
   wake_stream_channel: 0
   command_stream_channel: 0
   input_gain_db: 0.0
