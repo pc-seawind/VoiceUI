@@ -50,7 +50,7 @@ llm:
   provider: ollama
   # Use provider: bailian for DashScope compatible-mode /v1/chat/completions.
   endpoint: http://localhost:11434
-  # api_key_env: DASHSCOPE_API_KEY
+  # api_key_env: BAILIAN_API_KEY
   model: qwen2.5:7b-instruct
   temperature: 0.3
   system_prompt: >

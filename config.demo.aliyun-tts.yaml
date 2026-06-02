@@ -44,7 +44,7 @@ stt:
 llm:
   provider: bailian
   endpoint: https://dashscope.aliyuncs.com/compatible-mode/v1
-  api_key_env: DASHSCOPE_API_KEY
+  api_key_env: BAILIAN_API_KEY
   model: qwen3.6-flash
   temperature: 0.3
   stream: true

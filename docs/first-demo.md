@@ -28,7 +28,7 @@ Create a local `.env` and fill in the cloud backend tokens:
 Copy-Item .env.example .env
 ```
 
-Set `DASHSCOPE_API_KEY=...` for Bailian LLM. If you use Mify/MiMo ASR or TTS,
+Set `BAILIAN_API_KEY=...` for Bailian LLM. If you use Mify/MiMo ASR or TTS,
 also set `MIFY_API_KEY=...`. This file is ignored by git and is loaded
 automatically by the CLI.
 

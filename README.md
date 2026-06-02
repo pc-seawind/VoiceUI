@@ -49,7 +49,7 @@ Create local secrets from the template:
 Copy-Item .env.example .env
 ```
 
-Then fill `DASHSCOPE_API_KEY` for Bailian LLM and `MIFY_API_KEY` if you use
+Then fill `BAILIAN_API_KEY` for Bailian LLM and `MIFY_API_KEY` if you use
 Mify/MiMo ASR or TTS. The real `.env` is ignored by git and is loaded
 automatically by the CLI.
 
@@ -279,7 +279,7 @@ Example LLM config:
 llm:
   provider: bailian
   endpoint: https://dashscope.aliyuncs.com/compatible-mode/v1
-  api_key_env: DASHSCOPE_API_KEY
+  api_key_env: BAILIAN_API_KEY
   model: qwen3.6-flash
   stream: true
   extra_body:

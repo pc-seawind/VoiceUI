@@ -149,13 +149,13 @@ class LlmTests(unittest.TestCase):
         config = LlmConfig(
             provider="bailian",
             endpoint="https://dashscope.aliyuncs.com/compatible-mode/v1",
-            api_key_env="DASHSCOPE_API_KEY",
+            api_key_env="BAILIAN_API_KEY",
             model="qwen3.6-flash",
             extra_body={"enable_thinking": False},
         )
         client = create_chat_client(config)
 
-        with patch.dict("os.environ", {"DASHSCOPE_API_KEY": "test-token"}):
+        with patch.dict("os.environ", {"BAILIAN_API_KEY": "test-token"}):
             with patch("voiceui.llm._post_json") as post_json:
                 post_json.return_value = {"choices": [{"message": {"content": "hi"}}]}
                 response = client.complete([ChatMessage(role="user", content="hello")])
