@@ -124,6 +124,8 @@ class TtsConfig:
     voice: str = "mimo_default"
     audio_format: str = "pcm"
     sample_rate: int = 24000
+    playback_sample_rate: int | None = None
+    playback_channels: int | None = None
     style_prompt: str = "自然、清晰、适合智能音箱的中文播报。"
     stream: bool = False
     volume: int = 50

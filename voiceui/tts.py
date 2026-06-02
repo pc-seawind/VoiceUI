@@ -19,6 +19,11 @@ from voiceui.aliyun import get_aliyun_nls_token
 from voiceui.audio import write_pcm16_wav
 from voiceui.http_utils import post_json, require_api_key
 from voiceui.models import TtsConfig
+from voiceui.wake_ack import (
+    _convert_pcm16_channels,
+    _resample_pcm16,
+    _select_output_format,
+)
 
 
 class TextToSpeech:
@@ -110,6 +115,8 @@ class MimoTextToSpeech(TextToSpeech):
             audio_format=audio_data.format,
             sample_rate=self.config.sample_rate,
             device=self.config.playback_device,
+            playback_sample_rate=self.config.playback_sample_rate,
+            playback_channels=self.config.playback_channels,
             stop_event=stop_event,
         )
         print(f"tts> playback_latency_ms={int((time.monotonic() - playback_started) * 1000)}")
@@ -165,6 +172,8 @@ class MimoTextToSpeech(TextToSpeech):
             audio_chunks(),
             sample_rate=self.config.sample_rate,
             device=self.config.playback_device,
+            playback_sample_rate=self.config.playback_sample_rate,
+            playback_channels=self.config.playback_channels,
             stop_event=stop_event,
         )
         if written_chunks == 0 and not _stop_requested(stop_event):
@@ -228,6 +237,8 @@ class OpenAISpeechTextToSpeech(TextToSpeech):
             audio_format=audio_format,
             sample_rate=self.config.sample_rate,
             device=self.config.playback_device,
+            playback_sample_rate=self.config.playback_sample_rate,
+            playback_channels=self.config.playback_channels,
             stop_event=stop_event,
         )
         print(f"tts> playback_latency_ms={int((time.monotonic() - playback_started) * 1000)}")
@@ -271,6 +282,8 @@ class OpenAISpeechTextToSpeech(TextToSpeech):
             audio_chunks(),
             sample_rate=self.config.sample_rate,
             device=self.config.playback_device,
+            playback_sample_rate=self.config.playback_sample_rate,
+            playback_channels=self.config.playback_channels,
             stop_event=stop_event,
         )
         if written_chunks == 0 and not _stop_requested(stop_event):
@@ -318,6 +331,8 @@ class AliyunNlsTextToSpeech(TextToSpeech):
             audio_format=audio_data.format,
             sample_rate=self.config.sample_rate,
             device=self.config.playback_device,
+            playback_sample_rate=self.config.playback_sample_rate,
+            playback_channels=self.config.playback_channels,
             stop_event=stop_event,
         )
         print(f"tts> playback_latency_ms={int((time.monotonic() - playback_started) * 1000)}")
@@ -363,6 +378,8 @@ class AliyunNlsTextToSpeech(TextToSpeech):
             audio_chunks(),
             sample_rate=self.config.sample_rate,
             device=self.config.playback_device,
+            playback_sample_rate=self.config.playback_sample_rate,
+            playback_channels=self.config.playback_channels,
             stop_event=stop_event,
         )
         if written_chunks == 0 and not _stop_requested(stop_event):
@@ -439,6 +456,8 @@ class AliyunNlsTextToSpeech(TextToSpeech):
             audio_chunks(),
             sample_rate=self.config.sample_rate,
             device=self.config.playback_device,
+            playback_sample_rate=self.config.playback_sample_rate,
+            playback_channels=self.config.playback_channels,
             stop_event=stop_event,
         )
         if written_chunks == 0 and full_text_parts and not _stop_requested(stop_event):
@@ -479,6 +498,8 @@ class PiperHttpTextToSpeech(TextToSpeech):
             wav_data,
             audio_format="wav",
             device=self.config.playback_device,
+            playback_sample_rate=self.config.playback_sample_rate,
+            playback_channels=self.config.playback_channels,
             stop_event=stop_event,
         )
 
@@ -507,6 +528,8 @@ class PiperCliTextToSpeech(TextToSpeech):
                 wav_path.read_bytes(),
                 audio_format="wav",
                 device=self.config.playback_device,
+                playback_sample_rate=self.config.playback_sample_rate,
+                playback_channels=self.config.playback_channels,
                 stop_event=stop_event,
             )
 
@@ -985,10 +1008,12 @@ def _play_audio_bytes(
     audio_format: str,
     device: str | int | None = None,
     sample_rate: int = 24000,
+    source_channels: int = 1,
+    playback_sample_rate: int | None = None,
+    playback_channels: int | None = None,
     stop_event: threading.Event | None = None,
 ) -> None:
     try:
-        import sounddevice as sd  # type: ignore[import-untyped]
         import soundfile as sf  # type: ignore[import-untyped]
     except ImportError as exc:
         raise RuntimeError(
@@ -997,30 +1022,32 @@ def _play_audio_bytes(
         ) from exc
 
     normalized_format = _normalize_audio_format(audio_format)
-    playback_device = None if device == "default" else device
     if _stop_requested(stop_event):
         return
     if normalized_format in ("pcm", "pcm16"):
-        if stop_event is not None:
-            _play_pcm_stream(
-                _iter_pcm_chunks(audio_data, sample_rate=sample_rate),
-                sample_rate=sample_rate,
-                device=device,
-                stop_event=stop_event,
-            )
-            return
-
-        import numpy as np  # type: ignore[import-untyped]
-
-        data = np.frombuffer(audio_data, dtype="<i2").astype("float32") / 32768.0
-        sd.play(data, sample_rate, device=playback_device)
-        sd.wait()
+        _play_pcm_stream(
+            iter([audio_data]),
+            sample_rate=sample_rate,
+            source_channels=source_channels,
+            device=device,
+            playback_sample_rate=playback_sample_rate,
+            playback_channels=playback_channels,
+            stop_event=stop_event,
+        )
         return
 
     if normalized_format == "wav" or audio_data.startswith(b"RIFF"):
-        data, wav_sample_rate = sf.read(io.BytesIO(audio_data), dtype="float32")
-        sd.play(data, wav_sample_rate, device=playback_device)
-        sd.wait()
+        data, wav_sample_rate = sf.read(io.BytesIO(audio_data), dtype="float32", always_2d=True)
+        pcm, wav_channels = _float_audio_to_pcm16(data)
+        _play_pcm_stream(
+            iter([pcm]),
+            sample_rate=wav_sample_rate,
+            source_channels=wav_channels,
+            device=device,
+            playback_sample_rate=playback_sample_rate,
+            playback_channels=playback_channels,
+            stop_event=stop_event,
+        )
         return
 
     raise RuntimeError(f"Unsupported TTS audio format: {audio_format}")
@@ -1029,7 +1056,10 @@ def _play_audio_bytes(
 def _play_pcm_stream(
     chunks: Iterator[bytes],
     sample_rate: int = 24000,
+    source_channels: int = 1,
     device: str | int | None = None,
+    playback_sample_rate: int | None = None,
+    playback_channels: int | None = None,
     stop_event: threading.Event | None = None,
 ) -> int:
     try:
@@ -1041,17 +1071,53 @@ def _play_pcm_stream(
         ) from exc
 
     playback_device = None if device == "default" else device
+    requested_playback_rate = playback_sample_rate or sample_rate
+    requested_playback_channels = playback_channels or source_channels
+    selected_rate, selected_channels = _select_output_format(
+        sd,
+        device=playback_device,
+        requested_sample_rate=requested_playback_rate,
+        source_channels=requested_playback_channels,
+    )
+    should_convert = selected_rate != sample_rate or selected_channels != source_channels
+    converter_logged = False
     written_chunks = 0
     stream = None
     try:
         for chunk in chunks:
-            for playable_chunk in _iter_pcm_chunks(chunk, sample_rate=sample_rate):
+            for playable_chunk in _iter_pcm_chunks(
+                chunk,
+                sample_rate=sample_rate,
+                channels=source_channels,
+            ):
                 if _stop_requested(stop_event):
                     break
+                resampler = "none"
+                if selected_rate != sample_rate:
+                    playable_chunk, resampler = _resample_pcm16(
+                        playable_chunk,
+                        source_rate=sample_rate,
+                        target_rate=selected_rate,
+                        channels=source_channels,
+                    )
+                if selected_channels != source_channels:
+                    playable_chunk = _convert_pcm16_channels(
+                        playable_chunk,
+                        source_channels=source_channels,
+                        target_channels=selected_channels,
+                    )
+                if should_convert and not converter_logged:
+                    print(
+                        "tts> converted "
+                        f"source_sample_rate={sample_rate} playback_sample_rate={selected_rate} "
+                        f"source_channels={source_channels} playback_channels={selected_channels} "
+                        f"resampler={resampler}"
+                    )
+                    converter_logged = True
                 if stream is None:
                     stream = sd.RawOutputStream(
-                        samplerate=sample_rate,
-                        channels=1,
+                        samplerate=selected_rate,
+                        channels=selected_channels,
                         dtype="int16",
                         device=playback_device,
                     )
@@ -1072,13 +1138,24 @@ def _play_pcm_stream(
 def _iter_pcm_chunks(
     audio_data: bytes,
     sample_rate: int = 24000,
+    channels: int = 1,
     chunk_ms: int = 20,
 ) -> Iterator[bytes]:
-    chunk_bytes = max(2, int(sample_rate * chunk_ms / 1000) * 2)
-    chunk_bytes -= chunk_bytes % 2
-    playable_len = len(audio_data) - (len(audio_data) % 2)
+    frame_bytes = max(2, channels * 2)
+    chunk_bytes = max(frame_bytes, int(sample_rate * chunk_ms / 1000) * frame_bytes)
+    chunk_bytes -= chunk_bytes % frame_bytes
+    playable_len = len(audio_data) - (len(audio_data) % frame_bytes)
     for offset in range(0, playable_len, chunk_bytes):
         yield audio_data[offset : offset + chunk_bytes]
+
+
+def _float_audio_to_pcm16(data) -> tuple[bytes, int]:
+    import numpy as np  # type: ignore[import-untyped]
+
+    channels = int(data.shape[1]) if len(data.shape) > 1 else 1
+    clipped = np.clip(data, -1.0, 1.0)
+    pcm = np.rint(clipped * 32767.0).astype("<i2")
+    return pcm.reshape(-1).tobytes(), channels
 
 
 def _stop_requested(stop_event: threading.Event | None) -> bool:

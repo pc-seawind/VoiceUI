@@ -26,7 +26,9 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.audio.wake_stream_channel, 1)
         self.assertEqual(config.audio.input_gain_db, 0.0)
         self.assertEqual(config.wake_ack.playback_device, 22)
-        self.assertEqual(config.tts.sample_rate, 16000)
+        self.assertEqual(config.tts.sample_rate, 24000)
+        self.assertEqual(config.tts.playback_sample_rate, 16000)
+        self.assertEqual(config.tts.playback_channels, 2)
         self.assertEqual(config.tts.playback_device, 22)
 
     def test_mify_config_loads_backend_values(self) -> None:
@@ -39,7 +41,9 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.stt.model, "xiaomi/mimo-v2.5")
         self.assertEqual(config.llm.model, "qwen3.6-flash")
         self.assertEqual(config.llm.extra_body, {"enable_thinking": False})
-        self.assertEqual(config.tts.sample_rate, 16000)
+        self.assertEqual(config.tts.sample_rate, 24000)
+        self.assertEqual(config.tts.playback_sample_rate, 16000)
+        self.assertEqual(config.tts.playback_channels, 2)
 
     def test_demo_configs_load(self) -> None:
         mock_config = load_config("config.demo.mock.yaml")
@@ -64,7 +68,9 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(demo_config.audio.wake_stream_channel, 1)
             self.assertEqual(demo_config.audio.command_stream_channel, 0)
             if demo_config.tts.playback_device == 22:
-                self.assertEqual(demo_config.tts.sample_rate, 16000)
+                self.assertEqual(demo_config.tts.sample_rate, 24000)
+                self.assertEqual(demo_config.tts.playback_sample_rate, 16000)
+                self.assertEqual(demo_config.tts.playback_channels, 2)
 
         self.assertEqual(mock_config.wake.engine, "manual")
         self.assertEqual(mock_config.tts.provider, "system")

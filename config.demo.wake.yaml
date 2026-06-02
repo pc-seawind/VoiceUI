@@ -68,7 +68,9 @@ tts:
   model: xiaomi/mimo-v2-tts
   voice: mimo_default
   audio_format: pcm16
-  sample_rate: 16000
+  sample_rate: 24000
+  playback_sample_rate: 16000
+  playback_channels: 2
   style_prompt: 自然、清晰、适合智能音箱的中文播报。
   stream: true
   piper_url: http://localhost:5000

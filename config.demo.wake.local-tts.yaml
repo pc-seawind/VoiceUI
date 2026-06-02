@@ -67,7 +67,9 @@ tts:
   model: tts-1
   voice: default
   audio_format: pcm
-  sample_rate: 16000
+  sample_rate: 24000
+  playback_sample_rate: 16000
+  playback_channels: 2
   stream: true
   playback_device: 22
 

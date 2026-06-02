@@ -28,6 +28,7 @@ from voiceui.tts import (
     _mimo_audio_format,
     _openai_speech_response_format,
     _play_audio_bytes,
+    _play_pcm_stream,
     _split_stream_input_text,
     create_tts,
     synthesize_to_wav,
@@ -395,11 +396,58 @@ class TtsTests(unittest.TestCase):
                 self.assertEqual(wav.readframes(wav.getnframes()), b"\x00\x00\x00\x40")
 
     def test_play_pcm_audio_bytes(self) -> None:
-        with patch("sounddevice.play") as play, patch("sounddevice.wait") as wait:
+        with patch("voiceui.tts._play_pcm_stream") as play_pcm_stream:
             _play_audio_bytes(b"\x00\x00\x00\x40", audio_format="pcm", sample_rate=24000)
 
-        self.assertEqual(play.call_args.args[1], 24000)
-        wait.assert_called_once()
+        self.assertEqual(play_pcm_stream.call_args.kwargs["sample_rate"], 24000)
+
+    def test_play_pcm_stream_resamples_and_outputs_stereo(self) -> None:
+        written: list[bytes] = []
+        stream_settings: dict[str, object] = {}
+
+        class FakeStream:
+            def __init__(self, **kwargs):
+                stream_settings.update(kwargs)
+
+            def start(self):
+                return None
+
+            def write(self, data: bytes):
+                written.append(data)
+
+            def stop(self):
+                return None
+
+            def close(self):
+                return None
+
+        def check_output_settings(**kwargs):
+            if kwargs["samplerate"] != 16000 or kwargs["channels"] != 2:
+                raise ValueError("unsupported")
+
+        with patch("sounddevice.RawOutputStream", FakeStream):
+            with patch("sounddevice.check_output_settings", side_effect=check_output_settings):
+                with patch(
+                    "sounddevice.query_devices",
+                    return_value={"default_samplerate": 16000, "max_output_channels": 2},
+                ):
+                    chunks = iter([b"\x00\x00" * 240])
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        count = _play_pcm_stream(
+                            chunks,
+                            sample_rate=24000,
+                            source_channels=1,
+                            device=22,
+                            playback_sample_rate=16000,
+                            playback_channels=2,
+                        )
+
+        self.assertEqual(count, 1)
+        self.assertEqual(stream_settings["samplerate"], 16000)
+        self.assertEqual(stream_settings["channels"], 2)
+        self.assertEqual(stream_settings["device"], 22)
+        self.assertEqual(len(written), 1)
+        self.assertEqual(len(written[0]), 160 * 2 * 2)
 
 
 if __name__ == "__main__":

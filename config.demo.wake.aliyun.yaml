@@ -74,7 +74,9 @@ tts:
   timeout_seconds: 20
   voice: longxiaochun
   audio_format: pcm
-  sample_rate: 16000
+  sample_rate: 24000
+  playback_sample_rate: 16000
+  playback_channels: 2
   stream: true
   volume: 50
   speech_rate: 0
