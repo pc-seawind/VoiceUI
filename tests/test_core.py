@@ -46,6 +46,7 @@ class FakeVad:
         start_timeout_seconds: float = 0.0,
         stop_event: threading.Event | None = None,
         on_speech_start=None,
+        on_speech_audio=None,
     ) -> Utterance:
         self.start_timeouts.append(start_timeout_seconds)
         if self.on_record is not None:
@@ -67,6 +68,8 @@ class FakeVad:
             raise SpeechStartTimeoutError("Timed out waiting for speech.")
         if on_speech_start is not None:
             on_speech_start()
+        if on_speech_audio is not None:
+            on_speech_audio(item.pcm)
         return item
 
 
@@ -100,6 +103,42 @@ class ConsumingTimeoutVad:
 class FakeStt:
     def transcribe(self, utterance: Utterance) -> str:
         return utterance.pcm.decode("utf-8")
+
+
+class FakeStreamingSession:
+    def __init__(self, transcript: str):
+        self.transcript = transcript
+        self.written: list[bytes] = []
+        self.finished = False
+        self.aborted = False
+
+    def write(self, pcm: bytes) -> None:
+        self.written.append(pcm)
+
+    def finish(self) -> str:
+        self.finished = True
+        return self.transcript
+
+    def abort(self) -> None:
+        self.aborted = True
+
+
+class FakeStreamingStt(FakeStt):
+    def __init__(self, transcript: str):
+        self.session = FakeStreamingSession(transcript)
+        self.start_sample_rates: list[int] = []
+        self.fallback_calls = 0
+
+    def supports_streaming(self) -> bool:
+        return True
+
+    def start_streaming(self, sample_rate: int) -> FakeStreamingSession:
+        self.start_sample_rates.append(sample_rate)
+        return self.session
+
+    def transcribe(self, utterance: Utterance) -> str:
+        self.fallback_calls += 1
+        return super().transcribe(utterance)
 
 
 class RecordingChat:
@@ -311,6 +350,33 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(len(debug_dirs), 1)
             self.assertTrue((debug_dirs[0] / "barge_in_monitor.wav").exists())
             self.assertTrue((debug_dirs[0] / "metadata.json").exists())
+
+    def test_audio_turn_streams_stt_during_vad(self) -> None:
+        config = AssistantConfig(
+            input=InputConfig(mode="audio"),
+            wake=WakeConfig(engine="disabled"),
+            conversation=ConversationConfig(follow_up_seconds=0),
+            llm=LlmConfig(system_prompt="system"),
+        )
+        assistant = VoiceAssistant(config)
+        assistant.vad = FakeVad([Utterance(pcm=b"streamed", sample_rate=16000, duration_ms=80)])
+        streaming_stt = FakeStreamingStt("streamed")
+        assistant.stt = streaming_stt
+        assistant.chat = RecordingChat()
+        assistant.tts = FakeTts()
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            reply, transcript = assistant._run_audio_turn(
+                WakeEvent(engine="test", confidence=1.0, label="wake"),
+                wake_ms=0,
+            )
+
+        self.assertEqual(transcript, "streamed")
+        self.assertEqual(reply.text, "reply 1")
+        self.assertEqual(streaming_stt.start_sample_rates, [16000])
+        self.assertEqual(streaming_stt.session.written, [b"streamed"])
+        self.assertTrue(streaming_stt.session.finished)
+        self.assertEqual(streaming_stt.fallback_calls, 0)
 
 
 if __name__ == "__main__":

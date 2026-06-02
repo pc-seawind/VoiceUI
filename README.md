@@ -272,7 +272,10 @@ show `barge_in> no_speech` to confirm what VAD heard.
 For clipped-start issues, listen to `utterance.wav`: if the beginning is missing
 there, tune VAD; if the WAV is complete but the transcript is missing the
 beginning, tune ASR. The Aliyun demo also prints `stt_debug>` with the exact
-audio length sent to NLS and adds `stt.leading_silence_ms: 200` before sending.
+audio path. In live audio turns, Aliyun NLS starts streaming when VAD confirms
+speech start, receives the buffered pre-roll first, then receives command audio
+while VAD continues endpointing. `--transcribe-wav` remains a full-WAV test path
+and adds `stt.leading_silence_ms: 200` before sending.
 It also prints `audio_debug>` for command-stream startup latency; large
 `stream_opened latency_ms` or `first_chunk read_ms` values mean the capture path
 is not ready early enough.

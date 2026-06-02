@@ -147,8 +147,11 @@ Flow:
 If ASR seems to miss the beginning, first listen to `utterance.wav`. If the WAV
 itself starts late, it is a VAD boundary issue; inspect `vad_debug>` and raise
 `vad.pre_roll_ms`. If the WAV is complete but the transcript starts late, it is
-an ASR issue; the Aliyun demo prints `stt_debug>` and sends
-`stt.leading_silence_ms: 200` before the utterance.
+an ASR issue. In live audio turns, the Aliyun demo prints `stt> streaming_started`
+when VAD confirms speech start, sends buffered pre-roll into NLS first, then
+streams command audio while VAD continues endpointing. `--transcribe-wav` stays
+a full-WAV test path and sends `stt.leading_silence_ms: 200` before the
+utterance.
 If logs show `barge_in> no_speech`, listen to
 `debug_sessions\<timestamp>-barge-in-*\barge_in_monitor.wav`; that file is the
 actual command-channel audio monitored during TTS playback.

@@ -32,6 +32,76 @@ class _WakeAckHandle:
         return self.result.get("latency_ms", 0)
 
 
+class _StreamingSttHandle:
+    def __init__(self, stt, sample_rate: int):
+        self.stt = stt
+        self.sample_rate = sample_rate
+        self.requested_at: float | None = None
+        self.ready_at: float | None = None
+        self.completed_at: float | None = None
+        self.sent_chunks = 0
+        self.result = ""
+        self.error: Exception | None = None
+        self._done = object()
+        self._items: queue.Queue[bytes | object] = queue.Queue()
+        self._session = None
+        self._thread = threading.Thread(
+            target=self._run,
+            name="voiceui-stt-stream",
+            daemon=True,
+        )
+
+    def start(self) -> None:
+        self.requested_at = time.monotonic()
+        self._thread.start()
+
+    def write(self, pcm: bytes) -> None:
+        if pcm:
+            self.sent_chunks += 1
+            self._items.put(pcm)
+
+    def finish(self) -> str:
+        self._items.put(self._done)
+        self._thread.join()
+        if self.error is not None:
+            raise self.error
+        return self.result
+
+    def abort(self) -> None:
+        self._items.put(self._done)
+        if self._session is not None:
+            self._session.abort()
+        self._thread.join(timeout=1.0)
+
+    def ready_latency_ms(self) -> int | None:
+        if self.requested_at is None or self.ready_at is None:
+            return None
+        return int((self.ready_at - self.requested_at) * 1000)
+
+    def total_latency_ms(self) -> int:
+        if self.requested_at is None:
+            return 0
+        completed_at = self.completed_at or time.monotonic()
+        return int((completed_at - self.requested_at) * 1000)
+
+    def _run(self) -> None:
+        try:
+            self._session = self.stt.start_streaming(self.sample_rate)
+            self.ready_at = time.monotonic()
+            while True:
+                item = self._items.get()
+                if item is self._done:
+                    break
+                self._session.write(item)
+            self.result = self._session.finish()
+            self.completed_at = time.monotonic()
+        except Exception as exc:
+            self.error = exc
+            if self._session is not None:
+                self._session.abort()
+            self.completed_at = time.monotonic()
+
+
 class VoiceAssistant:
     def __init__(self, config: AssistantConfig):
         self.config = config
@@ -479,11 +549,28 @@ class VoiceAssistant:
         wake_ack_handle: _WakeAckHandle | None = None,
         speech_start_timeout_seconds: float = 0.0,
     ) -> tuple[AssistantReply, str]:
+        stt_extra_timings: dict[str, int] = {}
         if self._pending_barge_utterance is not None:
             utterance = self._pending_barge_utterance
             self._pending_barge_utterance = None
             vad_ms = 0
             print(f"vad> source=barge_in duration_ms={utterance.duration_ms} latency_ms=0")
+            wake_ack_ms = wake_ack_handle.join() if wake_ack_handle is not None else 0
+            stt_started = time.monotonic()
+            transcript = self.stt.transcribe(utterance)
+            stt_ms = int((time.monotonic() - stt_started) * 1000)
+            print(f"stt> latency_ms={stt_ms} text={transcript}")
+        elif self._should_stream_stt():
+            (
+                utterance,
+                transcript,
+                vad_ms,
+                stt_ms,
+                stt_extra_timings,
+            ) = self._record_and_stream_transcribe(
+                speech_start_timeout_seconds=speech_start_timeout_seconds,
+            )
+            wake_ack_ms = wake_ack_handle.join() if wake_ack_handle is not None else 0
         else:
             vad_started = time.monotonic()
             utterance = self.vad.record(
@@ -493,12 +580,11 @@ class VoiceAssistant:
             vad_ms = int((time.monotonic() - vad_started) * 1000)
             print(f"vad> duration_ms={utterance.duration_ms} latency_ms={vad_ms}")
 
-        wake_ack_ms = wake_ack_handle.join() if wake_ack_handle is not None else 0
-
-        stt_started = time.monotonic()
-        transcript = self.stt.transcribe(utterance)
-        stt_ms = int((time.monotonic() - stt_started) * 1000)
-        print(f"stt> latency_ms={stt_ms} text={transcript}")
+            wake_ack_ms = wake_ack_handle.join() if wake_ack_handle is not None else 0
+            stt_started = time.monotonic()
+            transcript = self.stt.transcribe(utterance)
+            stt_ms = int((time.monotonic() - stt_started) * 1000)
+            print(f"stt> latency_ms={stt_ms} text={transcript}")
 
         transcript = transcript.strip()
         if not transcript:
@@ -512,6 +598,7 @@ class VoiceAssistant:
             "wake_ack": wake_ack_ms,
             "vad": vad_ms,
             "stt": stt_ms,
+            **stt_extra_timings,
             **response_timings,
         }
         debug_data = TurnDebugData(
@@ -536,6 +623,68 @@ class VoiceAssistant:
         if debug_dir:
             print(f"debug> saved={debug_dir}")
         return reply, transcript
+
+    def _should_stream_stt(self) -> bool:
+        supports_streaming = getattr(self.stt, "supports_streaming", None)
+        return bool(callable(supports_streaming) and supports_streaming())
+
+    def _record_and_stream_transcribe(
+        self,
+        *,
+        speech_start_timeout_seconds: float,
+    ) -> tuple[Utterance, str, int, int, dict[str, int]]:
+        vad_started = time.monotonic()
+        stream_handle: _StreamingSttHandle | None = None
+
+        def on_speech_start() -> None:
+            nonlocal stream_handle
+            if stream_handle is not None:
+                return
+            stream_handle = _StreamingSttHandle(self.stt, self.command_audio.sample_rate)
+            stream_handle.start()
+            start_ms = int((time.monotonic() - vad_started) * 1000)
+            print(f"stt> streaming_started vad_elapsed_ms={start_ms}")
+
+        def on_speech_audio(pcm: bytes) -> None:
+            if stream_handle is None:
+                on_speech_start()
+            assert stream_handle is not None
+            stream_handle.write(pcm)
+
+        try:
+            utterance = self.vad.record(
+                self.command_audio,
+                start_timeout_seconds=speech_start_timeout_seconds,
+                on_speech_start=on_speech_start,
+                on_speech_audio=on_speech_audio,
+            )
+        except Exception:
+            if stream_handle is not None:
+                stream_handle.abort()
+            raise
+
+        vad_ms = int((time.monotonic() - vad_started) * 1000)
+        print(f"vad> duration_ms={utterance.duration_ms} latency_ms={vad_ms}")
+
+        if stream_handle is None:
+            stt_started = time.monotonic()
+            transcript = self.stt.transcribe(utterance)
+            stt_ms = int((time.monotonic() - stt_started) * 1000)
+            print(f"stt> latency_ms={stt_ms} mode=fallback text={transcript}")
+            return utterance, transcript, vad_ms, stt_ms, {}
+
+        finalize_started = time.monotonic()
+        transcript = stream_handle.finish()
+        stt_ms = int((time.monotonic() - finalize_started) * 1000)
+        stt_total_ms = stream_handle.total_latency_ms()
+        ready_ms = stream_handle.ready_latency_ms()
+        ready_fragment = f" ready_ms={ready_ms}" if ready_ms is not None else ""
+        print(
+            "stt> "
+            f"latency_ms={stt_ms} mode=streaming total_latency_ms={stt_total_ms} "
+            f"sent_chunks={stream_handle.sent_chunks}{ready_fragment} text={transcript}"
+        )
+        return utterance, transcript, vad_ms, stt_ms, {"stt_total": stt_total_ms}
 
     def run_once(self) -> AssistantReply:
         if self.config.input.mode == "text":

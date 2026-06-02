@@ -166,6 +166,32 @@ class VadTests(unittest.TestCase):
 
         self.assertEqual(utterance.duration_ms, 192)
 
+    def test_silero_vad_streams_preroll_then_live_audio(self) -> None:
+        recorder = SileroVadRecorder(
+            VadConfig(
+                engine="silero",
+                threshold=0.6,
+                min_speech_ms=64,
+                silence_ms=64,
+                pre_roll_ms=32,
+            )
+        )
+        silence = b"\x00\x00" * 512
+        speech = (2000).to_bytes(2, "little", signed=True) * 512
+        streamed: list[bytes] = []
+        fake_silero = types.SimpleNamespace(load_silero_vad=FakeSileroModel)
+
+        with patch.dict(sys.modules, {"silero_vad": fake_silero, "torch": FakeTorch}):
+            recorder.record(
+                FakeAudio([silence + speech + speech + speech + silence + silence]),
+                on_speech_audio=streamed.append,
+            )
+
+        self.assertGreaterEqual(len(streamed), 2)
+        self.assertTrue(streamed[0].startswith(silence))
+        self.assertIn(speech, streamed[0])
+        self.assertEqual(streamed[1], speech)
+
     def test_silero_vad_keeps_configured_pre_roll_before_confirmed_speech(self) -> None:
         recorder = SileroVadRecorder(
             VadConfig(

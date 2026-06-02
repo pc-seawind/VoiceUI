@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sys
+import types
 import unittest
 from unittest.mock import patch
 
@@ -115,6 +117,72 @@ class SttTests(unittest.TestCase):
 
         silence_bytes = b"\x00\x00" * 1600
         self.assertEqual(recognizer.call_args.kwargs["pcm"], silence_bytes + utterance.pcm)
+
+    def test_aliyun_streaming_stt_sends_audio_incrementally(self) -> None:
+        created: list[object] = []
+
+        class FakeRecognizer:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+                self.sent: list[bytes] = []
+                self.started = False
+                self.stopped = False
+                self.shutdown_called = False
+                created.append(self)
+
+            def start(self, **kwargs):
+                self.start_kwargs = kwargs
+                self.started = True
+                return True
+
+            def send_audio(self, chunk: bytes):
+                self.sent.append(chunk)
+
+            def stop(self, timeout: int):
+                self.stopped = True
+                self.stop_timeout = timeout
+                self.kwargs["on_completed"]('{"payload":{"result":"你好"}}')
+
+            def shutdown(self):
+                self.shutdown_called = True
+
+        fake_nls = types.SimpleNamespace(NlsSpeechRecognizer=FakeRecognizer)
+        config = SttConfig(
+            provider="aliyun_nls",
+            endpoint="wss://nls-gateway-cn-shanghai.aliyuncs.com/ws/v1",
+            access_key_id_env="ALIYUN_AccessKeyId",
+            access_key_secret_env="ALIYUN_AccessKeySecret",
+            app_key_env="ALIYUN_NLS_APPKEY",
+            timeout_seconds=20,
+            leading_silence_ms=20,
+        )
+        stt = AliyunNlsSpeechToText(config)
+
+        with patch.dict(sys.modules, {"nls": fake_nls}):
+            with patch.dict(
+                "os.environ",
+                {
+                    "ALIYUN_AccessKeyId": "ak",
+                    "ALIYUN_AccessKeySecret": "secret",
+                    "ALIYUN_NLS_APPKEY": "appkey",
+                },
+            ):
+                with patch("voiceui.stt._get_aliyun_nls_token", return_value="token"):
+                    session = stt.start_streaming(sample_rate=16000)
+                    session.write(b"\x01\x00" * 320)
+                    transcript = session.finish()
+
+        self.assertEqual(transcript, "你好")
+        self.assertEqual(len(created), 1)
+        recognizer = created[0]
+        self.assertTrue(recognizer.started)
+        self.assertTrue(recognizer.stopped)
+        self.assertTrue(recognizer.shutdown_called)
+        self.assertEqual(recognizer.kwargs["url"], config.endpoint)
+        self.assertEqual(recognizer.kwargs["token"], "token")
+        self.assertEqual(recognizer.kwargs["appkey"], "appkey")
+        self.assertEqual(recognizer.sent[0], b"\x00\x00" * 320)
+        self.assertEqual(recognizer.sent[1], b"\x01\x00" * 320)
 
     def test_extract_aliyun_result(self) -> None:
         message = '{"payload":{"result":"second time时间"}}'

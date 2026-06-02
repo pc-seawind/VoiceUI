@@ -22,6 +22,7 @@ class VadRecorder:
         start_timeout_seconds: float = 0.0,
         stop_event: threading.Event | None = None,
         on_speech_start: Callable[[], None] | None = None,
+        on_speech_audio: Callable[[bytes], None] | None = None,
     ) -> Utterance:
         raise NotImplementedError
 
@@ -36,6 +37,7 @@ class EnergyVadRecorder(VadRecorder):
         start_timeout_seconds: float = 0.0,
         stop_event: threading.Event | None = None,
         on_speech_start: Callable[[], None] | None = None,
+        on_speech_audio: Callable[[bytes], None] | None = None,
     ) -> Utterance:
         chunk_ms = audio.block_ms
         pre_roll_chunks = max(1, self.config.pre_roll_ms // chunk_ms)
@@ -79,11 +81,13 @@ class EnergyVadRecorder(VadRecorder):
                         threshold=self.config.threshold,
                     )
                     _notify_speech_start(on_speech_start)
+                    _notify_speech_audio(on_speech_audio, b"".join(pre_roll))
                 elif start_timeout_ms and waited_ms >= start_timeout_ms and speech_chunks == 0:
                     raise SpeechStartTimeoutError("Timed out waiting for speech.")
                 continue
 
             recorded.append(chunk)
+            _notify_speech_audio(on_speech_audio, chunk)
             if speech:
                 trailing_silence = 0
             else:
@@ -129,6 +133,7 @@ class SileroVadRecorder(VadRecorder):
         start_timeout_seconds: float = 0.0,
         stop_event: threading.Event | None = None,
         on_speech_start: Callable[[], None] | None = None,
+        on_speech_audio: Callable[[bytes], None] | None = None,
     ) -> Utterance:
         if audio.sample_rate not in self._VALID_SAMPLE_RATES:
             raise RuntimeError(
@@ -184,11 +189,13 @@ class SileroVadRecorder(VadRecorder):
                         threshold=threshold,
                     )
                     _notify_speech_start(on_speech_start)
+                    _notify_speech_audio(on_speech_audio, b"".join(pre_roll))
                 elif start_timeout_ms and waited_ms >= start_timeout_ms and speech_frames == 0:
                     raise SpeechStartTimeoutError("Timed out waiting for speech.")
                 continue
 
             recorded.append(frame)
+            _notify_speech_audio(on_speech_audio, frame)
             if probability >= neg_threshold:
                 trailing_silence = 0
             else:
@@ -252,6 +259,7 @@ class WebRtcVadRecorder(VadRecorder):
         start_timeout_seconds: float = 0.0,
         stop_event: threading.Event | None = None,
         on_speech_start: Callable[[], None] | None = None,
+        on_speech_audio: Callable[[bytes], None] | None = None,
     ) -> Utterance:
         if audio.sample_rate not in self._VALID_SAMPLE_RATES:
             raise RuntimeError(
@@ -308,11 +316,13 @@ class WebRtcVadRecorder(VadRecorder):
                         threshold=float(self.config.webrtc_mode),
                     )
                     _notify_speech_start(on_speech_start)
+                    _notify_speech_audio(on_speech_audio, b"".join(pre_roll))
                 elif start_timeout_ms and waited_ms >= start_timeout_ms and speech_frames == 0:
                     raise SpeechStartTimeoutError("Timed out waiting for speech.")
                 continue
 
             recorded.append(frame)
+            _notify_speech_audio(on_speech_audio, frame)
             if speech:
                 trailing_silence = 0
             else:
@@ -406,6 +416,11 @@ def _silero_speech_probability(model, torch, pcm: bytes, sample_rate: int) -> fl
 def _notify_speech_start(callback: Callable[[], None] | None) -> None:
     if callback is not None:
         callback()
+
+
+def _notify_speech_audio(callback: Callable[[bytes], None] | None, pcm: bytes) -> None:
+    if callback is not None and pcm:
+        callback(pcm)
 
 
 def _stop_requested(stop_event: threading.Event | None) -> bool:

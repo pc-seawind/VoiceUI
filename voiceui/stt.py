@@ -16,7 +16,27 @@ from voiceui.http_utils import post_json, require_api_key
 from voiceui.models import SttConfig, Utterance
 
 
+_ALIYUN_SAMPLE_RATE = 16000
+
+
+class StreamingSpeechToTextSession:
+    def write(self, pcm: bytes) -> None:
+        raise NotImplementedError
+
+    def finish(self) -> str:
+        raise NotImplementedError
+
+    def abort(self) -> None:
+        raise NotImplementedError
+
+
 class SpeechToText:
+    def supports_streaming(self) -> bool:
+        return False
+
+    def start_streaming(self, sample_rate: int) -> StreamingSpeechToTextSession:
+        raise RuntimeError(f"{type(self).__name__} does not support streaming STT.")
+
     def transcribe(self, utterance: Utterance) -> str:
         raise NotImplementedError
 
@@ -151,18 +171,39 @@ class AliyunNlsSpeechToText(SpeechToText):
         self.config = config
         self._token: str | None = None
 
+    def supports_streaming(self) -> bool:
+        return True
+
+    def start_streaming(self, sample_rate: int) -> StreamingSpeechToTextSession:
+        if sample_rate != _ALIYUN_SAMPLE_RATE:
+            raise RuntimeError(
+                "Aliyun NLS streaming STT currently requires 16000 Hz audio, "
+                f"got {sample_rate}."
+            )
+        app_key = require_api_key(self.config.app_key_env or "ALIYUN_NLS_APPKEY")
+        token = self._token_or_create()
+        leading_silence_ms = max(0, self.config.leading_silence_ms)
+        if self.config.debug:
+            print(
+                "stt_debug> "
+                "provider=aliyun_nls mode=streaming "
+                f"sent_sample_rate={_ALIYUN_SAMPLE_RATE} "
+                f"leading_silence_ms={leading_silence_ms}"
+            )
+        return _AliyunNlsStreamingSession(
+            url=self.config.endpoint,
+            token=token,
+            app_key=app_key,
+            sample_rate=_ALIYUN_SAMPLE_RATE,
+            timeout_seconds=self.config.timeout_seconds,
+            leading_silence_ms=leading_silence_ms,
+        )
+
     def transcribe(self, utterance: Utterance) -> str:
         app_key = require_api_key(self.config.app_key_env or "ALIYUN_NLS_APPKEY")
-        access_key_id = require_api_key(
-            self.config.access_key_id_env or "ALIYUN_AccessKeyId"
-        )
-        access_key_secret = require_api_key(
-            self.config.access_key_secret_env or "ALIYUN_AccessKeySecret"
-        )
-        if self._token is None:
-            self._token = _get_aliyun_nls_token(access_key_id, access_key_secret)
+        token = self._token_or_create()
 
-        sample_rate = 16000
+        sample_rate = _ALIYUN_SAMPLE_RATE
         pcm = _ensure_pcm16_sample_rate(utterance.pcm, utterance.sample_rate, sample_rate)
         leading_silence_ms = max(0, self.config.leading_silence_ms)
         if leading_silence_ms:
@@ -182,12 +223,23 @@ class AliyunNlsSpeechToText(SpeechToText):
             )
         return _run_aliyun_speech_recognizer(
             url=self.config.endpoint,
-            token=self._token,
+            token=token,
             app_key=app_key,
             pcm=pcm,
             sample_rate=sample_rate,
             timeout_seconds=self.config.timeout_seconds,
         ).strip()
+
+    def _token_or_create(self) -> str:
+        access_key_id = require_api_key(
+            self.config.access_key_id_env or "ALIYUN_AccessKeyId"
+        )
+        access_key_secret = require_api_key(
+            self.config.access_key_secret_env or "ALIYUN_AccessKeySecret"
+        )
+        if self._token is None:
+            self._token = _get_aliyun_nls_token(access_key_id, access_key_secret)
+        return self._token
 
 
 def create_stt(config: SttConfig) -> SpeechToText:
@@ -360,6 +412,108 @@ def _run_aliyun_speech_recognizer(
     if errors:
         raise RuntimeError(f"Aliyun NLS STT failed: {errors[-1]}")
     return results[-1] if results else ""
+
+
+class _AliyunNlsStreamingSession(StreamingSpeechToTextSession):
+    def __init__(
+        self,
+        *,
+        url: str,
+        token: str,
+        app_key: str,
+        sample_rate: int,
+        timeout_seconds: float,
+        leading_silence_ms: int,
+    ):
+        try:
+            import nls  # type: ignore[import-untyped]
+        except ImportError as exc:
+            raise RuntimeError(
+                "Aliyun NLS SDK is not installed. Install with: "
+                "pip install git+https://github.com/aliyun/alibabacloud-nls-python-sdk.git"
+            ) from exc
+
+        self.sample_rate = sample_rate
+        self.timeout_seconds = timeout_seconds
+        self.frame_bytes = max(2, int(sample_rate * 2 * 0.02))
+        self.results: list[str] = []
+        self.errors: list[str] = []
+        self.sent_bytes = 0
+        self._pending = bytearray()
+        self._closed = False
+
+        def on_completed(message: str, *_args: object) -> None:
+            text = _extract_aliyun_result(message)
+            if text:
+                self.results.append(text)
+
+        def on_error(message: str, *_args: object) -> None:
+            self.errors.append(message)
+
+        self.recognizer = nls.NlsSpeechRecognizer(
+            url=url,
+            token=token,
+            appkey=app_key,
+            on_completed=on_completed,
+            on_error=on_error,
+            callback_args=[],
+        )
+        start_result = self.recognizer.start(
+            aformat="pcm",
+            sample_rate=sample_rate,
+            ch=1,
+            enable_intermediate_result=False,
+            enable_punctuation_prediction=True,
+            enable_inverse_text_normalization=True,
+            timeout=max(1, math.ceil(timeout_seconds)),
+            ping_interval=8,
+            ping_timeout=None,
+        )
+        if start_result is False:
+            self.recognizer.shutdown()
+            self._closed = True
+            raise RuntimeError("Aliyun NLS recognizer failed to start.")
+
+        if leading_silence_ms > 0:
+            self.write(_prepend_pcm16_silence(b"", sample_rate, leading_silence_ms))
+
+    def write(self, pcm: bytes) -> None:
+        if self._closed:
+            raise RuntimeError("Aliyun NLS streaming session is already closed.")
+        if not pcm:
+            return
+        self._pending.extend(pcm)
+        while len(self._pending) >= self.frame_bytes:
+            chunk = bytes(self._pending[: self.frame_bytes])
+            del self._pending[: self.frame_bytes]
+            self.recognizer.send_audio(chunk)
+            self.sent_bytes += len(chunk)
+
+    def finish(self) -> str:
+        if self._closed:
+            return self.results[-1] if self.results else ""
+        try:
+            if self._pending:
+                chunk = bytes(self._pending)
+                self._pending.clear()
+                self.recognizer.send_audio(chunk)
+                self.sent_bytes += len(chunk)
+            self.recognizer.stop(timeout=max(1, math.ceil(self.timeout_seconds)))
+        finally:
+            self.recognizer.shutdown()
+            self._closed = True
+
+        if self.errors:
+            raise RuntimeError(f"Aliyun NLS STT failed: {self.errors[-1]}")
+        return self.results[-1] if self.results else ""
+
+    def abort(self) -> None:
+        if self._closed:
+            return
+        try:
+            self.recognizer.shutdown()
+        finally:
+            self._closed = True
 
 
 def _extract_aliyun_result(message: str) -> str:
