@@ -51,6 +51,7 @@ llm:
   api_key_env: MIFY_API_KEY
   model: xiaomi/mimo-v2.5
   temperature: 0.3
+  stream: true
   system_prompt: >
     You are a concise Chinese home voice assistant. Keep replies short and ask
     for confirmation before sensitive actions.

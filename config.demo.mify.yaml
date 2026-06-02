@@ -43,6 +43,7 @@ llm:
   api_key_env: MIFY_API_KEY
   model: xiaomi/mimo-v2.5
   temperature: 0.3
+  stream: true
   system_prompt: >
     You are a concise Chinese smart speaker assistant. Reply in short spoken
     Chinese. Ask for confirmation before sensitive home actions.

@@ -79,6 +79,11 @@ class RecordingChat:
         self.calls.append(list(messages))
         return f"reply {len(self.calls)}"
 
+    def stream_complete(self, messages: list[ChatMessage]):
+        self.calls.append(list(messages))
+        yield "reply"
+        yield f" {len(self.calls)}"
+
 
 class FakeTts:
     def __init__(self):
@@ -86,6 +91,11 @@ class FakeTts:
 
     def speak(self, text: str, stop_event: threading.Event | None = None) -> None:
         self.spoken.append(text)
+
+    def speak_text_stream(self, text_chunks, stop_event: threading.Event | None = None) -> str:
+        text = "".join(text_chunks)
+        self.spoken.append(text)
+        return text
 
 
 class BargeFirstTts(FakeTts):
@@ -184,6 +194,28 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(
             [message.content for message in chat.calls[1]],
             ["system", "first", "reply 1", "second"],
+        )
+
+    def test_text_turn_streams_llm_response_to_tts_and_session(self) -> None:
+        config = AssistantConfig(
+            input=InputConfig(mode="text"),
+            llm=LlmConfig(system_prompt="system", stream=True),
+        )
+        assistant = VoiceAssistant(config)
+        chat = RecordingChat()
+        tts = FakeTts()
+        assistant.chat = chat
+        assistant.tts = tts
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            reply = assistant.run_text_turn("first")
+
+        self.assertEqual(reply.text, "reply 1")
+        self.assertEqual(tts.spoken, ["reply 1"])
+        self.assertEqual([message.content for message in chat.calls[0]], ["system", "first"])
+        self.assertEqual(
+            [message.content for message in assistant.session.messages],
+            ["system", "first", "reply 1"],
         )
 
     def test_run_conversation_processes_barge_in_as_next_turn(self) -> None:

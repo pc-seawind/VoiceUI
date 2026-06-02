@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import queue
 import threading
 import time
+from collections.abc import Iterator
 
 from voiceui.audio import create_audio_input
 from voiceui.debug import DebugRecorder, TurnDebugData
@@ -82,27 +84,134 @@ class VoiceAssistant:
     def _complete_transcript(self, transcript: str) -> tuple[AssistantReply, dict[str, int]]:
         self.session.add_user(transcript)
         timings: dict[str, int] = {}
-
-        llm_started = time.monotonic()
-        response = self.chat.complete(self.session.messages)
-        timings["llm"] = int((time.monotonic() - llm_started) * 1000)
-        print(f"llm> latency_ms={timings['llm']}")
-        if not response:
-            response = "I could not produce a response."
-        self.session.add_assistant(response)
-
-        tts_started = time.monotonic()
         barge_utterance = None
-        if self._should_listen_for_barge_in():
-            barge_utterance = self._speak_with_barge_in(response)
+
+        if self.config.llm.stream:
+            response, barge_utterance = self._stream_and_speak_response(timings)
         else:
-            self.tts.speak(response)
-        timings["tts"] = int((time.monotonic() - tts_started) * 1000)
+            llm_started = time.monotonic()
+            response = self.chat.complete(self.session.messages)
+            timings["llm"] = int((time.monotonic() - llm_started) * 1000)
+            print(f"llm> latency_ms={timings['llm']}")
+            if not response:
+                response = "I could not produce a response."
+            self.session.add_assistant(response)
+
+            tts_started = time.monotonic()
+            if self._should_listen_for_barge_in():
+                barge_utterance = self._speak_with_barge_in(response)
+            else:
+                self.tts.speak(response)
+            timings["tts"] = int((time.monotonic() - tts_started) * 1000)
+
         if barge_utterance is not None:
             self._pending_barge_utterance = barge_utterance
             timings["barge_in"] = barge_utterance.duration_ms
         print(f"tts> latency_ms={timings['tts']}")
         return AssistantReply(text=response), timings
+
+    def _stream_and_speak_response(self, timings: dict[str, int]) -> tuple[str, Utterance | None]:
+        messages = list(self.session.messages)
+        llm_stop_event = threading.Event()
+        llm_stream_stats: dict[str, int] = {}
+        text_chunks = self._start_tracked_llm_stream(
+            messages,
+            timings,
+            stop_event=llm_stop_event,
+            stream_stats=llm_stream_stats,
+        )
+        barge_utterance = None
+        tts_started = time.monotonic()
+        try:
+            if self._should_listen_for_barge_in():
+                response, barge_utterance = self._speak_text_stream_with_barge_in(
+                    text_chunks,
+                    llm_stop_event=llm_stop_event,
+                )
+            else:
+                response = self.tts.speak_text_stream(text_chunks)
+        finally:
+            llm_stop_event.set()
+        timings["tts"] = int((time.monotonic() - tts_started) * 1000)
+        self._print_streaming_llm_stats(timings, llm_stream_stats)
+
+        if not response:
+            response = "I could not produce a response."
+            fallback_tts_started = time.monotonic()
+            if self._should_listen_for_barge_in():
+                barge_utterance = self._speak_with_barge_in(response)
+            else:
+                self.tts.speak(response)
+            timings["tts"] += int((time.monotonic() - fallback_tts_started) * 1000)
+        self.session.add_assistant(response)
+        return response, barge_utterance
+
+    def _start_tracked_llm_stream(
+        self,
+        messages: list,
+        timings: dict[str, int],
+        stop_event: threading.Event | None = None,
+        stream_stats: dict[str, int] | None = None,
+    ) -> Iterator[str]:
+        items: queue.Queue[object] = queue.Queue()
+        done = object()
+
+        def producer() -> None:
+            llm_started = time.monotonic()
+            first_token_ms: int | None = None
+            chunks = 0
+            try:
+                for chunk in self.chat.stream_complete(messages):
+                    if stop_event is not None and stop_event.is_set():
+                        break
+                    if not chunk:
+                        continue
+                    if first_token_ms is None:
+                        first_token_ms = int((time.monotonic() - llm_started) * 1000)
+                        timings["llm_first_token"] = first_token_ms
+                    chunks += 1
+                    items.put(chunk)
+            except Exception as exc:
+                items.put(exc)
+            finally:
+                timings["llm"] = int((time.monotonic() - llm_started) * 1000)
+                if first_token_ms is None:
+                    timings["llm_first_token"] = timings["llm"]
+                if stream_stats is not None:
+                    stream_stats["chunks"] = chunks
+                items.put(done)
+
+        thread = threading.Thread(target=producer, name="voiceui-llm-stream", daemon=True)
+        thread.start()
+
+        while True:
+            if stop_event is not None and stop_event.is_set() and items.empty():
+                break
+            try:
+                item = items.get(timeout=0.1)
+            except queue.Empty:
+                if not thread.is_alive():
+                    break
+                continue
+            if item is done:
+                break
+            if isinstance(item, Exception):
+                raise item
+            yield item  # type: ignore[misc]
+
+    def _print_streaming_llm_stats(
+        self,
+        timings: dict[str, int],
+        stream_stats: dict[str, int],
+    ) -> None:
+        if "llm" not in timings:
+            return
+        print(
+            "llm> "
+            f"first_token_ms={timings.get('llm_first_token', timings['llm'])} "
+            f"latency_ms={timings['llm']} "
+            f"stream_chunks={stream_stats.get('chunks', 0)}"
+        )
 
     def _should_listen_for_barge_in(self) -> bool:
         return (
@@ -171,6 +280,74 @@ class VoiceAssistant:
             print(f"barge_in> captured duration_ms={utterance.duration_ms}")
             return utterance
         return None
+
+    def _speak_text_stream_with_barge_in(
+        self,
+        text_chunks: Iterator[str],
+        llm_stop_event: threading.Event | None = None,
+    ) -> tuple[str, Utterance | None]:
+        playback_stop_event = threading.Event()
+        monitor_stop_event = threading.Event()
+        state: dict[str, object] = {}
+
+        def on_speech_start() -> None:
+            if not playback_stop_event.is_set():
+                print("barge_in> speech_start")
+            playback_stop_event.set()
+            if llm_stop_event is not None:
+                llm_stop_event.set()
+
+        def monitor() -> None:
+            try:
+                utterance = self.vad.record(
+                    self.command_audio,
+                    start_timeout_seconds=0.0,
+                    stop_event=monitor_stop_event,
+                    on_speech_start=on_speech_start,
+                )
+            except SpeechStartTimeoutError:
+                return
+            except Exception as exc:
+                state["error"] = exc
+                return
+            state["utterance"] = utterance
+
+        monitor_thread = threading.Thread(
+            target=monitor,
+            name="voiceui-barge-in",
+            daemon=True,
+        )
+        monitor_thread.start()
+
+        try:
+            text = self.tts.speak_text_stream(text_chunks, stop_event=playback_stop_event)
+        finally:
+            if playback_stop_event.is_set():
+                max_wait_seconds = max(
+                    1.0,
+                    self.config.vad.max_speech_ms / 1000
+                    + self.config.vad.silence_ms / 1000
+                    + 1.0,
+                )
+                monitor_thread.join(timeout=max_wait_seconds)
+                if monitor_thread.is_alive():
+                    monitor_stop_event.set()
+                    monitor_thread.join(timeout=1.0)
+                    print("barge_in> timeout waiting_for_utterance")
+            else:
+                monitor_stop_event.set()
+                monitor_thread.join(timeout=1.0)
+
+        error = state.get("error")
+        if isinstance(error, Exception):
+            print(f"barge_in> error={error}")
+            return text, None
+
+        utterance = state.get("utterance")
+        if isinstance(utterance, Utterance):
+            print(f"barge_in> captured duration_ms={utterance.duration_ms}")
+            return text, utterance
+        return text, None
 
     def _wait_for_wake(self) -> tuple[WakeEvent, int]:
         wake_started = time.monotonic()

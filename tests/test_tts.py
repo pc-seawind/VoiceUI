@@ -16,8 +16,10 @@ from voiceui.tts import (
     MimoTextToSpeech,
     OpenAISpeechTextToSpeech,
     SystemTextToSpeech,
+    TextToSpeech,
     _aliyun_tts_audio_format,
     _extract_stream_audio,
+    _iter_stream_input_text,
     _mimo_audio_format,
     _openai_speech_response_format,
     _play_audio_bytes,
@@ -174,6 +176,33 @@ class TtsTests(unittest.TestCase):
             ["你好，我在。", "有什么可以帮你？"],
         )
 
+    def test_iter_stream_input_text_flushes_soft_breaks_and_final_text(self) -> None:
+        self.assertEqual(
+            list(
+                _iter_stream_input_text(
+                    iter(["前面十二个字左右，", "后面继续。"]),
+                    max_chars=32,
+                    min_chars=6,
+                )
+            ),
+            ["前面十二个字左右，", "后面继续。"],
+        )
+
+    def test_default_text_stream_tts_speaks_segments_and_returns_full_text(self) -> None:
+        class SegmentTts(TextToSpeech):
+            def __init__(self):
+                self.segments: list[str] = []
+
+            def speak(self, text: str, stop_event=None) -> None:
+                self.segments.append(text)
+
+        tts = SegmentTts()
+
+        text = tts.speak_text_stream(iter(["第一句。", "第二句。"]))
+
+        self.assertEqual(text, "第一句。第二句。")
+        self.assertEqual(tts.segments, ["第一句。", "第二句。"])
+
     def test_aliyun_nls_synthesize_uses_env_credentials(self) -> None:
         config = TtsConfig(
             provider="aliyun_nls",
@@ -208,6 +237,37 @@ class TtsTests(unittest.TestCase):
         self.assertEqual(stream_tts.call_args.kwargs["config"], config)
         self.assertEqual(stream_tts.call_args.kwargs["token"], "token")
         self.assertEqual(stream_tts.call_args.kwargs["text"], "你好")
+
+    def test_aliyun_text_stream_tts_consumes_llm_chunks_and_returns_full_text(self) -> None:
+        config = TtsConfig(
+            provider="aliyun_nls",
+            endpoint="wss://nls-gateway-cn-beijing.aliyuncs.com/ws/v1",
+            voice="longxiaochun",
+            audio_format="pcm",
+            sample_rate=24000,
+            stream=True,
+        )
+        tts = AliyunNlsTextToSpeech(config)
+        tts._token = "token"
+        consumed_text: list[str] = []
+
+        def stream_tts(**kwargs):
+            consumed_text.extend(list(kwargs["text_chunks"]))
+            return iter([b"\x00\x00"])
+
+        with patch("voiceui.tts._aliyun_stream_input_tts_chunks_from_text_chunks") as stream:
+            with patch("voiceui.tts._play_pcm_stream") as play_pcm_stream:
+                stream.side_effect = stream_tts
+                play_pcm_stream.side_effect = lambda chunks, **_kwargs: sum(1 for _ in chunks)
+
+                with contextlib.redirect_stdout(io.StringIO()):
+                    text = tts.speak_text_stream(iter(["你好，", "我在。"]))
+
+        self.assertEqual(text, "你好，我在。")
+        self.assertEqual(consumed_text, ["你好，", "我在。"])
+        self.assertEqual(stream.call_args.kwargs["config"], config)
+        self.assertEqual(stream.call_args.kwargs["token"], "token")
+        self.assertEqual(play_pcm_stream.call_args.kwargs["sample_rate"], 24000)
 
     def test_extract_stream_audio_supports_delta_and_message_shapes(self) -> None:
         delta_audio = {"data": "delta"}

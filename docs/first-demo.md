@@ -111,6 +111,10 @@ assistant> ...
 
 With `config.demo.mify.yaml`, MiMo TTS also speaks the answer through the
 configured output device.
+The demo configs enable `llm.stream: true`, so this step should also print
+`llm> first_token_ms=... latency_ms=... stream_chunks=...`. For a quick
+LLM-only streaming smoke test without audio playback, temporarily set
+`tts.provider` to `console` in a copied config.
 
 ## 7. Run the First Voice Demo
 
@@ -147,6 +151,10 @@ For streaming TTS, VoiceUI requests `audio.format: pcm16` and plays chunks as
 they arrive. If you switch to a MiMo-V2.5-TTS model, note that the current
 MiMo-V2.5-TTS docs describe low-latency streaming as compatibility mode rather
 than true chunked output.
+LLM streaming is connected to TTS streaming: text chunks are fed into
+`tts.speak_text_stream()` immediately. Aliyun NLS stream-input TTS consumes
+those chunks directly; OpenAI-compatible speech and MiMo TTS fall back to
+sentence-sized segment playback.
 
 To re-test ASR with a saved turn:
 

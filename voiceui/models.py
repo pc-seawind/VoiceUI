@@ -92,6 +92,7 @@ class LlmConfig:
     api_key_env: str | None = None
     temperature: float = 0.3
     timeout_seconds: float = 60.0
+    stream: bool = False
     system_prompt: str = (
         "You are a concise home voice assistant. Answer briefly and ask for "
         "confirmation before sensitive actions."

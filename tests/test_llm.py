@@ -47,6 +47,33 @@ class LlmTests(unittest.TestCase):
         self.assertEqual(payload["messages"], [{"role": "user", "content": "hello"}])
         self.assertEqual(post_json.call_args.kwargs["headers"], {"api-key": "test-token"})
 
+    def test_mimo_client_streams_chat_completion_chunks(self) -> None:
+        config = LlmConfig(
+            provider="mify",
+            endpoint="https://api.xiaomimimo.com/v1",
+            api_key_env="MIFY_API_KEY",
+            model="xiaomi/mimo-v2.5",
+        )
+        client = MimoChatClient(config)
+        messages = [ChatMessage(role="user", content="hello")]
+
+        with patch.dict("os.environ", {"MIFY_API_KEY": "test-token"}):
+            with patch("voiceui.llm._post_json_stream") as post_json_stream:
+                post_json_stream.return_value = iter(
+                    [
+                        {"choices": [{"delta": {"content": "你"}}]},
+                        {"choices": [{"delta": {"content": "好"}}]},
+                    ]
+                )
+                chunks = list(client.stream_complete(messages))
+
+        self.assertEqual(chunks, ["你", "好"])
+        url, payload = post_json_stream.call_args.args[:2]
+        self.assertEqual(url, "https://api.xiaomimimo.com/v1/chat/completions")
+        self.assertTrue(payload["stream"])
+        self.assertEqual(payload["model"], "xiaomi/mimo-v2.5")
+        self.assertEqual(post_json_stream.call_args.kwargs["headers"], {"api-key": "test-token"})
+
     def test_mimo_client_requires_configured_api_key_env(self) -> None:
         config = LlmConfig(
             provider="mify",
@@ -73,6 +100,44 @@ class LlmTests(unittest.TestCase):
         self.assertEqual(response, "hi")
         _url, payload = post_json.call_args.args[:2]
         self.assertEqual(payload["messages"], [{"role": "user", "content": "hello"}])
+
+    def test_openai_compatible_client_streams_delta_content(self) -> None:
+        config = LlmConfig(
+            provider="openai_compatible",
+            endpoint="http://openai-compatible.local",
+            model="demo-model",
+        )
+        client = OpenAICompatibleChatClient(config)
+
+        with patch("voiceui.llm._post_json_stream") as post_json_stream:
+            post_json_stream.return_value = iter(
+                [
+                    {"choices": [{"delta": {"content": "hello"}}]},
+                    {"choices": [{"delta": {"content": " world"}}]},
+                ]
+            )
+            chunks = list(client.stream_complete([ChatMessage(role="user", content="hello")]))
+
+        self.assertEqual(chunks, ["hello", " world"])
+        _url, payload = post_json_stream.call_args.args[:2]
+        self.assertTrue(payload["stream"])
+
+    def test_ollama_client_streams_message_content(self) -> None:
+        config = LlmConfig(provider="ollama", endpoint="http://ollama.local", model="demo-model")
+        client = OllamaChatClient(config)
+
+        with patch("voiceui.llm._post_json_stream") as post_json_stream:
+            post_json_stream.return_value = iter(
+                [
+                    {"message": {"content": "hello"}, "done": False},
+                    {"message": {"content": " world"}, "done": True},
+                ]
+            )
+            chunks = list(client.stream_complete([ChatMessage(role="user", content="hello")]))
+
+        self.assertEqual(chunks, ["hello", " world"])
+        _url, payload = post_json_stream.call_args.args[:2]
+        self.assertTrue(payload["stream"])
 
 
 if __name__ == "__main__":

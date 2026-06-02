@@ -25,15 +25,44 @@ class TextToSpeech:
     def speak(self, text: str, stop_event: threading.Event | None = None) -> None:
         raise NotImplementedError
 
+    def speak_text_stream(
+        self,
+        text_chunks: Iterator[str],
+        stop_event: threading.Event | None = None,
+    ) -> str:
+        full_text_parts: list[str] = []
+        tracked_chunks = _track_text_chunks(text_chunks, full_text_parts, stop_event)
+        for segment in _iter_stream_input_text(tracked_chunks, max_chars=48, min_chars=16):
+            if _stop_requested(stop_event):
+                break
+            self.speak(segment, stop_event=stop_event)
+        return "".join(full_text_parts).strip()
+
 
 class ConsoleTextToSpeech(TextToSpeech):
     def speak(self, text: str, stop_event: threading.Event | None = None) -> None:
-        print(f"assistant> {text}")
+        _print_assistant(text)
+
+    def speak_text_stream(
+        self,
+        text_chunks: Iterator[str],
+        stop_event: threading.Event | None = None,
+    ) -> str:
+        full_text_parts: list[str] = []
+        printed = False
+        for chunk in _track_text_chunks(text_chunks, full_text_parts, stop_event):
+            if not printed:
+                _safe_stdout_write("assistant> ", flush=True)
+                printed = True
+            _safe_stdout_write(chunk, flush=True)
+        if printed:
+            _safe_stdout_write("\n")
+        return "".join(full_text_parts).strip()
 
 
 class SystemTextToSpeech(TextToSpeech):
     def speak(self, text: str, stop_event: threading.Event | None = None) -> None:
-        print(f"assistant> {text}")
+        _print_assistant(text)
         if _stop_requested(stop_event):
             return
         if sys.platform == "win32":
@@ -67,7 +96,7 @@ class MimoTextToSpeech(TextToSpeech):
         self.config = config
 
     def speak(self, text: str, stop_event: threading.Event | None = None) -> None:
-        print(f"assistant> {text}")
+        _print_assistant(text)
         if self.config.stream:
             self.speak_streaming(text, stop_event=stop_event)
             return
@@ -178,7 +207,7 @@ class OpenAISpeechTextToSpeech(TextToSpeech):
         self.config = config
 
     def speak(self, text: str, stop_event: threading.Event | None = None) -> None:
-        print(f"assistant> {text}")
+        _print_assistant(text)
         if self.config.stream:
             self.speak_streaming(text, stop_event=stop_event)
             return
@@ -275,7 +304,7 @@ class AliyunNlsTextToSpeech(TextToSpeech):
         self._token: str | None = None
 
     def speak(self, text: str, stop_event: threading.Event | None = None) -> None:
-        print(f"assistant> {text}")
+        _print_assistant(text)
         if self.config.stream:
             self.speak_streaming(text, stop_event=stop_event)
             return
@@ -344,6 +373,59 @@ class AliyunNlsTextToSpeech(TextToSpeech):
             f"stream_chunks={chunks} "
             f"playback_latency_ms={int((time.monotonic() - playback_started) * 1000)}"
         )
+
+    def speak_text_stream(
+        self,
+        text_chunks: Iterator[str],
+        stop_event: threading.Event | None = None,
+    ) -> str:
+        request_started = time.monotonic()
+        first_audio_ms: int | None = None
+        chunks = 0
+        full_text_parts: list[str] = []
+
+        def tracked_chunks() -> Iterator[str]:
+            printed = False
+            for chunk in _track_text_chunks(text_chunks, full_text_parts, stop_event):
+                if not printed:
+                    _safe_stdout_write("assistant> ", flush=True)
+                    printed = True
+                _safe_stdout_write(chunk, flush=True)
+                yield chunk
+            if printed:
+                _safe_stdout_write("\n")
+
+        def audio_chunks() -> Iterator[bytes]:
+            nonlocal first_audio_ms, chunks
+            for chunk in _aliyun_stream_input_tts_chunks_from_text_chunks(
+                config=self.config,
+                token=self._token_or_create(),
+                text_chunks=tracked_chunks(),
+                stop_event=stop_event,
+            ):
+                if _stop_requested(stop_event):
+                    break
+                if first_audio_ms is None:
+                    first_audio_ms = int((time.monotonic() - request_started) * 1000)
+                chunks += 1
+                yield chunk
+
+        playback_started = time.monotonic()
+        written_chunks = _play_pcm_stream(
+            audio_chunks(),
+            sample_rate=self.config.sample_rate,
+            device=self.config.playback_device,
+            stop_event=stop_event,
+        )
+        if written_chunks == 0 and full_text_parts and not _stop_requested(stop_event):
+            raise RuntimeError("Aliyun NLS streaming TTS response did not contain audio chunks.")
+        print(
+            "tts> stream_first_audio_ms="
+            f"{first_audio_ms if first_audio_ms is not None else 0} "
+            f"stream_chunks={chunks} "
+            f"playback_latency_ms={int((time.monotonic() - playback_started) * 1000)}"
+        )
+        return "".join(full_text_parts).strip()
 
     def _token_or_create(self) -> str:
         if self._token is None:
@@ -436,6 +518,21 @@ def synthesize_to_wav(config: TtsConfig, text: str, output_path: str | Path) -> 
         write_pcm16_wav(path, audio_data.data, sample_rate=config.sample_rate)
         return path
     raise RuntimeError(f"Cannot save unsupported TTS audio format as WAV: {audio_data.format}")
+
+
+def _print_assistant(text: str) -> None:
+    _safe_stdout_write(f"assistant> {text}\n")
+
+
+def _safe_stdout_write(text: str, flush: bool = False) -> None:
+    try:
+        sys.stdout.write(text)
+    except UnicodeEncodeError:
+        encoding = sys.stdout.encoding or "utf-8"
+        safe_text = text.encode(encoding, errors="replace").decode(encoding, errors="replace")
+        sys.stdout.write(safe_text)
+    if flush:
+        sys.stdout.flush()
 
 
 def _run_tts_command(command: list[str], text: str) -> None:
@@ -578,6 +675,21 @@ def _aliyun_stream_input_tts_chunks(
     text: str,
     stop_event: threading.Event | None = None,
 ) -> Iterator[bytes]:
+    yield from _aliyun_stream_input_tts_chunks_from_text_chunks(
+        config=config,
+        token=token,
+        text_chunks=iter(_split_stream_input_text(text)),
+        stop_event=stop_event,
+    )
+
+
+def _aliyun_stream_input_tts_chunks_from_text_chunks(
+    *,
+    config: TtsConfig,
+    token: str,
+    text_chunks: Iterator[str],
+    stop_event: threading.Event | None = None,
+) -> Iterator[bytes]:
     try:
         import nls  # type: ignore[import-untyped]
     except ImportError as exc:
@@ -616,11 +728,11 @@ def _aliyun_stream_input_tts_chunks(
                 speech_rate=config.speech_rate,
                 pitch_rate=config.pitch_rate,
             )
-            for text_chunk in _split_stream_input_text(text):
+            for text_chunk in _iter_stream_input_text(text_chunks, max_chars=32, min_chars=12):
                 if _stop_requested(stop_event):
                     break
                 synthesizer.sendStreamInputTts(text_chunk)
-                time.sleep(0.05)
+                time.sleep(0.02)
             synthesizer.stopStreamInputTts()
         except Exception as exc:
             items.put(exc)
@@ -648,6 +760,7 @@ def _aliyun_stream_input_tts_chunks(
             break
         if isinstance(item, Exception):
             raise item
+        deadline = time.monotonic() + max(1.0, config.timeout_seconds)
         yield item  # type: ignore[misc]
 
 
@@ -671,18 +784,58 @@ _STREAM_SENTENCE_BREAKS = {
     "\n",
 }
 
+_STREAM_SOFT_BREAKS = {
+    "\uff0c",
+    "\u3001",
+    ",",
+    "\uff1a",
+    ":",
+}
+
 
 def _split_stream_input_text(text: str, max_chars: int = 40) -> list[str]:
-    parts: list[str] = []
+    return list(
+        _iter_stream_input_text(
+            iter([text.strip()]),
+            max_chars=max_chars,
+            min_chars=max_chars,
+        )
+    )
+
+
+def _iter_stream_input_text(
+    text_chunks: Iterator[str],
+    max_chars: int = 40,
+    min_chars: int = 12,
+) -> Iterator[str]:
     current = ""
-    for char in text.strip():
-        current += char
-        if char in _STREAM_SENTENCE_BREAKS or len(current) >= max_chars:
-            parts.append(current)
-            current = ""
-    if current:
-        parts.append(current)
-    return [part for part in parts if part.strip()]
+    for chunk in text_chunks:
+        for char in chunk:
+            current += char
+            if (
+                char in _STREAM_SENTENCE_BREAKS
+                or len(current) >= max_chars
+                or (char in _STREAM_SOFT_BREAKS and len(current) >= min_chars)
+            ):
+                if current.strip():
+                    yield current
+                current = ""
+    if current.strip():
+        yield current
+
+
+def _track_text_chunks(
+    text_chunks: Iterator[str],
+    full_text_parts: list[str],
+    stop_event: threading.Event | None = None,
+) -> Iterator[str]:
+    for chunk in text_chunks:
+        if _stop_requested(stop_event):
+            break
+        if not chunk:
+            continue
+        full_text_parts.append(chunk)
+        yield chunk
 
 
 class SynthesizedAudio:

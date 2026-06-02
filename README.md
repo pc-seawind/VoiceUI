@@ -274,6 +274,7 @@ llm:
   endpoint: https://api.xiaomimimo.com/v1
   api_key_env: MIFY_API_KEY
   model: xiaomi/mimo-v2.5
+  stream: true
 ```
 
 Example ASR config:
@@ -293,6 +294,11 @@ The MiMo-compatible path uses an `api-key` header populated from `api_key_env`.
 Replace `endpoint` with your Mify MiMo-compatible base URL when you have it.
 `api_key_env: MIFY_API_KEY` resolves from either the process environment or the
 local `.env` file.
+When `llm.stream: true` is enabled, VoiceUI requests streaming chat completions
+and logs `llm> first_token_ms`, total `latency_ms`, and `stream_chunks`.
+Streaming LLM output is sent directly into `tts.speak_text_stream()`. Aliyun NLS
+TTS uses true stream-input synthesis, while other TTS providers speak short
+sentence-sized segments as they become available.
 
 Aliyun NLS can be used as a non-LLM ASR backend. Install its SDK dependencies
 with `pip install -e ".[aliyun]"`, then put these values in `.env`:
