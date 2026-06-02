@@ -197,6 +197,13 @@ class VoiceAssistant:
                 break
             if isinstance(item, Exception):
                 raise item
+            if (
+                stream_stats is not None
+                and not stream_stats.get("first_token_logged")
+                and "llm_first_token" in timings
+            ):
+                stream_stats["first_token_logged"] = 1
+                print(f"llm> first_token_ms={timings['llm_first_token']}")
             yield item  # type: ignore[misc]
 
     def _print_streaming_llm_stats(
@@ -208,8 +215,8 @@ class VoiceAssistant:
             return
         print(
             "llm> "
-            f"first_token_ms={timings.get('llm_first_token', timings['llm'])} "
             f"latency_ms={timings['llm']} "
+            f"first_token_ms={timings.get('llm_first_token', timings['llm'])} "
             f"stream_chunks={stream_stats.get('chunks', 0)}"
         )
 

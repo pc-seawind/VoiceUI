@@ -193,6 +193,24 @@ class TtsTests(unittest.TestCase):
             ["前面十二个字左右，", "后面继续。"],
         )
 
+    def test_iter_stream_input_text_flushes_after_max_wait(self) -> None:
+        def slow_chunks():
+            yield "abcd"
+            time.sleep(0.02)
+            yield "e"
+
+        self.assertEqual(
+            list(
+                _iter_stream_input_text(
+                    slow_chunks(),
+                    max_chars=100,
+                    min_chars=4,
+                    max_wait_ms=5,
+                )
+            ),
+            ["abcde"],
+        )
+
     def test_default_text_stream_tts_speaks_segments_and_returns_full_text(self) -> None:
         class SegmentTts(TextToSpeech):
             def __init__(self):

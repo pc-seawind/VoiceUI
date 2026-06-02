@@ -12,7 +12,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 from voiceui.aliyun import get_aliyun_nls_token
@@ -381,6 +381,10 @@ class AliyunNlsTextToSpeech(TextToSpeech):
     ) -> str:
         request_started = time.monotonic()
         first_audio_ms: int | None = None
+        first_text_segment_ms: int | None = None
+        stream_started_ms: int | None = None
+        first_text_sent_ms: int | None = None
+        first_text_chars = 0
         chunks = 0
         full_text_parts: list[str] = []
 
@@ -395,6 +399,25 @@ class AliyunNlsTextToSpeech(TextToSpeech):
             if printed:
                 _safe_stdout_write("\n")
 
+        def on_tts_event(name: str, fields: dict[str, object]) -> None:
+            nonlocal first_text_segment_ms, stream_started_ms, first_text_sent_ms
+            nonlocal first_text_chars
+            elapsed_ms = int((time.monotonic() - request_started) * 1000)
+            if name == "first_text_segment":
+                first_text_segment_ms = elapsed_ms
+                first_text_chars = int(fields.get("chars") or 0)
+                print(
+                    "tts_debug> "
+                    f"first_text_segment_ms={elapsed_ms} "
+                    f"chars={first_text_chars}"
+                )
+            elif name == "stream_started":
+                stream_started_ms = elapsed_ms
+                print(f"tts_debug> aliyun_stream_started_ms={elapsed_ms}")
+            elif name == "first_text_sent":
+                first_text_sent_ms = elapsed_ms
+                print(f"tts_debug> first_text_sent_ms={elapsed_ms}")
+
         def audio_chunks() -> Iterator[bytes]:
             nonlocal first_audio_ms, chunks
             for chunk in _aliyun_stream_input_tts_chunks_from_text_chunks(
@@ -402,6 +425,7 @@ class AliyunNlsTextToSpeech(TextToSpeech):
                 token=self._token_or_create(),
                 text_chunks=tracked_chunks(),
                 stop_event=stop_event,
+                on_event=on_tts_event,
             ):
                 if _stop_requested(stop_event):
                     break
@@ -422,6 +446,10 @@ class AliyunNlsTextToSpeech(TextToSpeech):
         print(
             "tts> stream_first_audio_ms="
             f"{first_audio_ms if first_audio_ms is not None else 0} "
+            f"first_text_segment_ms={first_text_segment_ms if first_text_segment_ms is not None else 0} "
+            f"aliyun_stream_started_ms={stream_started_ms if stream_started_ms is not None else 0} "
+            f"first_text_sent_ms={first_text_sent_ms if first_text_sent_ms is not None else 0} "
+            f"first_text_chars={first_text_chars} "
             f"stream_chunks={chunks} "
             f"playback_latency_ms={int((time.monotonic() - playback_started) * 1000)}"
         )
@@ -689,6 +717,7 @@ def _aliyun_stream_input_tts_chunks_from_text_chunks(
     token: str,
     text_chunks: Iterator[str],
     stop_event: threading.Event | None = None,
+    on_event: Callable[[str, dict[str, object]], None] | None = None,
 ) -> Iterator[bytes]:
     try:
         import nls  # type: ignore[import-untyped]
@@ -713,10 +742,21 @@ def _aliyun_stream_input_tts_chunks_from_text_chunks(
     def producer() -> None:
         synthesizer = None
         try:
-            text_segments = _iter_stream_input_text(text_chunks, max_chars=32, min_chars=12)
+            text_segments = _iter_stream_input_text(
+                text_chunks,
+                max_chars=32,
+                min_chars=8,
+                max_wait_ms=400,
+            )
             first_text_chunk = _next_stream_input_text(text_segments, stop_event)
             if first_text_chunk is None:
                 return
+            _emit_tts_event(
+                on_event,
+                "first_text_segment",
+                chars=len(first_text_chunk),
+                text_preview=first_text_chunk[:16],
+            )
 
             synthesizer = nls.NlsStreamInputTtsSynthesizer(
                 url=config.endpoint,
@@ -734,9 +774,11 @@ def _aliyun_stream_input_tts_chunks_from_text_chunks(
                 speech_rate=config.speech_rate,
                 pitch_rate=config.pitch_rate,
             )
+            _emit_tts_event(on_event, "stream_started")
 
             if not _stop_requested(stop_event):
                 synthesizer.sendStreamInputTts(first_text_chunk)
+                _emit_tts_event(on_event, "first_text_sent", chars=len(first_text_chunk))
                 time.sleep(0.02)
 
             for text_chunk in text_segments:
@@ -819,19 +861,34 @@ def _iter_stream_input_text(
     text_chunks: Iterator[str],
     max_chars: int = 40,
     min_chars: int = 12,
+    max_wait_ms: int | None = None,
 ) -> Iterator[str]:
     current = ""
+    current_started: float | None = None
     for chunk in text_chunks:
         for char in chunk:
+            if current_started is None:
+                current_started = time.monotonic()
             current += char
+            waited_ms = (
+                int((time.monotonic() - current_started) * 1000)
+                if current_started is not None
+                else 0
+            )
             if (
                 char in _STREAM_SENTENCE_BREAKS
                 or len(current) >= max_chars
                 or (char in _STREAM_SOFT_BREAKS and len(current) >= min_chars)
+                or (
+                    max_wait_ms is not None
+                    and len(current) >= min_chars
+                    and waited_ms >= max_wait_ms
+                )
             ):
                 if current.strip():
                     yield current
                 current = ""
+                current_started = None
     if current.strip():
         yield current
 
@@ -860,6 +917,15 @@ def _next_stream_input_text(
         if text_segment.strip():
             return text_segment
     return None
+
+
+def _emit_tts_event(
+    on_event: Callable[[str, dict[str, object]], None] | None,
+    name: str,
+    **fields: object,
+) -> None:
+    if on_event is not None:
+        on_event(name, fields)
 
 
 class SynthesizedAudio:
