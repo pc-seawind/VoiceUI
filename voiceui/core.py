@@ -16,6 +16,20 @@ from voiceui.wake import create_wake_detector
 from voiceui.wake_ack import create_wake_ack_player
 
 
+class _WakeAckHandle:
+    def __init__(
+        self,
+        thread: threading.Thread,
+        result: dict[str, int],
+    ):
+        self.thread = thread
+        self.result = result
+
+    def join(self) -> int:
+        self.thread.join()
+        return self.result.get("latency_ms", 0)
+
+
 class VoiceAssistant:
     def __init__(self, config: AssistantConfig):
         self.config = config
@@ -158,23 +172,31 @@ class VoiceAssistant:
         )
         return wake, wake_ms
 
-    def _play_wake_ack(self) -> int:
-        ack_started = time.monotonic()
-        try:
-            self.wake_ack.play()
-        except Exception as exc:
-            print(f"wake_ack> error={exc}")
-            return 0
-        ack_ms = int((time.monotonic() - ack_started) * 1000)
-        if ack_ms:
-            print(f"wake_ack> latency_ms={ack_ms}")
-        return ack_ms
+    def _start_wake_ack(self) -> _WakeAckHandle:
+        result: dict[str, int] = {}
+
+        def play() -> None:
+            ack_started = time.monotonic()
+            try:
+                self.wake_ack.play()
+            except Exception as exc:
+                print(f"wake_ack> error={exc}")
+                result["latency_ms"] = 0
+                return
+            ack_ms = int((time.monotonic() - ack_started) * 1000)
+            result["latency_ms"] = ack_ms
+            if ack_ms:
+                print(f"wake_ack> latency_ms={ack_ms} mode=background")
+
+        thread = threading.Thread(target=play, name="voiceui-wake-ack", daemon=True)
+        thread.start()
+        return _WakeAckHandle(thread=thread, result=result)
 
     def _run_audio_turn(
         self,
         wake: WakeEvent,
         wake_ms: int,
-        wake_ack_ms: int = 0,
+        wake_ack_handle: _WakeAckHandle | None = None,
         speech_start_timeout_seconds: float = 0.0,
     ) -> tuple[AssistantReply, str]:
         if self._pending_barge_utterance is not None:
@@ -190,6 +212,8 @@ class VoiceAssistant:
             )
             vad_ms = int((time.monotonic() - vad_started) * 1000)
             print(f"vad> duration_ms={utterance.duration_ms} latency_ms={vad_ms}")
+
+        wake_ack_ms = wake_ack_handle.join() if wake_ack_handle is not None else 0
 
         stt_started = time.monotonic()
         transcript = self.stt.transcribe(utterance)
@@ -239,8 +263,12 @@ class VoiceAssistant:
             return self.run_text_turn(text)
 
         wake, wake_ms = self._wait_for_wake()
-        wake_ack_ms = self._play_wake_ack()
-        reply, _transcript = self._run_audio_turn(wake, wake_ms, wake_ack_ms=wake_ack_ms)
+        wake_ack_handle = self._start_wake_ack()
+        reply, _transcript = self._run_audio_turn(
+            wake,
+            wake_ms,
+            wake_ack_handle=wake_ack_handle,
+        )
         return reply
 
     def run_conversation(self) -> AssistantReply:
@@ -248,9 +276,13 @@ class VoiceAssistant:
             return self.run_once()
 
         wake, wake_ms = self._wait_for_wake()
-        wake_ack_ms = self._play_wake_ack()
+        wake_ack_handle = self._start_wake_ack()
         self.session.reset()
-        reply, transcript = self._run_audio_turn(wake, wake_ms, wake_ack_ms=wake_ack_ms)
+        reply, transcript = self._run_audio_turn(
+            wake,
+            wake_ms,
+            wake_ack_handle=wake_ack_handle,
+        )
         follow_up_seconds = self.config.conversation.follow_up_seconds
         if (follow_up_seconds <= 0 or not transcript) and self._pending_barge_utterance is None:
             return reply

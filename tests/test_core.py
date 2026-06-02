@@ -27,9 +27,14 @@ class FakeWake:
 
 
 class FakeVad:
-    def __init__(self, items: list[Utterance | type[SpeechStartTimeoutError]]):
+    def __init__(
+        self,
+        items: list[Utterance | type[SpeechStartTimeoutError]],
+        on_record=None,
+    ):
         self.items = items
         self.start_timeouts: list[float] = []
+        self.on_record = on_record
 
     def record(
         self,
@@ -39,6 +44,8 @@ class FakeVad:
         on_speech_start=None,
     ) -> Utterance:
         self.start_timeouts.append(start_timeout_seconds)
+        if self.on_record is not None:
+            self.on_record()
         if stop_event is not None and stop_event.is_set():
             raise SpeechStartTimeoutError("Stopped waiting for speech.")
         if not self.items:
@@ -95,7 +102,48 @@ class FakeWakeAck:
         self.calls += 1
 
 
+class SlowWakeAck(FakeWakeAck):
+    def __init__(self, delay_seconds: float):
+        super().__init__()
+        self.delay_seconds = delay_seconds
+        self.started = threading.Event()
+        self.finished = threading.Event()
+
+    def play(self) -> None:
+        self.calls += 1
+        self.started.set()
+        time.sleep(self.delay_seconds)
+        self.finished.set()
+
+
 class CoreTests(unittest.TestCase):
+    def test_run_once_starts_vad_while_wake_ack_is_playing(self) -> None:
+        config = AssistantConfig(
+            input=InputConfig(mode="audio"),
+            wake=WakeConfig(engine="disabled"),
+            conversation=ConversationConfig(follow_up_seconds=0),
+            llm=LlmConfig(system_prompt="system"),
+        )
+        wake_ack = SlowWakeAck(delay_seconds=0.1)
+        vad_saw_ack_finished: list[bool] = []
+        assistant = VoiceAssistant(config)
+        assistant.wake = FakeWake()
+        assistant.wake_ack = wake_ack
+        assistant.vad = FakeVad(
+            [Utterance(pcm=b"first", sample_rate=16000, duration_ms=80)],
+            on_record=lambda: vad_saw_ack_finished.append(wake_ack.finished.is_set()),
+        )
+        assistant.stt = FakeStt()
+        assistant.chat = RecordingChat()
+        assistant.tts = FakeTts()
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            assistant.run_once()
+
+        self.assertEqual(wake_ack.calls, 1)
+        self.assertEqual(vad_saw_ack_finished, [False])
+        self.assertTrue(wake_ack.finished.is_set())
+
     def test_run_conversation_keeps_context_for_follow_up_without_second_wake(self) -> None:
         config = AssistantConfig(
             input=InputConfig(mode="audio"),

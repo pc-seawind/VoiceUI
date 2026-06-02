@@ -131,6 +131,11 @@ itself starts late, it is a VAD boundary issue; inspect `vad_debug>` and raise
 `vad.pre_roll_ms`. If the WAV is complete but the transcript starts late, it is
 an ASR issue; the Aliyun demo prints `stt_debug>` and sends
 `stt.leading_silence_ms: 200` before the utterance.
+The local wake acknowledgement plays in the background, so VAD starts
+immediately after wake detection instead of waiting for the "我在" WAV to finish.
+If you say the wake word and command as one continuous phrase, the command can
+still begin before wake detection returns; that needs a future rolling audio
+buffer around wake detection.
 
 With `config.demo.mify.yaml`, TTS also uses Mify/MiMo through streaming
 `xiaomi/mimo-v2-tts`. If you only want local OS speech while testing LLM/ASR,

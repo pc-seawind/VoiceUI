@@ -228,6 +228,8 @@ This config uses Aliyun NLS for ASR and TTS, keeps Mify for LLM, and keeps
 `conversation.follow_up_seconds: 10` for follow-up turns without another wake
 word. It also enables `conversation.barge_in_enabled: true`, so you can speak
 over a TTS answer to interrupt it and start the next turn.
+The local wake acknowledgement plays in the background; VAD starts immediately
+after wake detection so command audio is not blocked by the "我在" WAV.
 
 Each audio turn writes debug artifacts under `debug_sessions/` when
 `debug.enabled` is true. The folder contains `utterance.wav` and
@@ -236,6 +238,9 @@ For clipped-start issues, listen to `utterance.wav`: if the beginning is missing
 there, tune VAD; if the WAV is complete but the transcript is missing the
 beginning, tune ASR. The Aliyun demo also prints `stt_debug>` with the exact
 audio length sent to NLS and adds `stt.leading_silence_ms: 200` before sending.
+If you speak the wake word and command as one continuous phrase, the command can
+still start before the wake detector returns. That requires a future rolling
+audio buffer around wake detection.
 
 ## Recommended MVP Setup
 
