@@ -44,8 +44,10 @@ On the first development machine, the XVF3800 appeared as:
 reSpeaker XVF3800 4-Mic Array
 ```
 
-If the default input is not XVF3800, copy `config.demo.mock.yaml` and set
-`audio.device` to the device index or exact device name from the list.
+The demo configs pin the current machine's XVF3800 devices explicitly:
+`audio.device: 1` for capture and `playback_device: 4` for wake acknowledgement
+and TTS playback. If Windows changes the device indexes, update those fields
+from `python -m voiceui --list-audio-devices`.
 
 ## 3. Record a Smoke Sample
 

@@ -9,7 +9,7 @@ audio:
   sample_rate: 16000
   channels: 2
   block_ms: 80
-  device: reSpeaker XVF3800
+  device: 1
   wake_stream_channel: 1
   command_stream_channel: 0
   input_gain_db: 0.0
@@ -24,7 +24,7 @@ wake:
 wake_ack:
   enabled: true
   wav_path: default
-  playback_device: default
+  playback_device: 4
 
 vad:
   engine: silero
@@ -61,7 +61,7 @@ tts:
   provider: console
   piper_url: http://localhost:5000
   piper_model: models/voice.onnx
-  playback_device: default
+  playback_device: 4
 
 conversation:
   follow_up_seconds: 10
