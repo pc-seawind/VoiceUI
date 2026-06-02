@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import audioop
 from importlib import resources
 from pathlib import Path
 import wave
@@ -79,10 +80,95 @@ def _play_pcm16(
             "Wake ack playback requires sounddevice. Install with: pip install -e \".[audio]\""
         ) from exc
 
+    playback_sample_rate = _select_output_sample_rate(
+        sd,
+        device=device,
+        requested_sample_rate=sample_rate,
+        channels=channels,
+    )
+    if playback_sample_rate != sample_rate:
+        pcm = _resample_pcm16(
+            pcm,
+            source_rate=sample_rate,
+            target_rate=playback_sample_rate,
+            channels=channels,
+        )
+        print(
+            "wake_ack> resampled "
+            f"source_sample_rate={sample_rate} playback_sample_rate={playback_sample_rate}"
+        )
+
     with sd.RawOutputStream(
-        samplerate=sample_rate,
+        samplerate=playback_sample_rate,
         channels=channels,
         dtype="int16",
         device=device,
     ) as stream:
         stream.write(pcm)
+
+
+def _select_output_sample_rate(
+    sd,
+    *,
+    device: str | int | None,
+    requested_sample_rate: int,
+    channels: int,
+) -> int:
+    try:
+        sd.check_output_settings(
+            device=device,
+            samplerate=requested_sample_rate,
+            channels=channels,
+            dtype="int16",
+        )
+        return requested_sample_rate
+    except Exception as requested_error:
+        for sample_rate in _candidate_output_sample_rates(sd, device):
+            if sample_rate == requested_sample_rate:
+                continue
+            try:
+                sd.check_output_settings(
+                    device=device,
+                    samplerate=sample_rate,
+                    channels=channels,
+                    dtype="int16",
+                )
+                return sample_rate
+            except Exception:
+                continue
+        raise requested_error
+
+
+def _candidate_output_sample_rates(sd, device: str | int | None) -> list[int]:
+    candidates: list[int] = []
+    try:
+        info = sd.query_devices(device, "output")
+        default_rate = int(round(float(info.get("default_samplerate") or 0)))
+        if default_rate > 0:
+            candidates.append(default_rate)
+    except Exception:
+        pass
+    for sample_rate in (16000, 24000, 48000, 44100):
+        if sample_rate not in candidates:
+            candidates.append(sample_rate)
+    return candidates
+
+
+def _resample_pcm16(
+    pcm: bytes,
+    *,
+    source_rate: int,
+    target_rate: int,
+    channels: int,
+) -> bytes:
+    if source_rate == target_rate or not pcm:
+        return pcm
+    converted, _state = audioop.ratecv(
+        pcm,
+        2,
+        channels,
+        source_rate,
+        target_rate,
+        None,
+    )
+    return converted

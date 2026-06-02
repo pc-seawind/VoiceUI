@@ -68,8 +68,9 @@ configs use `audio.channels: 2`, `audio.wake_stream_channel: 1`, and
 `audio.command_stream_channel: 0`. If wake detection stops responding after an
 audio-device change, confirm the next `wake_debug>` line prints
 `channels=2 selected_channel=1`.
-The WASAPI XVF3800 output endpoint accepts `16000Hz` on this machine, so the
-demo TTS configs and bundled wake acknowledgement use `tts.sample_rate: 16000`.
+The WASAPI XVF3800 output endpoint accepts `16000Hz` on this machine, so demo
+TTS configs use `tts.sample_rate: 16000`. The bundled wake acknowledgement keeps
+its original WAV sample rate and is resampled to the device rate at playback.
 
 Record from the configured XVF3800 command stream:
 
