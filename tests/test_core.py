@@ -378,6 +378,26 @@ class CoreTests(unittest.TestCase):
         self.assertTrue(streaming_stt.session.finished)
         self.assertEqual(streaming_stt.fallback_calls, 0)
 
+    def test_barge_in_streams_stt_and_stashes_transcript(self) -> None:
+        config = AssistantConfig(
+            input=InputConfig(mode="audio"),
+            conversation=ConversationConfig(barge_in_enabled=True),
+        )
+        assistant = VoiceAssistant(config)
+        assistant.vad = FakeVad([Utterance(pcm=b"barge", sample_rate=16000, duration_ms=80)])
+        streaming_stt = FakeStreamingStt("barge transcript")
+        assistant.stt = streaming_stt
+        assistant.tts = BargeFirstTts()
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            utterance = assistant._speak_with_barge_in("reply")
+
+        self.assertIsInstance(utterance, Utterance)
+        self.assertEqual(assistant._pending_barge_transcript, "barge transcript")
+        self.assertEqual(streaming_stt.session.written, [b"barge"])
+        self.assertTrue(streaming_stt.session.finished)
+        self.assertEqual(streaming_stt.fallback_calls, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

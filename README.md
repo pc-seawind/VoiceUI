@@ -275,7 +275,9 @@ beginning, tune ASR. The Aliyun demo also prints `stt_debug>` with the exact
 audio path. In live audio turns, Aliyun NLS starts streaming when VAD confirms
 speech start, receives the buffered pre-roll first, then receives command audio
 while VAD continues endpointing. `--transcribe-wav` remains a full-WAV test path
-and adds `stt.leading_silence_ms: 200` before sending.
+and adds `stt.leading_silence_ms: 200` before sending. Barge-in capture uses
+the same streaming ASR path and reuses the transcript when processing the next
+turn.
 It also prints `audio_debug>` for command-stream startup latency; large
 `stream_opened latency_ms` or `first_chunk read_ms` values mean the capture path
 is not ready early enough.

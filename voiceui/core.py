@@ -129,6 +129,9 @@ class VoiceAssistant:
         self.session = ConversationSession(config.llm, config.conversation)
         self.debug = DebugRecorder(config.debug)
         self._pending_barge_utterance: Utterance | None = None
+        self._pending_barge_transcript: str | None = None
+        self._pending_barge_stt_ms = 0
+        self._pending_barge_stt_extra_timings: dict[str, int] = {}
         if audio_enabled:
             self._warm_up_audio_path()
         self._print_barge_in_config()
@@ -362,6 +365,75 @@ class VoiceAssistant:
                 f"{debug_dir} duration_ms={monitor_audio.duration_ms()} result={result}"
             )
 
+    def _record_barge_in_utterance(
+        self,
+        *,
+        monitor_audio: RecordingAudioInput,
+        monitor_stop_event: threading.Event,
+        on_speech_start,
+        mode: str,
+    ) -> tuple[Utterance, str | None, int, dict[str, int]]:
+        if not self._should_stream_stt():
+            utterance = self.vad.record(
+                monitor_audio,
+                start_timeout_seconds=0.0,
+                stop_event=monitor_stop_event,
+                on_speech_start=on_speech_start,
+            )
+            return utterance, None, 0, {}
+
+        stream_handle: _StreamingSttHandle | None = None
+        stt_start_reference = time.monotonic()
+
+        def start_streaming_stt() -> None:
+            nonlocal stream_handle
+            if stream_handle is not None:
+                return
+            stream_handle = _StreamingSttHandle(self.stt, monitor_audio.sample_rate)
+            stream_handle.start()
+            start_ms = int((time.monotonic() - stt_start_reference) * 1000)
+            print(f"stt> streaming_started source=barge_in mode={mode} elapsed_ms={start_ms}")
+
+        def combined_speech_start() -> None:
+            on_speech_start()
+            start_streaming_stt()
+
+        def on_speech_audio(pcm: bytes) -> None:
+            if stream_handle is None:
+                start_streaming_stt()
+            assert stream_handle is not None
+            stream_handle.write(pcm)
+
+        try:
+            utterance = self.vad.record(
+                monitor_audio,
+                start_timeout_seconds=0.0,
+                stop_event=monitor_stop_event,
+                on_speech_start=combined_speech_start,
+                on_speech_audio=on_speech_audio,
+            )
+        except Exception:
+            if stream_handle is not None:
+                stream_handle.abort()
+            raise
+
+        if stream_handle is None:
+            return utterance, None, 0, {}
+
+        finalize_started = time.monotonic()
+        transcript = stream_handle.finish()
+        stt_ms = int((time.monotonic() - finalize_started) * 1000)
+        stt_total_ms = stream_handle.total_latency_ms()
+        ready_ms = stream_handle.ready_latency_ms()
+        ready_fragment = f" ready_ms={ready_ms}" if ready_ms is not None else ""
+        print(
+            "stt> "
+            f"latency_ms={stt_ms} mode=streaming source=barge_in "
+            f"total_latency_ms={stt_total_ms} sent_chunks={stream_handle.sent_chunks}"
+            f"{ready_fragment} text={transcript}"
+        )
+        return utterance, transcript, stt_ms, {"stt_total": stt_total_ms}
+
     def _speak_with_barge_in(self, text: str) -> Utterance | None:
         playback_stop_event = threading.Event()
         monitor_stop_event = threading.Event()
@@ -375,11 +447,11 @@ class VoiceAssistant:
 
         def monitor() -> None:
             try:
-                utterance = self.vad.record(
-                    monitor_audio,
-                    start_timeout_seconds=0.0,
-                    stop_event=monitor_stop_event,
+                utterance, transcript, stt_ms, stt_extra = self._record_barge_in_utterance(
+                    monitor_audio=monitor_audio,
+                    monitor_stop_event=monitor_stop_event,
                     on_speech_start=on_speech_start,
+                    mode="full",
                 )
             except SpeechStartTimeoutError as exc:
                 state["timeout"] = str(exc)
@@ -388,6 +460,10 @@ class VoiceAssistant:
                 state["error"] = exc
                 return
             state["utterance"] = utterance
+            if transcript is not None:
+                state["transcript"] = transcript
+                state["stt_ms"] = stt_ms
+                state["stt_extra_timings"] = stt_extra
 
         monitor_thread = threading.Thread(
             target=monitor,
@@ -429,6 +505,14 @@ class VoiceAssistant:
 
         utterance = state.get("utterance")
         if isinstance(utterance, Utterance):
+            transcript = state.get("transcript")
+            if isinstance(transcript, str):
+                self._pending_barge_transcript = transcript
+                self._pending_barge_stt_ms = int(state.get("stt_ms") or 0)
+                extra_timings = state.get("stt_extra_timings")
+                self._pending_barge_stt_extra_timings = (
+                    dict(extra_timings) if isinstance(extra_timings, dict) else {}
+                )
             print(f"barge_in> captured duration_ms={utterance.duration_ms}")
             return utterance
         print("barge_in> no_speech")
@@ -453,11 +537,11 @@ class VoiceAssistant:
 
         def monitor() -> None:
             try:
-                utterance = self.vad.record(
-                    monitor_audio,
-                    start_timeout_seconds=0.0,
-                    stop_event=monitor_stop_event,
+                utterance, transcript, stt_ms, stt_extra = self._record_barge_in_utterance(
+                    monitor_audio=monitor_audio,
+                    monitor_stop_event=monitor_stop_event,
                     on_speech_start=on_speech_start,
+                    mode="stream",
                 )
             except SpeechStartTimeoutError as exc:
                 state["timeout"] = str(exc)
@@ -466,6 +550,10 @@ class VoiceAssistant:
                 state["error"] = exc
                 return
             state["utterance"] = utterance
+            if transcript is not None:
+                state["transcript"] = transcript
+                state["stt_ms"] = stt_ms
+                state["stt_extra_timings"] = stt_extra
 
         monitor_thread = threading.Thread(
             target=monitor,
@@ -507,6 +595,14 @@ class VoiceAssistant:
 
         utterance = state.get("utterance")
         if isinstance(utterance, Utterance):
+            transcript = state.get("transcript")
+            if isinstance(transcript, str):
+                self._pending_barge_transcript = transcript
+                self._pending_barge_stt_ms = int(state.get("stt_ms") or 0)
+                extra_timings = state.get("stt_extra_timings")
+                self._pending_barge_stt_extra_timings = (
+                    dict(extra_timings) if isinstance(extra_timings, dict) else {}
+                )
             print(f"barge_in> captured duration_ms={utterance.duration_ms}")
             return text, utterance
         print("barge_in> no_speech")
@@ -552,14 +648,24 @@ class VoiceAssistant:
         stt_extra_timings: dict[str, int] = {}
         if self._pending_barge_utterance is not None:
             utterance = self._pending_barge_utterance
+            pending_transcript = self._pending_barge_transcript
             self._pending_barge_utterance = None
+            self._pending_barge_transcript = None
             vad_ms = 0
             print(f"vad> source=barge_in duration_ms={utterance.duration_ms} latency_ms=0")
             wake_ack_ms = wake_ack_handle.join() if wake_ack_handle is not None else 0
-            stt_started = time.monotonic()
-            transcript = self.stt.transcribe(utterance)
-            stt_ms = int((time.monotonic() - stt_started) * 1000)
-            print(f"stt> latency_ms={stt_ms} text={transcript}")
+            if pending_transcript is not None:
+                transcript = pending_transcript
+                stt_ms = self._pending_barge_stt_ms
+                stt_extra_timings = dict(self._pending_barge_stt_extra_timings)
+                self._pending_barge_stt_ms = 0
+                self._pending_barge_stt_extra_timings = {}
+                print(f"stt> source=barge_in_stream latency_ms={stt_ms} text={transcript}")
+            else:
+                stt_started = time.monotonic()
+                transcript = self.stt.transcribe(utterance)
+                stt_ms = int((time.monotonic() - stt_started) * 1000)
+                print(f"stt> latency_ms={stt_ms} text={transcript}")
         elif self._should_stream_stt():
             (
                 utterance,

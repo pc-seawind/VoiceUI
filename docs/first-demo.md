@@ -151,7 +151,8 @@ an ASR issue. In live audio turns, the Aliyun demo prints `stt> streaming_starte
 when VAD confirms speech start, sends buffered pre-roll into NLS first, then
 streams command audio while VAD continues endpointing. `--transcribe-wav` stays
 a full-WAV test path and sends `stt.leading_silence_ms: 200` before the
-utterance.
+utterance. Barge-in capture uses the same streaming ASR path and reuses that
+transcript when the interrupted utterance becomes the next turn.
 If logs show `barge_in> no_speech`, listen to
 `debug_sessions\<timestamp>-barge-in-*\barge_in_monitor.wav`; that file is the
 actual command-channel audio monitored during TTS playback.
