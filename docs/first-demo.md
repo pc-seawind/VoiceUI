@@ -126,6 +126,12 @@ Flow:
 4. Listen for the TTS output.
 5. Check `debug_sessions\<timestamp>-0001\metadata.json` and `utterance.wav`.
 
+If ASR seems to miss the beginning, first listen to `utterance.wav`. If the WAV
+itself starts late, it is a VAD boundary issue; inspect `vad_debug>` and raise
+`vad.pre_roll_ms`. If the WAV is complete but the transcript starts late, it is
+an ASR issue; the Aliyun demo prints `stt_debug>` and sends
+`stt.leading_silence_ms: 200` before the utterance.
+
 With `config.demo.mify.yaml`, TTS also uses Mify/MiMo through streaming
 `xiaomi/mimo-v2-tts`. If you only want local OS speech while testing LLM/ASR,
 change `tts.provider` back to `system`.
@@ -139,6 +145,7 @@ To re-test ASR with a saved turn:
 
 ```powershell
 python -m voiceui --config config.demo.mify.yaml --transcribe-wav debug_sessions\<turn>\utterance.wav
+python -m voiceui --config config.demo.wake.aliyun.yaml --transcribe-wav debug_sessions\<turn>\utterance.wav
 ```
 
 For hardware-only smoke testing without Mify:

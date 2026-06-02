@@ -26,8 +26,9 @@ vad:
   min_speech_ms: 250
   silence_ms: 800
   max_speech_ms: 15000
-  pre_roll_ms: 240
+  pre_roll_ms: 640
   frame_ms: 32
+  debug: true
 
 stt:
   provider: aliyun_nls
@@ -37,6 +38,8 @@ stt:
   app_key_env: ALIYUN_NLS_APPKEY
   timeout_seconds: 20
   language: zh
+  leading_silence_ms: 200
+  debug: true
 
 llm:
   provider: mify

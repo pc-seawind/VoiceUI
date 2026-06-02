@@ -164,6 +164,22 @@ class AliyunNlsSpeechToText(SpeechToText):
 
         sample_rate = 16000
         pcm = _ensure_pcm16_sample_rate(utterance.pcm, utterance.sample_rate, sample_rate)
+        leading_silence_ms = max(0, self.config.leading_silence_ms)
+        if leading_silence_ms:
+            pcm = _prepend_pcm16_silence(
+                pcm,
+                sample_rate=sample_rate,
+                silence_ms=leading_silence_ms,
+            )
+        if self.config.debug:
+            sent_audio_ms = int(len(pcm) / 2 / sample_rate * 1000)
+            print(
+                "stt_debug> "
+                f"provider=aliyun_nls utterance_duration_ms={utterance.duration_ms} "
+                f"utterance_sample_rate={utterance.sample_rate} sent_sample_rate={sample_rate} "
+                f"leading_silence_ms={leading_silence_ms} sent_audio_ms={sent_audio_ms} "
+                f"sent_bytes={len(pcm)}"
+            )
         return _run_aliyun_speech_recognizer(
             url=self.config.endpoint,
             token=self._token,
@@ -366,3 +382,10 @@ def _ensure_pcm16_sample_rate(pcm: bytes, source_rate: int, target_rate: int) ->
         raise RuntimeError("Audio resampling requires the Python audioop module.") from exc
     converted, _state = audioop.ratecv(pcm, 2, 1, source_rate, target_rate, None)
     return converted
+
+
+def _prepend_pcm16_silence(pcm: bytes, sample_rate: int, silence_ms: int) -> bytes:
+    if silence_ms <= 0:
+        return pcm
+    samples = int(sample_rate * silence_ms / 1000)
+    return b"\x00\x00" * samples + pcm

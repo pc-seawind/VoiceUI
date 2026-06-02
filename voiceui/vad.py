@@ -37,11 +37,12 @@ class EnergyVadRecorder(VadRecorder):
         chunk_ms = audio.block_ms
         pre_roll_chunks = max(1, self.config.pre_roll_ms // chunk_ms)
         min_speech_chunks = max(1, self.config.min_speech_ms // chunk_ms)
+        start_buffer_chunks = pre_roll_chunks + min_speech_chunks
         silence_chunks = max(1, self.config.silence_ms // chunk_ms)
         max_chunks = max(1, self.config.max_speech_ms // chunk_ms)
         start_timeout_ms = max(0, int(start_timeout_seconds * 1000))
 
-        pre_roll: deque[bytes] = deque(maxlen=pre_roll_chunks)
+        pre_roll: deque[bytes] = deque(maxlen=start_buffer_chunks)
         recorded: list[bytes] = []
         speech_chunks = 0
         trailing_silence = 0
@@ -66,6 +67,14 @@ class EnergyVadRecorder(VadRecorder):
                 if speech_chunks >= min_speech_chunks:
                     is_recording = True
                     recorded.extend(pre_roll)
+                    _print_vad_start(
+                        self.config,
+                        engine="energy",
+                        waited_ms=waited_ms,
+                        buffered_ms=len(pre_roll) * chunk_ms,
+                        score=rms,
+                        threshold=self.config.threshold,
+                    )
                     _notify_speech_start(on_speech_start)
                 elif start_timeout_ms and waited_ms >= start_timeout_ms and speech_chunks == 0:
                     raise SpeechStartTimeoutError("Timed out waiting for speech.")
@@ -79,6 +88,14 @@ class EnergyVadRecorder(VadRecorder):
 
             if trailing_silence >= silence_chunks or len(recorded) >= max_chunks:
                 duration_ms = len(recorded) * chunk_ms
+                reason = "max_duration" if len(recorded) >= max_chunks else "silence"
+                _print_vad_stop(
+                    self.config,
+                    engine="energy",
+                    reason=reason,
+                    duration_ms=duration_ms,
+                    trailing_silence_ms=trailing_silence * chunk_ms,
+                )
                 return Utterance(
                     pcm=b"".join(recorded),
                     sample_rate=audio.sample_rate,
@@ -119,11 +136,12 @@ class SileroVadRecorder(VadRecorder):
         neg_threshold = max(0.01, threshold - 0.15)
         pre_roll_frames = max(1, self.config.pre_roll_ms // window_ms)
         min_speech_frames = max(1, self.config.min_speech_ms // window_ms)
+        start_buffer_frames = pre_roll_frames + min_speech_frames
         silence_frames = max(1, self.config.silence_ms // window_ms)
         max_frames = max(1, self.config.max_speech_ms // window_ms)
         start_timeout_ms = max(0, int(start_timeout_seconds * 1000))
 
-        pre_roll: deque[bytes] = deque(maxlen=pre_roll_frames)
+        pre_roll: deque[bytes] = deque(maxlen=start_buffer_frames)
         recorded: list[bytes] = []
         speech_frames = 0
         trailing_silence = 0
@@ -147,6 +165,14 @@ class SileroVadRecorder(VadRecorder):
                 if speech_frames >= min_speech_frames:
                     is_recording = True
                     recorded.extend(pre_roll)
+                    _print_vad_start(
+                        self.config,
+                        engine="silero",
+                        waited_ms=waited_ms,
+                        buffered_ms=len(pre_roll) * window_ms,
+                        score=probability,
+                        threshold=threshold,
+                    )
                     _notify_speech_start(on_speech_start)
                 elif start_timeout_ms and waited_ms >= start_timeout_ms and speech_frames == 0:
                     raise SpeechStartTimeoutError("Timed out waiting for speech.")
@@ -159,10 +185,19 @@ class SileroVadRecorder(VadRecorder):
                 trailing_silence += 1
 
             if trailing_silence >= silence_frames or len(recorded) >= max_frames:
+                duration_ms = len(recorded) * window_ms
+                reason = "max_duration" if len(recorded) >= max_frames else "silence"
+                _print_vad_stop(
+                    self.config,
+                    engine="silero",
+                    reason=reason,
+                    duration_ms=duration_ms,
+                    trailing_silence_ms=trailing_silence * window_ms,
+                )
                 return Utterance(
                     pcm=b"".join(recorded),
                     sample_rate=audio.sample_rate,
-                    duration_ms=len(recorded) * window_ms,
+                    duration_ms=duration_ms,
                 )
 
         raise RuntimeError("Audio stream ended during VAD recording.")
@@ -222,11 +257,12 @@ class WebRtcVadRecorder(VadRecorder):
         frame_ms = self.config.frame_ms
         pre_roll_frames = max(1, self.config.pre_roll_ms // frame_ms)
         min_speech_frames = max(1, self.config.min_speech_ms // frame_ms)
+        start_buffer_frames = pre_roll_frames + min_speech_frames
         silence_frames = max(1, self.config.silence_ms // frame_ms)
         max_frames = max(1, self.config.max_speech_ms // frame_ms)
         start_timeout_ms = max(0, int(start_timeout_seconds * 1000))
 
-        pre_roll: deque[bytes] = deque(maxlen=pre_roll_frames)
+        pre_roll: deque[bytes] = deque(maxlen=start_buffer_frames)
         recorded: list[bytes] = []
         speech_frames = 0
         trailing_silence = 0
@@ -250,6 +286,14 @@ class WebRtcVadRecorder(VadRecorder):
                 if speech_frames >= min_speech_frames:
                     is_recording = True
                     recorded.extend(pre_roll)
+                    _print_vad_start(
+                        self.config,
+                        engine="webrtc",
+                        waited_ms=waited_ms,
+                        buffered_ms=len(pre_roll) * frame_ms,
+                        score=1.0,
+                        threshold=float(self.config.webrtc_mode),
+                    )
                     _notify_speech_start(on_speech_start)
                 elif start_timeout_ms and waited_ms >= start_timeout_ms and speech_frames == 0:
                     raise SpeechStartTimeoutError("Timed out waiting for speech.")
@@ -262,10 +306,19 @@ class WebRtcVadRecorder(VadRecorder):
                 trailing_silence += 1
 
             if trailing_silence >= silence_frames or len(recorded) >= max_frames:
+                duration_ms = len(recorded) * frame_ms
+                reason = "max_duration" if len(recorded) >= max_frames else "silence"
+                _print_vad_stop(
+                    self.config,
+                    engine="webrtc",
+                    reason=reason,
+                    duration_ms=duration_ms,
+                    trailing_silence_ms=trailing_silence * frame_ms,
+                )
                 return Utterance(
                     pcm=b"".join(recorded),
                     sample_rate=audio.sample_rate,
-                    duration_ms=len(recorded) * frame_ms,
+                    duration_ms=duration_ms,
                 )
 
         raise RuntimeError("Audio stream ended during VAD recording.")
@@ -319,3 +372,40 @@ def _notify_speech_start(callback: Callable[[], None] | None) -> None:
 
 def _stop_requested(stop_event: threading.Event | None) -> bool:
     return bool(stop_event is not None and stop_event.is_set())
+
+
+def _print_vad_start(
+    config: VadConfig,
+    *,
+    engine: str,
+    waited_ms: int,
+    buffered_ms: int,
+    score: float,
+    threshold: float,
+) -> None:
+    if not config.debug:
+        return
+    effective_start_ms = max(0, waited_ms - buffered_ms)
+    print(
+        "vad_debug> start "
+        f"engine={engine} waited_ms={waited_ms} buffered_ms={buffered_ms} "
+        f"effective_start_ms={effective_start_ms} pre_roll_ms={config.pre_roll_ms} "
+        f"min_speech_ms={config.min_speech_ms} score={score:.3f} threshold={threshold:.3f}"
+    )
+
+
+def _print_vad_stop(
+    config: VadConfig,
+    *,
+    engine: str,
+    reason: str,
+    duration_ms: int,
+    trailing_silence_ms: int,
+) -> None:
+    if not config.debug:
+        return
+    print(
+        "vad_debug> stop "
+        f"engine={engine} reason={reason} duration_ms={duration_ms} "
+        f"trailing_silence_ms={trailing_silence_ms}"
+    )

@@ -76,7 +76,9 @@ python -m voiceui --config config.demo.mify.yaml --transcribe-wav recordings\com
 
 The current demo configs use Silero VAD. `vad.threshold` is a speech
 probability in this mode; start with `0.6`, raise it toward `0.7` if background
-noise starts turns, or lower it toward `0.5` if it misses speech.
+noise starts turns, or lower it toward `0.5` if it misses speech. Demo configs
+keep `vad.pre_roll_ms: 640` so the saved utterance includes audio before the
+speech-start confirmation point.
 
 If you switch a config back to `vad.engine: energy`, estimate an initial
 RMS-based `vad.threshold` from room noise:
@@ -230,6 +232,10 @@ over a TTS answer to interrupt it and start the next turn.
 Each audio turn writes debug artifacts under `debug_sessions/` when
 `debug.enabled` is true. The folder contains `utterance.wav` and
 `metadata.json` with wake/VAD/STT/LLM/TTS timings, transcript, and reply.
+For clipped-start issues, listen to `utterance.wav`: if the beginning is missing
+there, tune VAD; if the WAV is complete but the transcript is missing the
+beginning, tune ASR. The Aliyun demo also prints `stt_debug>` with the exact
+audio length sent to NLS and adds `stt.leading_silence_ms: 200` before sending.
 
 ## Recommended MVP Setup
 
@@ -239,7 +245,8 @@ For the first XVF3800 prototype:
 - Endpointing: Silero VAD for the current hardware demo. Tune
   `vad.threshold` as a probability threshold, raise it if background noise
   triggers speech, and adjust `vad.silence_ms` if command endings are clipped
-  or the assistant waits too long.
+  or the assistant waits too long. If command starts are clipped, inspect
+  `vad_debug>` and raise `vad.pre_roll_ms`.
 - STT: `faster_whisper` on GPU if available, otherwise CPU `int8` with a smaller
   model.
 - LLM: Ollama or any OpenAI-compatible endpoint.

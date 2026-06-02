@@ -9,6 +9,7 @@ from voiceui.stt import (
     MimoAudioUnderstandingSpeechToText,
     _ensure_pcm16_sample_rate,
     _extract_aliyun_result,
+    _prepend_pcm16_silence,
 )
 
 
@@ -85,6 +86,36 @@ class SttTests(unittest.TestCase):
         self.assertEqual(recognizer.call_args.kwargs["pcm"], utterance.pcm)
         self.assertEqual(recognizer.call_args.kwargs["sample_rate"], 16000)
 
+    def test_aliyun_stt_can_prepend_leading_silence(self) -> None:
+        config = SttConfig(
+            provider="aliyun_nls",
+            endpoint="wss://nls-gateway-cn-shanghai.aliyuncs.com/ws/v1",
+            access_key_id_env="ALIYUN_AccessKeyId",
+            access_key_secret_env="ALIYUN_AccessKeySecret",
+            app_key_env="ALIYUN_NLS_APPKEY",
+            timeout_seconds=20,
+            leading_silence_ms=100,
+        )
+        stt = AliyunNlsSpeechToText(config)
+        utterance = Utterance(pcm=b"\x01\x00" * 160, sample_rate=16000, duration_ms=10)
+
+        with patch.dict(
+            "os.environ",
+            {
+                "ALIYUN_AccessKeyId": "ak",
+                "ALIYUN_AccessKeySecret": "secret",
+                "ALIYUN_NLS_APPKEY": "appkey",
+            },
+        ):
+            with patch("voiceui.stt._get_aliyun_nls_token", return_value="token"):
+                with patch(
+                    "voiceui.stt._run_aliyun_speech_recognizer", return_value="浣犲ソ"
+                ) as recognizer:
+                    stt.transcribe(utterance)
+
+        silence_bytes = b"\x00\x00" * 1600
+        self.assertEqual(recognizer.call_args.kwargs["pcm"], silence_bytes + utterance.pcm)
+
     def test_extract_aliyun_result(self) -> None:
         message = '{"payload":{"result":"second time时间"}}'
 
@@ -94,6 +125,12 @@ class SttTests(unittest.TestCase):
         pcm = b"\x01\x00\x02\x00"
 
         self.assertIs(_ensure_pcm16_sample_rate(pcm, 16000, 16000), pcm)
+
+    def test_prepend_pcm16_silence(self) -> None:
+        self.assertEqual(
+            _prepend_pcm16_silence(b"\x01\x00", sample_rate=16000, silence_ms=1),
+            b"\x00\x00" * 16 + b"\x01\x00",
+        )
 
 
 if __name__ == "__main__":

@@ -55,6 +55,7 @@ class VadConfig:
     pre_roll_ms: int = 240
     frame_ms: int = 20
     webrtc_mode: int = 2
+    debug: bool = False
 
 
 @dataclass(slots=True)
@@ -78,6 +79,8 @@ class SttConfig:
     device: str = "cpu"
     compute_type: str = "int8"
     mock_text: str = "Hello from mock STT."
+    leading_silence_ms: int = 0
+    debug: bool = False
 
 
 @dataclass(slots=True)
