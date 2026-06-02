@@ -53,9 +53,13 @@ class FakeVad:
         item = self.items.pop(0)
         if item is SpeechStartTimeoutError:
             if stop_event is not None:
-                deadline = time.monotonic() + start_timeout_seconds
-                while not stop_event.is_set() and time.monotonic() < deadline:
-                    time.sleep(0.01)
+                if start_timeout_seconds <= 0:
+                    while not stop_event.is_set():
+                        time.sleep(0.01)
+                else:
+                    deadline = time.monotonic() + start_timeout_seconds
+                    while not stop_event.is_set() and time.monotonic() < deadline:
+                        time.sleep(0.01)
             raise SpeechStartTimeoutError("Timed out waiting for speech.")
         if on_speech_start is not None:
             on_speech_start()
@@ -190,7 +194,6 @@ class CoreTests(unittest.TestCase):
                 follow_up_seconds=1,
                 max_turns=4,
                 barge_in_enabled=True,
-                barge_in_check_seconds=0.05,
             ),
             llm=LlmConfig(system_prompt="system"),
         )
@@ -222,7 +225,7 @@ class CoreTests(unittest.TestCase):
             [message.content for message in chat.calls[1]],
             ["system", "first", "reply 1", "barge"],
         )
-        self.assertIn(0.05, fake_vad.start_timeouts)
+        self.assertIn(0.0, fake_vad.start_timeouts)
 
 
 if __name__ == "__main__":

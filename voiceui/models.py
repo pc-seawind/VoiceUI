@@ -24,6 +24,7 @@ class AudioConfig:
     wake_stream_channel: int = 0
     command_stream_channel: int = 0
     input_gain_db: float = 0.0
+    debug: bool = False
 
 
 @dataclass(slots=True)
@@ -135,7 +136,6 @@ class ConversationConfig:
     follow_up_seconds: int = 10
     max_turns: int = 12
     barge_in_enabled: bool = False
-    barge_in_check_seconds: float = 0.25
 
 
 @dataclass(slots=True)

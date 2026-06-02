@@ -101,6 +101,7 @@ class ConfigTests(unittest.TestCase):
             "wss://nls-gateway-cn-beijing.aliyuncs.com/ws/v1",
         )
         self.assertEqual(aliyun_wake_config.wake.engine, "openwakeword")
+        self.assertTrue(aliyun_wake_config.audio.debug)
         self.assertEqual(aliyun_wake_config.wake.model, "alexa")
         self.assertEqual(aliyun_wake_config.wake.threshold, 0.25)
         self.assertTrue(aliyun_wake_config.wake.debug)

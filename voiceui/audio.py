@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import time
 import wave
 from collections.abc import Iterator
 from pathlib import Path
@@ -50,9 +51,29 @@ class SoundDeviceAudioInput:
         if self.config.device not in (None, "default"):
             kwargs["device"] = self.config.device
 
+        stream_started = time.monotonic()
         with sd.RawInputStream(**kwargs) as stream:
+            if self.config.debug:
+                latency_ms = int((time.monotonic() - stream_started) * 1000)
+                print(
+                    "audio_debug> stream_opened "
+                    f"device={self.config.device} channels={self.config.channels} "
+                    f"selected_channel={self.selected_channel} "
+                    f"sample_rate={self.sample_rate} block_ms={self.block_ms} "
+                    f"latency_ms={latency_ms}"
+                )
+            first_chunk = True
             while True:
+                read_started = time.monotonic()
                 data, overflowed = stream.read(frames)
+                if self.config.debug and first_chunk:
+                    read_ms = int((time.monotonic() - read_started) * 1000)
+                    print(
+                        "audio_debug> first_chunk "
+                        f"selected_channel={self.selected_channel} read_ms={read_ms} "
+                        f"overflowed={bool(overflowed)}"
+                    )
+                    first_chunk = False
                 if overflowed:
                     continue
                 chunk = bytes(data)

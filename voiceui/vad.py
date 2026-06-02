@@ -13,6 +13,9 @@ class SpeechStartTimeoutError(TimeoutError):
 
 
 class VadRecorder:
+    def warm_up(self) -> bool:
+        return False
+
     def record(
         self,
         audio: AudioInput,
@@ -112,6 +115,10 @@ class SileroVadRecorder(VadRecorder):
         self.config = config
         self._model = None
         self._torch = None
+
+    def warm_up(self) -> bool:
+        self._load_model()
+        return True
 
     def record(
         self,

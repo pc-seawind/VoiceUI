@@ -53,6 +53,17 @@ class FakeTorch:
 
 
 class VadTests(unittest.TestCase):
+    def test_silero_vad_warm_up_loads_model_once(self) -> None:
+        recorder = SileroVadRecorder(VadConfig(engine="silero"))
+        fake_silero = types.SimpleNamespace(load_silero_vad=FakeSileroModel)
+
+        with patch.dict(sys.modules, {"silero_vad": fake_silero, "torch": FakeTorch}):
+            self.assertTrue(recorder.warm_up())
+            first_model = recorder._model
+            self.assertTrue(recorder.warm_up())
+
+        self.assertIs(recorder._model, first_model)
+
     def test_start_timeout_raises_when_no_speech_starts(self) -> None:
         recorder = EnergyVadRecorder(VadConfig(threshold=1000))
         silence = b"\x00\x00" * 1280

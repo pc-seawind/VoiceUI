@@ -13,6 +13,7 @@ audio:
   wake_stream_channel: 0
   command_stream_channel: 0
   input_gain_db: 0.0
+  debug: true
 
 wake:
   engine: openwakeword
@@ -81,7 +82,6 @@ conversation:
   follow_up_seconds: 10
   max_turns: 12
   barge_in_enabled: true
-  barge_in_check_seconds: 0.25
 
 home_assistant:
   enabled: false

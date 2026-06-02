@@ -57,6 +57,19 @@ class VoiceAssistant:
         self.session = ConversationSession(config.llm, config.conversation)
         self.debug = DebugRecorder(config.debug)
         self._pending_barge_utterance: Utterance | None = None
+        if audio_enabled:
+            self._warm_up_audio_path()
+
+    def _warm_up_audio_path(self) -> None:
+        warm_up_started = time.monotonic()
+        try:
+            warmed = self.vad.warm_up()
+        except Exception as exc:
+            print(f"vad> warm_up_error={exc}")
+            return
+        if warmed:
+            latency_ms = int((time.monotonic() - warm_up_started) * 1000)
+            print(f"vad> warmed_up latency_ms={latency_ms}")
 
     def run_text_turn(self, text: str) -> AssistantReply:
         transcript = text.strip()
@@ -101,7 +114,6 @@ class VoiceAssistant:
         playback_stop_event = threading.Event()
         monitor_stop_event = threading.Event()
         state: dict[str, object] = {}
-        check_seconds = max(0.05, self.config.conversation.barge_in_check_seconds)
 
         def on_speech_start() -> None:
             if not playback_stop_event.is_set():
@@ -109,21 +121,19 @@ class VoiceAssistant:
             playback_stop_event.set()
 
         def monitor() -> None:
-            while not monitor_stop_event.is_set():
-                try:
-                    utterance = self.vad.record(
-                        self.command_audio,
-                        start_timeout_seconds=check_seconds,
-                        stop_event=monitor_stop_event,
-                        on_speech_start=on_speech_start,
-                    )
-                except SpeechStartTimeoutError:
-                    continue
-                except Exception as exc:
-                    state["error"] = exc
-                    return
-                state["utterance"] = utterance
+            try:
+                utterance = self.vad.record(
+                    self.command_audio,
+                    start_timeout_seconds=0.0,
+                    stop_event=monitor_stop_event,
+                    on_speech_start=on_speech_start,
+                )
+            except SpeechStartTimeoutError:
                 return
+            except Exception as exc:
+                state["error"] = exc
+                return
+            state["utterance"] = utterance
 
         monitor_thread = threading.Thread(
             target=monitor,

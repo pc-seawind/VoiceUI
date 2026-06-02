@@ -238,6 +238,9 @@ For clipped-start issues, listen to `utterance.wav`: if the beginning is missing
 there, tune VAD; if the WAV is complete but the transcript is missing the
 beginning, tune ASR. The Aliyun demo also prints `stt_debug>` with the exact
 audio length sent to NLS and adds `stt.leading_silence_ms: 200` before sending.
+It also prints `audio_debug>` for command-stream startup latency; large
+`stream_opened latency_ms` or `first_chunk read_ms` values mean the capture path
+is not ready early enough.
 If you speak the wake word and command as one continuous phrase, the command can
 still start before the wake detector returns. That requires a future rolling
 audio buffer around wake detection.

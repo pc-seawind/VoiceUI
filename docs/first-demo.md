@@ -131,6 +131,8 @@ itself starts late, it is a VAD boundary issue; inspect `vad_debug>` and raise
 `vad.pre_roll_ms`. If the WAV is complete but the transcript starts late, it is
 an ASR issue; the Aliyun demo prints `stt_debug>` and sends
 `stt.leading_silence_ms: 200` before the utterance.
+It also prints `audio_debug>` for stream open and first-chunk latency; if those
+numbers are large, the capture stream is not ready early enough.
 The local wake acknowledgement plays in the background, so VAD starts
 immediately after wake detection instead of waiting for the "我在" WAV to finish.
 If you say the wake word and command as one continuous phrase, the command can
