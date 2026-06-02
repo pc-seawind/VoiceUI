@@ -59,6 +59,7 @@ llm:
 
 tts:
   provider: console
+  sample_rate: 16000
   piper_url: http://localhost:5000
   piper_model: models/voice.onnx
   playback_device: 22

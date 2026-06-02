@@ -58,7 +58,7 @@ tts:
   model: tts-1
   voice: default
   audio_format: pcm
-  sample_rate: 24000
+  sample_rate: 16000
   stream: true
 ```
 

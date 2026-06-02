@@ -68,6 +68,8 @@ configs use `audio.channels: 2`, `audio.wake_stream_channel: 1`, and
 `audio.command_stream_channel: 0`. If wake detection stops responding after an
 audio-device change, confirm the next `wake_debug>` line prints
 `channels=2 selected_channel=1`.
+The WASAPI XVF3800 output endpoint accepts `16000Hz` on this machine, so the
+demo TTS configs and bundled wake acknowledgement use `tts.sample_rate: 16000`.
 
 Record from the configured XVF3800 command stream:
 
@@ -355,7 +357,7 @@ tts:
   model: xiaomi/mimo-v2-tts
   voice: mimo_default
   audio_format: pcm16
-  sample_rate: 24000
+  sample_rate: 16000
   stream: true
 ```
 
@@ -385,7 +387,7 @@ tts:
   app_key_env: ALIYUN_NLS_APPKEY
   voice: longxiaochun
   audio_format: pcm
-  sample_rate: 24000
+  sample_rate: 16000
   stream: true
 ```
 

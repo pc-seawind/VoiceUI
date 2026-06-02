@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+import wave
 
 from voiceui.models import WakeAckConfig
 from voiceui.wake_ack import (
@@ -27,6 +28,10 @@ class WakeAckTests(unittest.TestCase):
 
         self.assertTrue(path.exists())
         self.assertGreater(path.stat().st_size, 0)
+        with wave.open(str(path), "rb") as wav:
+            self.assertEqual(wav.getframerate(), 16000)
+            self.assertEqual(wav.getnchannels(), 1)
+            self.assertEqual(wav.getsampwidth(), 2)
 
 
 if __name__ == "__main__":

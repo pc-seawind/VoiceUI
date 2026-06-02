@@ -52,6 +52,8 @@ The XVF3800 WASAPI capture endpoint is two-channel on this machine. The demo
 configs therefore use `audio.channels: 2`, `audio.wake_stream_channel: 1`, and
 `audio.command_stream_channel: 0`. In wake debug logs, verify the openWakeWord
 line prints `channels=2 selected_channel=1`.
+The XVF3800 WASAPI output endpoint accepts `16000Hz` on this machine, so the
+demo TTS configs and bundled wake acknowledgement use `tts.sample_rate: 16000`.
 
 ## 3. Record a Smoke Sample
 
