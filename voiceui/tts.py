@@ -711,15 +711,21 @@ def _aliyun_stream_input_tts_chunks_from_text_chunks(
         items.put(RuntimeError(f"Aliyun NLS TTS failed: {message}"))
 
     def producer() -> None:
-        synthesizer = nls.NlsStreamInputTtsSynthesizer(
-            url=config.endpoint,
-            token=token,
-            appkey=app_key,
-            on_data=on_data,
-            on_error=on_error,
-            callback_args=[],
-        )
+        synthesizer = None
         try:
+            text_segments = _iter_stream_input_text(text_chunks, max_chars=32, min_chars=12)
+            first_text_chunk = _next_stream_input_text(text_segments, stop_event)
+            if first_text_chunk is None:
+                return
+
+            synthesizer = nls.NlsStreamInputTtsSynthesizer(
+                url=config.endpoint,
+                token=token,
+                appkey=app_key,
+                on_data=on_data,
+                on_error=on_error,
+                callback_args=[],
+            )
             synthesizer.startStreamInputTts(
                 voice=config.voice,
                 aformat=audio_format,
@@ -728,7 +734,12 @@ def _aliyun_stream_input_tts_chunks_from_text_chunks(
                 speech_rate=config.speech_rate,
                 pitch_rate=config.pitch_rate,
             )
-            for text_chunk in _iter_stream_input_text(text_chunks, max_chars=32, min_chars=12):
+
+            if not _stop_requested(stop_event):
+                synthesizer.sendStreamInputTts(first_text_chunk)
+                time.sleep(0.02)
+
+            for text_chunk in text_segments:
                 if _stop_requested(stop_event):
                     break
                 synthesizer.sendStreamInputTts(text_chunk)
@@ -737,10 +748,11 @@ def _aliyun_stream_input_tts_chunks_from_text_chunks(
         except Exception as exc:
             items.put(exc)
         finally:
-            try:
-                synthesizer.shutdown()
-            except Exception:
-                pass
+            if synthesizer is not None:
+                try:
+                    synthesizer.shutdown()
+                except Exception:
+                    pass
             items.put(done)
 
     thread = threading.Thread(target=producer, daemon=True)
@@ -836,6 +848,18 @@ def _track_text_chunks(
             continue
         full_text_parts.append(chunk)
         yield chunk
+
+
+def _next_stream_input_text(
+    text_segments: Iterator[str],
+    stop_event: threading.Event | None = None,
+) -> str | None:
+    for text_segment in text_segments:
+        if _stop_requested(stop_event):
+            return None
+        if text_segment.strip():
+            return text_segment
+    return None
 
 
 class SynthesizedAudio:

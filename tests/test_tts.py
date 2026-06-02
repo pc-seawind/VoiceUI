@@ -3,7 +3,11 @@ from __future__ import annotations
 import base64
 import contextlib
 import io
+import sys
 import tempfile
+import threading
+import time
+import types
 import unittest
 import wave
 from pathlib import Path
@@ -17,6 +21,7 @@ from voiceui.tts import (
     OpenAISpeechTextToSpeech,
     SystemTextToSpeech,
     TextToSpeech,
+    _aliyun_stream_input_tts_chunks_from_text_chunks,
     _aliyun_tts_audio_format,
     _extract_stream_audio,
     _iter_stream_input_text,
@@ -268,6 +273,74 @@ class TtsTests(unittest.TestCase):
         self.assertEqual(stream.call_args.kwargs["config"], config)
         self.assertEqual(stream.call_args.kwargs["token"], "token")
         self.assertEqual(play_pcm_stream.call_args.kwargs["sample_rate"], 24000)
+
+    def test_aliyun_stream_input_tts_waits_for_first_text_before_start(self) -> None:
+        events: list[str] = []
+        first_text_ready = threading.Event()
+        received_chunks: list[bytes] = []
+        errors: list[Exception] = []
+
+        class FakeSynthesizer:
+            def __init__(self, **kwargs):
+                self.on_data = kwargs["on_data"]
+                events.append("created")
+
+            def startStreamInputTts(self, **_kwargs) -> None:
+                events.append("start")
+
+            def sendStreamInputTts(self, text: str) -> None:
+                events.append(f"send:{text}")
+                self.on_data(b"\x00\x00")
+
+            def stopStreamInputTts(self) -> None:
+                events.append("stop")
+
+            def shutdown(self) -> None:
+                events.append("shutdown")
+
+        def delayed_text_chunks():
+            events.append("generator_started")
+            first_text_ready.wait(timeout=1.0)
+            events.append("text_yielded")
+            yield "hello?"
+
+        def consume() -> None:
+            try:
+                received_chunks.extend(
+                    _aliyun_stream_input_tts_chunks_from_text_chunks(
+                        config=TtsConfig(
+                            provider="aliyun_nls",
+                            endpoint="wss://nls-gateway.example/ws/v1",
+                            app_key_env="ALIYUN_NLS_APPKEY",
+                            timeout_seconds=1,
+                        ),
+                        token="token",
+                        text_chunks=delayed_text_chunks(),
+                    )
+                )
+            except Exception as exc:
+                errors.append(exc)
+
+        fake_nls = types.SimpleNamespace(NlsStreamInputTtsSynthesizer=FakeSynthesizer)
+        with patch.dict(sys.modules, {"nls": fake_nls}):
+            with patch.dict("os.environ", {"ALIYUN_NLS_APPKEY": "appkey"}):
+                thread = threading.Thread(target=consume)
+                thread.start()
+                time.sleep(0.05)
+                self.assertIn("generator_started", events)
+                self.assertNotIn("start", events)
+
+                first_text_ready.set()
+                thread.join(timeout=2.0)
+
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(received_chunks, [b"\x00\x00"])
+        self.assertLess(events.index("text_yielded"), events.index("start"))
+        self.assertEqual(
+            [event for event in events if event in ("start", "send:hello?", "stop", "shutdown")],
+            ["start", "send:hello?", "stop", "shutdown"],
+        )
 
     def test_extract_stream_audio_supports_delta_and_message_shapes(self) -> None:
         delta_audio = {"data": "delta"}
