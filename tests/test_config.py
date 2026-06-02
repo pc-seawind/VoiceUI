@@ -47,6 +47,20 @@ class ConfigTests(unittest.TestCase):
         aliyun_tts_config = load_config("config.demo.aliyun-tts.yaml")
         aliyun_wake_config = load_config("config.demo.wake.aliyun.yaml")
 
+        for demo_config in (
+            mock_config,
+            mify_config,
+            wake_config,
+            local_tts_config,
+            aliyun_asr_config,
+            aliyun_tts_config,
+            aliyun_wake_config,
+        ):
+            self.assertEqual(demo_config.audio.device, 24)
+            self.assertEqual(demo_config.audio.channels, 2)
+            self.assertEqual(demo_config.audio.wake_stream_channel, 1)
+            self.assertEqual(demo_config.audio.command_stream_channel, 0)
+
         self.assertEqual(mock_config.wake.engine, "manual")
         self.assertEqual(mock_config.tts.provider, "system")
         self.assertEqual(mock_config.audio.device, 24)
@@ -76,7 +90,7 @@ class ConfigTests(unittest.TestCase):
         self.assertTrue(mify_config.debug.enabled)
         self.assertEqual(wake_config.wake.engine, "openwakeword")
         self.assertEqual(wake_config.wake.model, "alexa")
-        self.assertEqual(wake_config.wake.threshold, 0.25)
+        self.assertEqual(wake_config.wake.threshold, 0.5)
         self.assertEqual(wake_config.wake.inference_framework, "onnx")
         self.assertTrue(wake_config.wake.debug)
         self.assertTrue(wake_config.wake_ack.enabled)
@@ -102,7 +116,7 @@ class ConfigTests(unittest.TestCase):
         self.assertTrue(local_tts_config.tts.stream)
         self.assertEqual(local_tts_config.tts.playback_device, 22)
         self.assertEqual(local_tts_config.wake.model, "alexa")
-        self.assertEqual(local_tts_config.wake.threshold, 0.25)
+        self.assertEqual(local_tts_config.wake.threshold, 0.5)
         self.assertTrue(local_tts_config.wake.debug)
         self.assertTrue(local_tts_config.conversation.barge_in_enabled)
         self.assertEqual(local_tts_config.llm.provider, "bailian")
@@ -128,7 +142,7 @@ class ConfigTests(unittest.TestCase):
         self.assertTrue(aliyun_wake_config.audio.debug)
         self.assertEqual(aliyun_wake_config.audio.device, 24)
         self.assertEqual(aliyun_wake_config.wake.model, "alexa")
-        self.assertEqual(aliyun_wake_config.wake.threshold, 0.25)
+        self.assertEqual(aliyun_wake_config.wake.threshold, 0.5)
         self.assertTrue(aliyun_wake_config.wake.debug)
         self.assertTrue(aliyun_wake_config.wake_ack.enabled)
         self.assertEqual(aliyun_wake_config.wake_ack.playback_device, 22)

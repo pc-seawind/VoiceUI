@@ -48,6 +48,10 @@ The demo configs pin the current machine's XVF3800 devices explicitly:
 `audio.device: 24` for WASAPI capture and `playback_device: 22` for WASAPI wake
 acknowledgement and TTS playback. If Windows changes the device indexes, update
 those fields from `python -m voiceui --list-audio-devices`.
+The XVF3800 WASAPI capture endpoint is two-channel on this machine. The demo
+configs therefore use `audio.channels: 2`, `audio.wake_stream_channel: 1`, and
+`audio.command_stream_channel: 0`. In wake debug logs, verify the openWakeWord
+line prints `channels=2 selected_channel=1`.
 
 ## 3. Record a Smoke Sample
 
@@ -195,7 +199,7 @@ The wake demo configs enable `wake.debug: true`, so you should also see
 periodic lines like:
 
 ```text
-wake_debug> elapsed_s=1.0 chunks=13 audio_ms=1040 rms=... peak=... dbfs=... near_zero_pct=... clipped_pct=... last=alexa:... best_window=alexa:... threshold=0.250 top=alexa:... predict_avg_ms=...
+wake_debug> elapsed_s=1.0 chunks=13 audio_ms=1040 rms=... peak=... dbfs=... near_zero_pct=... clipped_pct=... last=alexa:... best_window=alexa:... threshold=0.500 top=alexa:... predict_avg_ms=...
 ```
 
 Interpretation:
@@ -219,7 +223,7 @@ During `--wake-monitor`, try "alexa", "hey mycroft", "hey rhasspy", "timer",
 and "weather". Use the model whose `top=` score is highest and most repeatable:
 
 ```powershell
-python -m voiceui --config config.demo.wake.aliyun.yaml --wake-model alexa --wake-threshold 0.25
+python -m voiceui --config config.demo.wake.aliyun.yaml --wake-model alexa --wake-threshold 0.5
 ```
 
 To regenerate the local "我在" WAV with MiMo TTS:
@@ -232,7 +236,8 @@ If it does not trigger reliably, try these in order:
 
 1. Confirm `audio.device`, `audio.channels`, and `audio.wake_stream_channel`.
 2. Speak toward the XVF3800 at a normal smart-speaker distance.
-3. If it false-wakes, raise `wake.threshold` from `0.25` toward `0.35` or `0.5`.
+3. If it misses real wake words, lower `wake.threshold` from `0.5` toward `0.35`.
+   If it false-wakes, raise it from `0.5`.
 4. Record `--audio-purpose wake` and inspect the saved WAV level.
 
 ## 9. Run the Wake-Word Full Chain

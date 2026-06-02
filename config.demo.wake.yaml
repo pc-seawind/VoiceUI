@@ -7,17 +7,17 @@ input:
 
 audio:
   sample_rate: 16000
-  channels: 1
+  channels: 2
   block_ms: 80
   device: 24
-  wake_stream_channel: 0
+  wake_stream_channel: 1
   command_stream_channel: 0
   input_gain_db: 0.0
 
 wake:
   engine: openwakeword
   model: alexa
-  threshold: 0.25
+  threshold: 0.5
   max_wait_seconds: 0
   inference_framework: onnx
   debug: true

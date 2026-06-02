@@ -63,6 +63,11 @@ The current demo configs explicitly select the reSpeaker XVF3800 WASAPI devices
 instead of the system default. On this machine, the input device is index `24`
 and the output device is index `22`, so configs use `audio.device: 24` and
 `playback_device: 22`.
+The WASAPI XVF3800 input endpoint reports two capture channels, so the demo
+configs use `audio.channels: 2`, `audio.wake_stream_channel: 1`, and
+`audio.command_stream_channel: 0`. If wake detection stops responding after an
+audio-device change, confirm the next `wake_debug>` line prints
+`channels=2 selected_channel=1`.
 
 Record from the configured XVF3800 command stream:
 
@@ -149,9 +154,9 @@ Wake demo configs enable `wake.debug: true`, so `--wake-test` and the full
 assistant loop print periodic `wake_debug>` lines with audio level, top model
 scores, threshold, and inference latency. You can also force this on for any
 config with `--wake-debug`.
-For hardware bring-up, `config.demo.wake.yaml` uses `wake.threshold: 0.25`.
-Raise it toward `0.35` or `0.5` if it
-false-wakes.
+For hardware bring-up, `config.demo.wake.yaml` uses `wake.threshold: 0.5`.
+Lower it temporarily toward `0.35` if it misses real wake words, or raise it if
+it false-wakes.
 If input level is low, try `audio.input_gain_db: 6.0` or `12.0` first. Use
 `20.0` only as an aggressive diagnostic value because it can clip.
 
@@ -176,7 +181,7 @@ During `--wake-monitor`, try "alexa", "hey mycroft", "hey rhasspy", "timer",
 and "weather". Use the model whose `top=` score is highest and most repeatable:
 
 ```powershell
-python -m voiceui --config config.demo.wake.aliyun.yaml --wake-model alexa --wake-threshold 0.25
+python -m voiceui --config config.demo.wake.aliyun.yaml --wake-model alexa --wake-threshold 0.5
 ```
 
 Then run the wake-word Mify demo:
