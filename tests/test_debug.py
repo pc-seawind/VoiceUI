@@ -60,6 +60,35 @@ class DebugTests(unittest.TestCase):
             self.assertIsNone(turn_dir)
             self.assertEqual(list(Path(temp_dir).iterdir()), [])
 
+    def test_debug_recorder_writes_barge_in_monitor_audio(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            recorder = DebugRecorder(
+                DebugConfig(
+                    enabled=True,
+                    output_dir=temp_dir,
+                    save_audio=True,
+                    save_metadata=True,
+                )
+            )
+
+            debug_dir = recorder.save_barge_in_monitor(
+                mode="stream",
+                result="no_speech",
+                pcm=b"\x00\x00" * 160,
+                sample_rate=16000,
+                duration_ms=10,
+                metadata={"vad_engine": "silero"},
+            )
+
+            self.assertIsNotNone(debug_dir)
+            assert debug_dir is not None
+            self.assertTrue((debug_dir / "barge_in_monitor.wav").exists())
+            metadata = json.loads((debug_dir / "metadata.json").read_text(encoding="utf-8"))
+            self.assertEqual(metadata["mode"], "stream")
+            self.assertEqual(metadata["result"], "no_speech")
+            self.assertEqual(metadata["vad_engine"], "silero")
+            self.assertIn("wav_path", metadata)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -27,6 +27,7 @@ class DebugRecorder:
     def __init__(self, config: DebugConfig):
         self.config = config
         self._turn_index = 0
+        self._barge_in_index = 0
 
     @property
     def enabled(self) -> bool:
@@ -68,3 +69,50 @@ class DebugRecorder:
             )
 
         return turn_dir
+
+    def save_barge_in_monitor(
+        self,
+        *,
+        mode: str,
+        result: str,
+        pcm: bytes,
+        sample_rate: int,
+        duration_ms: int,
+        metadata: dict[str, Any] | None = None,
+    ) -> Path | None:
+        if not self.config.enabled:
+            return None
+        if not pcm and not self.config.save_metadata:
+            return None
+
+        self._barge_in_index += 1
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        output_dir = (
+            Path(self.config.output_dir)
+            / f"{stamp}-barge-in-{self._barge_in_index:04d}"
+        )
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        data: dict[str, Any] = {
+            "mode": mode,
+            "result": result,
+            "duration_ms": duration_ms,
+            "sample_rate": sample_rate,
+            "bytes": len(pcm),
+        }
+        if metadata:
+            data.update(metadata)
+
+        if pcm and self.config.save_audio:
+            wav_path = output_dir / "barge_in_monitor.wav"
+            write_pcm16_wav(wav_path, pcm, sample_rate)
+            data["wav_path"] = str(wav_path)
+
+        if self.config.save_metadata:
+            metadata_path = output_dir / "metadata.json"
+            metadata_path.write_text(
+                json.dumps(data, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+
+        return output_dir

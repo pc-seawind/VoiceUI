@@ -91,7 +91,9 @@ short smoke tests can be skewed by transient noise.
 `config.demo.mock.yaml`, `config.demo.mify.yaml`, and
 `config.demo.wake.yaml` all use `engine: silero`. If command endings are
 clipped, raise `vad.silence_ms`; if the assistant waits too long after you stop
-speaking, lower it gradually.
+speaking, lower it gradually. `vad.trailing_silence_trim_ms` trims up to 500 ms
+of confirmed trailing silence from the WAV sent to STT without changing the
+silence needed to decide that speech ended.
 
 ## 5. Verify ASR Separately
 
@@ -147,6 +149,9 @@ itself starts late, it is a VAD boundary issue; inspect `vad_debug>` and raise
 `vad.pre_roll_ms`. If the WAV is complete but the transcript starts late, it is
 an ASR issue; the Aliyun demo prints `stt_debug>` and sends
 `stt.leading_silence_ms: 200` before the utterance.
+If logs show `barge_in> no_speech`, listen to
+`debug_sessions\<timestamp>-barge-in-*\barge_in_monitor.wav`; that file is the
+actual command-channel audio monitored during TTS playback.
 It also prints `audio_debug>` for stream open and first-chunk latency; if those
 numbers are large, the capture stream is not ready early enough.
 The local wake acknowledgement plays in the background, so VAD starts

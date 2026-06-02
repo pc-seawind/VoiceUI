@@ -30,6 +30,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.tts.playback_sample_rate, 16000)
         self.assertEqual(config.tts.playback_channels, 2)
         self.assertEqual(config.tts.playback_device, 22)
+        self.assertEqual(config.vad.trailing_silence_trim_ms, 500)
 
     def test_mify_config_loads_backend_values(self) -> None:
         config = load_config("config.mify.example.yaml")
@@ -67,6 +68,7 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(demo_config.audio.channels, 2)
             self.assertEqual(demo_config.audio.wake_stream_channel, 1)
             self.assertEqual(demo_config.audio.command_stream_channel, 0)
+            self.assertEqual(demo_config.vad.trailing_silence_trim_ms, 500)
             if demo_config.tts.playback_device == 22:
                 self.assertEqual(demo_config.tts.sample_rate, 24000)
                 self.assertEqual(demo_config.tts.playback_sample_rate, 16000)

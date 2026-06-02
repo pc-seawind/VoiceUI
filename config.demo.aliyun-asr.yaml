@@ -25,6 +25,7 @@ vad:
   threshold: 0.6
   min_speech_ms: 250
   silence_ms: 800
+  trailing_silence_trim_ms: 500
   max_speech_ms: 15000
   pre_roll_ms: 640
   frame_ms: 32

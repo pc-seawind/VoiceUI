@@ -53,6 +53,7 @@ class VadConfig:
     threshold: float = 450.0
     min_speech_ms: int = 250
     silence_ms: int = 800
+    trailing_silence_trim_ms: int = 500
     max_speech_ms: int = 15000
     pre_roll_ms: int = 240
     frame_ms: int = 20

@@ -90,20 +90,23 @@ class EnergyVadRecorder(VadRecorder):
                 trailing_silence += 1
 
             if trailing_silence >= silence_chunks or len(recorded) >= max_chunks:
-                duration_ms = len(recorded) * chunk_ms
                 reason = "max_duration" if len(recorded) >= max_chunks else "silence"
+                utterance, trimmed_ms = _build_utterance(
+                    recorded,
+                    sample_rate=audio.sample_rate,
+                    frame_duration_ms=chunk_ms,
+                    trailing_silence_ms=trailing_silence * chunk_ms,
+                    trim_ms=self.config.trailing_silence_trim_ms,
+                )
                 _print_vad_stop(
                     self.config,
                     engine="energy",
                     reason=reason,
-                    duration_ms=duration_ms,
+                    duration_ms=utterance.duration_ms,
                     trailing_silence_ms=trailing_silence * chunk_ms,
+                    trimmed_silence_ms=trimmed_ms,
                 )
-                return Utterance(
-                    pcm=b"".join(recorded),
-                    sample_rate=audio.sample_rate,
-                    duration_ms=duration_ms,
-                )
+                return utterance
 
         raise RuntimeError("Audio stream ended during VAD recording.")
 
@@ -192,20 +195,23 @@ class SileroVadRecorder(VadRecorder):
                 trailing_silence += 1
 
             if trailing_silence >= silence_frames or len(recorded) >= max_frames:
-                duration_ms = len(recorded) * window_ms
                 reason = "max_duration" if len(recorded) >= max_frames else "silence"
+                utterance, trimmed_ms = _build_utterance(
+                    recorded,
+                    sample_rate=audio.sample_rate,
+                    frame_duration_ms=window_ms,
+                    trailing_silence_ms=trailing_silence * window_ms,
+                    trim_ms=self.config.trailing_silence_trim_ms,
+                )
                 _print_vad_stop(
                     self.config,
                     engine="silero",
                     reason=reason,
-                    duration_ms=duration_ms,
+                    duration_ms=utterance.duration_ms,
                     trailing_silence_ms=trailing_silence * window_ms,
+                    trimmed_silence_ms=trimmed_ms,
                 )
-                return Utterance(
-                    pcm=b"".join(recorded),
-                    sample_rate=audio.sample_rate,
-                    duration_ms=duration_ms,
-                )
+                return utterance
 
         raise RuntimeError("Audio stream ended during VAD recording.")
 
@@ -313,20 +319,23 @@ class WebRtcVadRecorder(VadRecorder):
                 trailing_silence += 1
 
             if trailing_silence >= silence_frames or len(recorded) >= max_frames:
-                duration_ms = len(recorded) * frame_ms
                 reason = "max_duration" if len(recorded) >= max_frames else "silence"
+                utterance, trimmed_ms = _build_utterance(
+                    recorded,
+                    sample_rate=audio.sample_rate,
+                    frame_duration_ms=frame_ms,
+                    trailing_silence_ms=trailing_silence * frame_ms,
+                    trim_ms=self.config.trailing_silence_trim_ms,
+                )
                 _print_vad_stop(
                     self.config,
                     engine="webrtc",
                     reason=reason,
-                    duration_ms=duration_ms,
+                    duration_ms=utterance.duration_ms,
                     trailing_silence_ms=trailing_silence * frame_ms,
+                    trimmed_silence_ms=trimmed_ms,
                 )
-                return Utterance(
-                    pcm=b"".join(recorded),
-                    sample_rate=audio.sample_rate,
-                    duration_ms=duration_ms,
-                )
+                return utterance
 
         raise RuntimeError("Audio stream ended during VAD recording.")
 
@@ -339,6 +348,28 @@ def create_vad_recorder(config: VadConfig) -> VadRecorder:
     if config.engine == "webrtc":
         return WebRtcVadRecorder(config)
     raise ValueError(f"Unsupported VAD engine: {config.engine}")
+
+
+def _build_utterance(
+    recorded: list[bytes],
+    *,
+    sample_rate: int,
+    frame_duration_ms: int,
+    trailing_silence_ms: int,
+    trim_ms: int,
+) -> tuple[Utterance, int]:
+    pcm = b"".join(recorded)
+    duration_ms = len(recorded) * frame_duration_ms
+    trimmed_ms = min(max(0, trim_ms), max(0, trailing_silence_ms))
+    if trimmed_ms > 0 and sample_rate > 0:
+        trim_bytes = int(sample_rate * trimmed_ms / 1000) * 2
+        trim_bytes -= trim_bytes % 2
+        if trim_bytes > 0:
+            trim_bytes = min(trim_bytes, max(0, len(pcm) - 2))
+            pcm = pcm[: len(pcm) - trim_bytes]
+            duration_ms = int(len(pcm) / 2 / sample_rate * 1000)
+            trimmed_ms = int(trim_bytes / 2 / sample_rate * 1000)
+    return Utterance(pcm=pcm, sample_rate=sample_rate, duration_ms=duration_ms), trimmed_ms
 
 
 def _pcm16_frames(audio: AudioInput, frame_ms: int) -> Iterator[bytes]:
@@ -408,11 +439,13 @@ def _print_vad_stop(
     reason: str,
     duration_ms: int,
     trailing_silence_ms: int,
+    trimmed_silence_ms: int,
 ) -> None:
     if not config.debug:
         return
     print(
         "vad_debug> stop "
         f"engine={engine} reason={reason} duration_ms={duration_ms} "
-        f"trailing_silence_ms={trailing_silence_ms}"
+        f"trailing_silence_ms={trailing_silence_ms} "
+        f"trimmed_silence_ms={trimmed_silence_ms}"
     )

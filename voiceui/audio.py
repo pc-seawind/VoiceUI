@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import time
 import wave
+from collections import deque
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Protocol
@@ -24,6 +25,44 @@ class NullAudioInput:
 
     def chunks(self) -> Iterator[bytes]:
         raise RuntimeError("Audio input is not configured. Use --text or input.mode=text.")
+
+
+class RecordingAudioInput:
+    def __init__(self, audio: AudioInput, max_seconds: float | None = None):
+        self.audio = audio
+        self.config = getattr(audio, "config", None)
+        self.selected_channel = getattr(audio, "selected_channel", "?")
+        self.sample_rate = audio.sample_rate
+        self.block_ms = audio.block_ms
+        self.max_bytes = (
+            int(self.sample_rate * 2 * max_seconds)
+            if max_seconds is not None and max_seconds > 0
+            else 0
+        )
+        self._chunks: deque[bytes] = deque()
+        self._size = 0
+
+    def chunks(self) -> Iterator[bytes]:
+        for chunk in self.audio.chunks():
+            self._append(chunk)
+            yield chunk
+
+    def pcm(self) -> bytes:
+        return b"".join(self._chunks)
+
+    def duration_ms(self) -> int:
+        if self.sample_rate <= 0:
+            return 0
+        return int(self._size / 2 / self.sample_rate * 1000)
+
+    def _append(self, chunk: bytes) -> None:
+        if not chunk:
+            return
+        self._chunks.append(chunk)
+        self._size += len(chunk)
+        while self.max_bytes > 0 and self._size > self.max_bytes and self._chunks:
+            removed = self._chunks.popleft()
+            self._size -= len(removed)
 
 
 class SoundDeviceAudioInput:

@@ -119,7 +119,7 @@ class VadTests(unittest.TestCase):
                 FakeAudio([silence + speech + speech + speech + silence + silence])
             )
 
-        self.assertEqual(utterance.duration_ms, 120)
+        self.assertEqual(utterance.duration_ms, 80)
         self.assertEqual(utterance.sample_rate, 16000)
 
     def test_silero_vad_records_until_trailing_silence(self) -> None:
@@ -141,8 +141,30 @@ class VadTests(unittest.TestCase):
                 FakeAudio([silence + speech + speech + speech + silence + silence])
             )
 
-        self.assertEqual(utterance.duration_ms, 192)
+        self.assertEqual(utterance.duration_ms, 128)
         self.assertEqual(utterance.sample_rate, 16000)
+
+    def test_silero_vad_can_keep_trailing_silence_when_trim_is_disabled(self) -> None:
+        recorder = SileroVadRecorder(
+            VadConfig(
+                engine="silero",
+                threshold=0.6,
+                min_speech_ms=64,
+                silence_ms=64,
+                trailing_silence_trim_ms=0,
+                pre_roll_ms=32,
+            )
+        )
+        silence = b"\x00\x00" * 512
+        speech = (2000).to_bytes(2, "little", signed=True) * 512
+        fake_silero = types.SimpleNamespace(load_silero_vad=FakeSileroModel)
+
+        with patch.dict(sys.modules, {"silero_vad": fake_silero, "torch": FakeTorch}):
+            utterance = recorder.record(
+                FakeAudio([silence + speech + speech + speech + silence + silence])
+            )
+
+        self.assertEqual(utterance.duration_ms, 192)
 
     def test_silero_vad_keeps_configured_pre_roll_before_confirmed_speech(self) -> None:
         recorder = SileroVadRecorder(

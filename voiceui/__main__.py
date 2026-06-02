@@ -4,10 +4,13 @@ import argparse
 import json
 import sys
 import time
-from collections import deque
-from collections.abc import Iterator
 
-from voiceui.audio import create_audio_input, list_audio_devices, read_pcm16_wav
+from voiceui.audio import (
+    RecordingAudioInput,
+    create_audio_input,
+    list_audio_devices,
+    read_pcm16_wav,
+)
 from voiceui.config import config_to_dict, load_config
 from voiceui.core import VoiceAssistant
 from voiceui.debug import DebugRecorder, TurnDebugData
@@ -23,35 +26,6 @@ _DEFAULT_WAKE_ACK_STYLE = (
     "自然、清晰、亲切、短促，适合智能音箱被唤醒后的中文回应。"
     "语速稍快，不拖尾，不要夸张。"
 )
-
-
-class _RecordingAudioInput:
-    def __init__(self, audio, max_seconds: float):
-        self.audio = audio
-        self.config = getattr(audio, "config", None)
-        self.selected_channel = getattr(audio, "selected_channel", "?")
-        self.sample_rate = audio.sample_rate
-        self.block_ms = audio.block_ms
-        self.max_bytes = int(self.sample_rate * 2 * max(0.0, max_seconds))
-        self._chunks: deque[bytes] = deque()
-        self._size = 0
-
-    def chunks(self) -> Iterator[bytes]:
-        for chunk in self.audio.chunks():
-            self._append(chunk)
-            yield chunk
-
-    def pcm(self) -> bytes:
-        return b"".join(self._chunks)
-
-    def _append(self, chunk: bytes) -> None:
-        if self.max_bytes <= 0 or not chunk:
-            return
-        self._chunks.append(chunk)
-        self._size += len(chunk)
-        while self._size > self.max_bytes and self._chunks:
-            removed = self._chunks.popleft()
-            self._size -= len(removed)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -189,7 +163,7 @@ def main(argv: list[str] | None = None) -> int:
                 else config.audio.wake_stream_channel
             )
             audio = create_audio_input(config.audio, enabled=True, selected_channel=channel)
-            recording_audio = _RecordingAudioInput(
+            recording_audio = RecordingAudioInput(
                 audio,
                 max_seconds=(
                     args.seconds
@@ -276,7 +250,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _wake_event_from_recording(
-    audio: _RecordingAudioInput,
+    audio: RecordingAudioInput,
     *,
     engine: str,
     label: str,

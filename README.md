@@ -94,7 +94,9 @@ The current demo configs use Silero VAD. `vad.threshold` is a speech
 probability in this mode; start with `0.6`, raise it toward `0.7` if background
 noise starts turns, or lower it toward `0.5` if it misses speech. Demo configs
 keep `vad.pre_roll_ms: 640` so the saved utterance includes audio before the
-speech-start confirmation point.
+speech-start confirmation point. `vad.silence_ms` still controls how much
+trailing silence confirms the end of speech; `vad.trailing_silence_trim_ms`
+then trims up to 500 ms of that confirmed silence before sending audio to STT.
 
 If you switch a config back to `vad.engine: energy`, estimate an initial
 RMS-based `vad.threshold` from room noise:
@@ -125,6 +127,9 @@ returns to wake-word listening. `--once` is intentionally still a single-turn
 smoke test. Wake demo configs also enable `conversation.barge_in_enabled`, so
 VoiceUI keeps VAD active while streaming TTS is playing. When speech starts, the
 current playback is stopped and the captured utterance becomes the next turn.
+When debug audio is enabled, the barge-in monitor stream is also saved under
+`debug_sessions/*-barge-in-*/barge_in_monitor.wav`, including `no_speech`
+cases where VAD never starts an utterance.
 
 ## First Demo
 
@@ -261,6 +266,9 @@ after wake detection so command audio is not blocked by the "我在" WAV.
 Each audio turn writes debug artifacts under `debug_sessions/` when
 `debug.enabled` is true. The folder contains `utterance.wav` and
 `metadata.json` with wake/VAD/STT/LLM/TTS timings, transcript, and reply.
+During TTS playback, barge-in monitoring writes separate `*-barge-in-*` folders
+containing `barge_in_monitor.wav` and metadata. Listen to that file when logs
+show `barge_in> no_speech` to confirm what VAD heard.
 For clipped-start issues, listen to `utterance.wav`: if the beginning is missing
 there, tune VAD; if the WAV is complete but the transcript is missing the
 beginning, tune ASR. The Aliyun demo also prints `stt_debug>` with the exact

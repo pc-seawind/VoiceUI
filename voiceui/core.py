@@ -5,7 +5,7 @@ import threading
 import time
 from collections.abc import Iterator
 
-from voiceui.audio import create_audio_input
+from voiceui.audio import RecordingAudioInput, create_audio_input
 from voiceui.debug import DebugRecorder, TurnDebugData
 from voiceui.home_assistant import HomeAssistantClient
 from voiceui.llm import create_chat_client
@@ -251,10 +251,52 @@ class VoiceAssistant:
             f"command_channel={self.config.audio.command_stream_channel}"
         )
 
+    def _save_barge_in_monitor(
+        self,
+        *,
+        mode: str,
+        state: dict[str, object],
+        monitor_audio: RecordingAudioInput,
+    ) -> None:
+        pcm = monitor_audio.pcm()
+        result = "no_speech"
+        utterance = state.get("utterance")
+        if isinstance(utterance, Utterance):
+            result = "captured"
+        elif "error" in state:
+            result = "error"
+
+        metadata: dict[str, object] = {
+            "vad_engine": self.config.vad.engine,
+            "vad_threshold": self.config.vad.threshold,
+            "command_channel": self.config.audio.command_stream_channel,
+        }
+        if isinstance(utterance, Utterance):
+            metadata["utterance_duration_ms"] = utterance.duration_ms
+        if "timeout" in state:
+            metadata["timeout"] = str(state["timeout"])
+        if "error" in state:
+            metadata["error"] = str(state["error"])
+
+        debug_dir = self.debug.save_barge_in_monitor(
+            mode=mode,
+            result=result,
+            pcm=pcm,
+            sample_rate=monitor_audio.sample_rate,
+            duration_ms=monitor_audio.duration_ms(),
+            metadata=metadata,
+        )
+        if debug_dir:
+            print(
+                "barge_in> monitor_saved="
+                f"{debug_dir} duration_ms={monitor_audio.duration_ms()} result={result}"
+            )
+
     def _speak_with_barge_in(self, text: str) -> Utterance | None:
         playback_stop_event = threading.Event()
         monitor_stop_event = threading.Event()
         state: dict[str, object] = {}
+        monitor_audio = RecordingAudioInput(self.command_audio)
 
         def on_speech_start() -> None:
             if not playback_stop_event.is_set():
@@ -264,12 +306,13 @@ class VoiceAssistant:
         def monitor() -> None:
             try:
                 utterance = self.vad.record(
-                    self.command_audio,
+                    monitor_audio,
                     start_timeout_seconds=0.0,
                     stop_event=monitor_stop_event,
                     on_speech_start=on_speech_start,
                 )
-            except SpeechStartTimeoutError:
+            except SpeechStartTimeoutError as exc:
+                state["timeout"] = str(exc)
                 return
             except Exception as exc:
                 state["error"] = exc
@@ -303,6 +346,12 @@ class VoiceAssistant:
                 monitor_stop_event.set()
                 monitor_thread.join(timeout=1.0)
 
+        self._save_barge_in_monitor(
+            mode="full",
+            state=state,
+            monitor_audio=monitor_audio,
+        )
+
         error = state.get("error")
         if isinstance(error, Exception):
             print(f"barge_in> error={error}")
@@ -323,6 +372,7 @@ class VoiceAssistant:
         playback_stop_event = threading.Event()
         monitor_stop_event = threading.Event()
         state: dict[str, object] = {}
+        monitor_audio = RecordingAudioInput(self.command_audio)
 
         def on_speech_start() -> None:
             if not playback_stop_event.is_set():
@@ -334,12 +384,13 @@ class VoiceAssistant:
         def monitor() -> None:
             try:
                 utterance = self.vad.record(
-                    self.command_audio,
+                    monitor_audio,
                     start_timeout_seconds=0.0,
                     stop_event=monitor_stop_event,
                     on_speech_start=on_speech_start,
                 )
-            except SpeechStartTimeoutError:
+            except SpeechStartTimeoutError as exc:
+                state["timeout"] = str(exc)
                 return
             except Exception as exc:
                 state["error"] = exc
@@ -372,6 +423,12 @@ class VoiceAssistant:
             else:
                 monitor_stop_event.set()
                 monitor_thread.join(timeout=1.0)
+
+        self._save_barge_in_monitor(
+            mode="stream",
+            state=state,
+            monitor_audio=monitor_audio,
+        )
 
         error = state.get("error")
         if isinstance(error, Exception):

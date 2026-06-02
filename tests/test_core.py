@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import contextlib
 import io
+import tempfile
 import threading
 import time
 import unittest
+from collections.abc import Iterator
+from pathlib import Path
 
 from voiceui.core import VoiceAssistant
 from voiceui.llm import ChatMessage
@@ -12,6 +15,7 @@ from voiceui.models import (
     AssistantConfig,
     AssistantReply,
     ConversationConfig,
+    DebugConfig,
     InputConfig,
     LlmConfig,
     Utterance,
@@ -64,6 +68,33 @@ class FakeVad:
         if on_speech_start is not None:
             on_speech_start()
         return item
+
+
+class InfiniteAudio:
+    sample_rate = 16000
+    block_ms = 20
+
+    def __init__(self, chunk: bytes = b"\x00\x00" * 320):
+        self.chunk = chunk
+
+    def chunks(self) -> Iterator[bytes]:
+        while True:
+            yield self.chunk
+
+
+class ConsumingTimeoutVad:
+    def record(
+        self,
+        audio,
+        start_timeout_seconds: float = 0.0,
+        stop_event: threading.Event | None = None,
+        on_speech_start=None,
+    ) -> Utterance:
+        for _chunk in audio.chunks():
+            if stop_event is not None and stop_event.is_set():
+                raise SpeechStartTimeoutError("Stopped waiting for speech.")
+            time.sleep(0.005)
+        raise SpeechStartTimeoutError("Stopped waiting for speech.")
 
 
 class FakeStt:
@@ -258,6 +289,28 @@ class CoreTests(unittest.TestCase):
             ["system", "first", "reply 1", "barge"],
         )
         self.assertIn(0.0, fake_vad.start_timeouts)
+
+    def test_barge_in_no_speech_saves_monitor_audio(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = AssistantConfig(
+                input=InputConfig(mode="audio"),
+                wake=WakeConfig(engine="disabled"),
+                conversation=ConversationConfig(barge_in_enabled=True),
+                debug=DebugConfig(enabled=True, output_dir=temp_dir),
+            )
+            assistant = VoiceAssistant(config)
+            assistant.command_audio = InfiniteAudio(chunk=b"\x01\x00" * 320)
+            assistant.vad = ConsumingTimeoutVad()
+            assistant.tts = BargeFirstTts()
+
+            with contextlib.redirect_stdout(io.StringIO()):
+                utterance = assistant._speak_with_barge_in("reply")
+
+            self.assertIsNone(utterance)
+            debug_dirs = list(Path(temp_dir).glob("*-barge-in-*"))
+            self.assertEqual(len(debug_dirs), 1)
+            self.assertTrue((debug_dirs[0] / "barge_in_monitor.wav").exists())
+            self.assertTrue((debug_dirs[0] / "metadata.json").exists())
 
 
 if __name__ == "__main__":
