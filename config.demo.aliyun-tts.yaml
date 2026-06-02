@@ -42,12 +42,14 @@ stt:
   debug: true
 
 llm:
-  provider: mify
-  endpoint: https://editdemo.ai.xiaomi.net/model/infer/xiaomi-mify/v1
-  api_key_env: MIFY_API_KEY
-  model: xiaomi/mimo-v2.5
+  provider: bailian
+  endpoint: https://dashscope.aliyuncs.com/compatible-mode/v1
+  api_key_env: DASHSCOPE_API_KEY
+  model: qwen3.6-flash
   temperature: 0.3
   stream: true
+  extra_body:
+    enable_thinking: false
   system_prompt: >
     You are a concise Chinese smart speaker assistant. Reply in short spoken
     Chinese. Ask for confirmation before sensitive home actions.

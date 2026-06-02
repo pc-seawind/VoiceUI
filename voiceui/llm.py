@@ -79,12 +79,7 @@ class OpenAICompatibleChatClient(ChatClient):
         self.config = config
 
     def complete(self, messages: list[ChatMessage]) -> str:
-        payload = {
-            "model": self.config.model,
-            "messages": _messages_payload(messages),
-            "temperature": self.config.temperature,
-            "stream": False,
-        }
+        payload = _openai_chat_payload(self.config, messages, stream=False)
         data = _post_json(
             _chat_completions_url(self.config.endpoint),
             payload,
@@ -94,12 +89,7 @@ class OpenAICompatibleChatClient(ChatClient):
         return _extract_chat_message_text(data)
 
     def stream_complete(self, messages: list[ChatMessage]) -> Iterator[str]:
-        payload = {
-            "model": self.config.model,
-            "messages": _messages_payload(messages),
-            "temperature": self.config.temperature,
-            "stream": True,
-        }
+        payload = _openai_chat_payload(self.config, messages, stream=True)
         yield from _stream_chat_completion_text(
             _chat_completions_url(self.config.endpoint),
             payload,
@@ -120,12 +110,7 @@ class MimoChatClient(ChatClient):
         self.config = config
 
     def complete(self, messages: list[ChatMessage]) -> str:
-        payload = {
-            "model": self.config.model,
-            "messages": _messages_payload(messages),
-            "temperature": self.config.temperature,
-            "stream": False,
-        }
+        payload = _openai_chat_payload(self.config, messages, stream=False)
         data = _post_json(
             _chat_completions_url(self.config.endpoint),
             payload,
@@ -135,12 +120,7 @@ class MimoChatClient(ChatClient):
         return _extract_chat_message_text(data)
 
     def stream_complete(self, messages: list[ChatMessage]) -> Iterator[str]:
-        payload = {
-            "model": self.config.model,
-            "messages": _messages_payload(messages),
-            "temperature": self.config.temperature,
-            "stream": True,
-        }
+        payload = _openai_chat_payload(self.config, messages, stream=True)
         yield from _stream_chat_completion_text(
             _chat_completions_url(self.config.endpoint),
             payload,
@@ -161,7 +141,7 @@ def create_chat_client(config: LlmConfig) -> ChatClient:
         return MockChatClient()
     if config.provider == "ollama":
         return OllamaChatClient(config)
-    if config.provider == "openai_compatible":
+    if config.provider in ("openai_compatible", "bailian"):
         return OpenAICompatibleChatClient(config)
     if config.provider in ("mify", "mimo"):
         return MimoChatClient(config)
@@ -170,6 +150,16 @@ def create_chat_client(config: LlmConfig) -> ChatClient:
 
 def _messages_payload(messages: list[ChatMessage]) -> list[dict[str, str]]:
     return [{"role": message.role, "content": message.content} for message in messages]
+
+
+def _openai_chat_payload(config: LlmConfig, messages: list[ChatMessage], stream: bool) -> dict:
+    return {
+        "model": config.model,
+        "messages": _messages_payload(messages),
+        "temperature": config.temperature,
+        **config.extra_body,
+        "stream": stream,
+    }
 
 
 def _chat_completions_url(endpoint: str) -> str:

@@ -86,13 +86,14 @@ class SttConfig:
 
 @dataclass(slots=True)
 class LlmConfig:
-    provider: Literal["mock", "ollama", "openai_compatible", "mify", "mimo"] = "mock"
+    provider: Literal["mock", "ollama", "openai_compatible", "bailian", "mify", "mimo"] = "mock"
     endpoint: str = "http://localhost:11434"
     model: str = "qwen2.5:7b-instruct"
     api_key_env: str | None = None
     temperature: float = 0.3
     timeout_seconds: float = 60.0
     stream: bool = False
+    extra_body: dict[str, object] = field(default_factory=dict)
     system_prompt: str = (
         "You are a concise home voice assistant. Answer briefly and ask for "
         "confirmation before sensitive actions."

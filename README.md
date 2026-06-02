@@ -49,8 +49,9 @@ Create local secrets from the template:
 Copy-Item .env.example .env
 ```
 
-Then fill `MIFY_API_KEY` in `.env`. The real `.env` is ignored by git and is
-loaded automatically by the CLI.
+Then fill `DASHSCOPE_API_KEY` for Bailian LLM and `MIFY_API_KEY` if you use
+Mify/MiMo ASR or TTS. The real `.env` is ignored by git and is loaded
+automatically by the CLI.
 
 List audio devices:
 
@@ -260,21 +261,24 @@ For the first XVF3800 prototype:
 - LLM: Ollama or any OpenAI-compatible endpoint.
 - TTS: console for bring-up, Piper HTTP or Piper CLI for local speech output.
 
-## Mify / MiMo Backend
+## Cloud Backends
 
 VoiceUI cannot use the Codex session itself as a production LLM API. For the
-Mify/MiMo path, LLM and ASR use `xiaomi/mimo-v2.5`. For lower-latency TTS,
-the demo uses `xiaomi/mimo-v2-tts` with streaming enabled.
+current cloud path, the LLM provider is Bailian with `qwen3.6-flash`, while
+Mify/MiMo ASR continues to use `xiaomi/mimo-v2.5`. For lower-latency TTS, the
+demo uses `xiaomi/mimo-v2-tts` with streaming enabled.
 
 Example LLM config:
 
 ```yaml
 llm:
-  provider: mify
-  endpoint: https://api.xiaomimimo.com/v1
-  api_key_env: MIFY_API_KEY
-  model: xiaomi/mimo-v2.5
+  provider: bailian
+  endpoint: https://dashscope.aliyuncs.com/compatible-mode/v1
+  api_key_env: DASHSCOPE_API_KEY
+  model: qwen3.6-flash
   stream: true
+  extra_body:
+    enable_thinking: false
 ```
 
 Example ASR config:

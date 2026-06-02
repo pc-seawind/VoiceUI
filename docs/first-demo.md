@@ -22,13 +22,14 @@ For the wake-word demo:
 pip install -e ".[demo,wake]"
 ```
 
-Create a local `.env` and fill in the Mify token:
+Create a local `.env` and fill in the cloud backend tokens:
 
 ```powershell
 Copy-Item .env.example .env
 ```
 
-Set `MIFY_API_KEY=...` inside `.env`. This file is ignored by git and is loaded
+Set `DASHSCOPE_API_KEY=...` for Bailian LLM. If you use Mify/MiMo ASR or TTS,
+also set `MIFY_API_KEY=...`. This file is ignored by git and is loaded
 automatically by the CLI.
 
 ## 2. Confirm Audio Devices

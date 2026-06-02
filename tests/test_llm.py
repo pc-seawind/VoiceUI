@@ -3,7 +3,13 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from voiceui.llm import ChatMessage, MimoChatClient, OllamaChatClient, OpenAICompatibleChatClient
+from voiceui.llm import (
+    ChatMessage,
+    MimoChatClient,
+    OllamaChatClient,
+    OpenAICompatibleChatClient,
+    create_chat_client,
+)
 from voiceui.models import LlmConfig
 
 
@@ -121,6 +127,48 @@ class LlmTests(unittest.TestCase):
         self.assertEqual(chunks, ["hello", " world"])
         _url, payload = post_json_stream.call_args.args[:2]
         self.assertTrue(payload["stream"])
+
+    def test_openai_compatible_client_includes_extra_body(self) -> None:
+        config = LlmConfig(
+            provider="openai_compatible",
+            endpoint="http://openai-compatible.local",
+            model="demo-model",
+            extra_body={"enable_thinking": False},
+        )
+        client = OpenAICompatibleChatClient(config)
+
+        with patch("voiceui.llm._post_json") as post_json:
+            post_json.return_value = {"choices": [{"message": {"content": "hi"}}]}
+            client.complete([ChatMessage(role="user", content="hello")])
+
+        _url, payload = post_json.call_args.args[:2]
+        self.assertFalse(payload["enable_thinking"])
+        self.assertFalse(payload["stream"])
+
+    def test_bailian_provider_uses_openai_compatible_bearer_auth(self) -> None:
+        config = LlmConfig(
+            provider="bailian",
+            endpoint="https://dashscope.aliyuncs.com/compatible-mode/v1",
+            api_key_env="DASHSCOPE_API_KEY",
+            model="qwen3.6-flash",
+            extra_body={"enable_thinking": False},
+        )
+        client = create_chat_client(config)
+
+        with patch.dict("os.environ", {"DASHSCOPE_API_KEY": "test-token"}):
+            with patch("voiceui.llm._post_json") as post_json:
+                post_json.return_value = {"choices": [{"message": {"content": "hi"}}]}
+                response = client.complete([ChatMessage(role="user", content="hello")])
+
+        self.assertEqual(response, "hi")
+        url, payload = post_json.call_args.args[:2]
+        self.assertEqual(url, "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions")
+        self.assertEqual(payload["model"], "qwen3.6-flash")
+        self.assertFalse(payload["enable_thinking"])
+        self.assertEqual(
+            post_json.call_args.kwargs["headers"],
+            {"Authorization": "Bearer test-token"},
+        )
 
     def test_ollama_client_streams_message_content(self) -> None:
         config = LlmConfig(provider="ollama", endpoint="http://ollama.local", model="demo-model")
