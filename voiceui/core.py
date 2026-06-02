@@ -446,7 +446,7 @@ class VoiceAssistant:
             reply=reply.text,
             routed_to=reply.routed_to,
         )
-        debug_dir = self.debug.save_turn(debug_data, utterance)
+        debug_dir = self.debug.save_turn(debug_data, utterance, wake_audio=wake)
         if debug_dir:
             print(f"debug> saved={debug_dir}")
         return reply, transcript

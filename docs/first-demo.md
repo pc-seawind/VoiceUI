@@ -202,6 +202,15 @@ periodic lines like:
 wake_debug> elapsed_s=1.0 chunks=13 audio_ms=1040 rms=... peak=... dbfs=... near_zero_pct=... clipped_pct=... last=alexa:... best_window=alexa:... threshold=0.500 top=alexa:... predict_avg_ms=...
 ```
 
+When `debug.enabled` and `debug.save_audio` are true, wake runs save
+`debug_sessions\<turn>\wake.wav` with the exact wake channel passed into
+openWakeWord. A full assistant turn saves both `wake.wav` and `utterance.wav`.
+`--wake-monitor` saves `wake.wav` even when the wake word is not detected:
+
+```powershell
+python -m voiceui --config config.demo.wake.aliyun.yaml --wake-monitor --wake-model alexa --seconds 10
+```
+
 Interpretation:
 
 1. `rms` and `peak` near zero means the selected input/channel is probably

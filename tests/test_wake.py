@@ -7,6 +7,7 @@ from voiceui.wake import (
     DisabledWakeDetector,
     ManualWakeDetector,
     OpenWakeWordDetector,
+    _PcmRingBuffer,
     _best_prediction,
     _format_predictions,
     _normalize_openwakeword_label,
@@ -43,6 +44,16 @@ class WakeTests(unittest.TestCase):
             _format_predictions({"low": 0.1, "high": 0.9, "mid": 0.5}, limit=2),
             "high:0.900,mid:0.500",
         )
+
+    def test_pcm_ring_buffer_keeps_recent_audio(self) -> None:
+        buffer = _PcmRingBuffer(max_bytes=6)
+
+        buffer.append(b"aa")
+        buffer.append(b"bb")
+        buffer.append(b"cc")
+        buffer.append(b"dd")
+
+        self.assertEqual(buffer.pcm(), b"bbccdd")
 
     def test_openwakeword_model_name_normalization(self) -> None:
         self.assertEqual(_normalize_openwakeword_label("Hey Jarvis"), "hey_jarvis")

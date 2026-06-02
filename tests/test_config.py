@@ -13,6 +13,7 @@ class ConfigTests(unittest.TestCase):
         self.assertIsInstance(config.input, InputConfig)
         self.assertIsInstance(config.audio, AudioConfig)
         self.assertEqual(config.input.mode, "text")
+        self.assertEqual(config.wake.debug_audio_seconds, 5.0)
 
     def test_example_config_loads_nested_values(self) -> None:
         config = load_config("config.example.yaml")

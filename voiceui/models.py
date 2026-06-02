@@ -37,6 +37,7 @@ class WakeConfig:
     debug: bool = False
     debug_interval_seconds: float = 1.0
     debug_top_predictions: int = 5
+    debug_audio_seconds: float = 5.0
 
 
 @dataclass(slots=True)
@@ -177,6 +178,9 @@ class WakeEvent:
     engine: str
     confidence: float
     label: str
+    pcm: bytes = b""
+    sample_rate: int = 16000
+    duration_ms: int = 0
 
 
 @dataclass(slots=True)

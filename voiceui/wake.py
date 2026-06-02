@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import time
+from collections import deque
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -93,6 +94,11 @@ class OpenWakeWordDetector(WakeDetector):
         debug_interval = max(0.1, self.config.debug_interval_seconds)
         next_debug_at = started + debug_interval
         debug_window = _WakeDebugWindow()
+        audio_buffer = _PcmRingBuffer(
+            max_bytes=int(
+                audio.sample_rate * 2 * max(0.0, self.config.debug_audio_seconds)
+            )
+        )
         if debug_enabled:
             print(
                 "wake_debug> enabled "
@@ -102,6 +108,7 @@ class OpenWakeWordDetector(WakeDetector):
             )
 
         for chunk in audio.chunks():
+            audio_buffer.append(chunk)
             samples = np.frombuffer(chunk, dtype=np.int16)
             predict_started = time.monotonic()
             predictions = self._model.predict(samples)
@@ -134,7 +141,15 @@ class OpenWakeWordDetector(WakeDetector):
                         f"elapsed_s={elapsed:.2f} label={label} confidence={confidence:.3f} "
                         f"threshold={self.config.threshold:.3f}"
                     )
-                return WakeEvent(engine="openwakeword", confidence=confidence, label=label)
+                pcm = audio_buffer.pcm()
+                return WakeEvent(
+                    engine="openwakeword",
+                    confidence=confidence,
+                    label=label,
+                    pcm=pcm,
+                    sample_rate=audio.sample_rate,
+                    duration_ms=_pcm_duration_ms(pcm, audio.sample_rate),
+                )
             if self.config.max_wait_seconds > 0:
                 elapsed = time.monotonic() - started
                 if elapsed >= self.config.max_wait_seconds:
@@ -241,6 +256,31 @@ class _WakeDebugWindow:
             f"top={_format_predictions(self.last_predictions, top_predictions)} "
             f"predict_avg_ms={avg_predict_ms:.1f} predict_max_ms={self.predict_max_ms:.1f}"
         )
+
+
+class _PcmRingBuffer:
+    def __init__(self, max_bytes: int):
+        self.max_bytes = max(0, max_bytes)
+        self._chunks: deque[bytes] = deque()
+        self._size = 0
+
+    def append(self, chunk: bytes) -> None:
+        if self.max_bytes <= 0 or not chunk:
+            return
+        self._chunks.append(chunk)
+        self._size += len(chunk)
+        while self._size > self.max_bytes and self._chunks:
+            removed = self._chunks.popleft()
+            self._size -= len(removed)
+
+    def pcm(self) -> bytes:
+        return b"".join(self._chunks)
+
+
+def _pcm_duration_ms(pcm: bytes, sample_rate: int) -> int:
+    if sample_rate <= 0:
+        return 0
+    return int(len(pcm) / 2 / sample_rate * 1000)
 
 
 def _pcm16_stats(samples) -> dict[str, float | int]:

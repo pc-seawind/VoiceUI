@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from voiceui.audio import write_pcm16_wav
-from voiceui.models import DebugConfig, Utterance
+from voiceui.models import DebugConfig, Utterance, WakeEvent
 
 
 @dataclass(slots=True)
@@ -32,7 +32,12 @@ class DebugRecorder:
     def enabled(self) -> bool:
         return self.config.enabled
 
-    def save_turn(self, data: TurnDebugData, utterance: Utterance | None = None) -> Path | None:
+    def save_turn(
+        self,
+        data: TurnDebugData,
+        utterance: Utterance | None = None,
+        wake_audio: WakeEvent | None = None,
+    ) -> Path | None:
         if not self.config.enabled:
             return None
 
@@ -40,6 +45,15 @@ class DebugRecorder:
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         turn_dir = Path(self.config.output_dir) / f"{stamp}-{self._turn_index:04d}"
         turn_dir.mkdir(parents=True, exist_ok=True)
+
+        if wake_audio is not None:
+            data.wake["duration_ms"] = wake_audio.duration_ms
+            data.wake["sample_rate"] = wake_audio.sample_rate
+            data.wake["bytes"] = len(wake_audio.pcm)
+            if wake_audio.pcm and self.config.save_audio:
+                wav_path = turn_dir / "wake.wav"
+                write_pcm16_wav(wav_path, wake_audio.pcm, wake_audio.sample_rate)
+                data.wake["wav_path"] = str(wav_path)
 
         if utterance and self.config.save_audio:
             wav_path = turn_dir / "utterance.wav"

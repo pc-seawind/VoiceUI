@@ -4,13 +4,16 @@ import argparse
 import json
 import sys
 import time
+from collections import deque
+from collections.abc import Iterator
 
 from voiceui.audio import create_audio_input, list_audio_devices, read_pcm16_wav
 from voiceui.config import config_to_dict, load_config
 from voiceui.core import VoiceAssistant
+from voiceui.debug import DebugRecorder, TurnDebugData
 from voiceui.diagnostics import calibrate_vad, record_wav
 from voiceui.env import load_dotenv
-from voiceui.models import Utterance
+from voiceui.models import AssistantConfig, Utterance, WakeEvent
 from voiceui.stt import create_stt
 from voiceui.tts import synthesize_to_wav
 from voiceui.wake import create_wake_detector, list_openwakeword_models
@@ -20,6 +23,35 @@ _DEFAULT_WAKE_ACK_STYLE = (
     "自然、清晰、亲切、短促，适合智能音箱被唤醒后的中文回应。"
     "语速稍快，不拖尾，不要夸张。"
 )
+
+
+class _RecordingAudioInput:
+    def __init__(self, audio, max_seconds: float):
+        self.audio = audio
+        self.config = getattr(audio, "config", None)
+        self.selected_channel = getattr(audio, "selected_channel", "?")
+        self.sample_rate = audio.sample_rate
+        self.block_ms = audio.block_ms
+        self.max_bytes = int(self.sample_rate * 2 * max(0.0, max_seconds))
+        self._chunks: deque[bytes] = deque()
+        self._size = 0
+
+    def chunks(self) -> Iterator[bytes]:
+        for chunk in self.audio.chunks():
+            self._append(chunk)
+            yield chunk
+
+    def pcm(self) -> bytes:
+        return b"".join(self._chunks)
+
+    def _append(self, chunk: bytes) -> None:
+        if self.max_bytes <= 0 or not chunk:
+            return
+        self._chunks.append(chunk)
+        self._size += len(chunk)
+        while self._size > self.max_bytes and self._chunks:
+            removed = self._chunks.popleft()
+            self._size -= len(removed)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -157,6 +189,14 @@ def main(argv: list[str] | None = None) -> int:
                 else config.audio.wake_stream_channel
             )
             audio = create_audio_input(config.audio, enabled=True, selected_channel=channel)
+            recording_audio = _RecordingAudioInput(
+                audio,
+                max_seconds=(
+                    args.seconds
+                    if args.wake_monitor
+                    else max(0.0, config.wake.debug_audio_seconds)
+                ),
+            )
             started = time.monotonic()
             if args.wake_monitor:
                 config.wake.debug = True
@@ -172,17 +212,36 @@ def main(argv: list[str] | None = None) -> int:
                     f"model={config.wake.model} threshold={config.wake.threshold:.3f}"
                 )
             try:
-                wake = create_wake_detector(config.wake).wait(audio)
+                wake = create_wake_detector(config.wake).wait(recording_audio)
             except TimeoutError:
                 if args.wake_monitor:
+                    latency_ms = int((time.monotonic() - started) * 1000)
+                    _save_wake_debug(
+                        config,
+                        _wake_event_from_recording(
+                            recording_audio,
+                            engine=config.wake.engine,
+                            label="timeout",
+                            confidence=0.0,
+                        ),
+                        wake_ms=latency_ms,
+                    )
                     print("wake_monitor> done")
                     return 0
                 raise
             latency_ms = int((time.monotonic() - started) * 1000)
+            if not wake.pcm:
+                wake = _wake_event_from_recording(
+                    recording_audio,
+                    engine=wake.engine,
+                    label=wake.label,
+                    confidence=wake.confidence,
+                )
             print(
                 f"wake> engine={wake.engine} label={wake.label} "
                 f"confidence={wake.confidence:.3f} latency_ms={latency_ms}"
             )
+            _save_wake_debug(config, wake, wake_ms=latency_ms)
             if args.wake_monitor:
                 return 0
             ack_started = time.monotonic()
@@ -214,6 +273,48 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:
         print(f"error> {exc}", file=sys.stderr)
         return 2
+
+
+def _wake_event_from_recording(
+    audio: _RecordingAudioInput,
+    *,
+    engine: str,
+    label: str,
+    confidence: float,
+) -> WakeEvent:
+    pcm = audio.pcm()
+    return WakeEvent(
+        engine=engine,
+        confidence=confidence,
+        label=label,
+        pcm=pcm,
+        sample_rate=audio.sample_rate,
+        duration_ms=_pcm_duration_ms(pcm, audio.sample_rate),
+    )
+
+
+def _save_wake_debug(config: AssistantConfig, wake: WakeEvent, wake_ms: int) -> None:
+    debug_dir = DebugRecorder(config.debug).save_turn(
+        TurnDebugData(
+            node_id=config.node.id,
+            room=config.node.room,
+            wake={
+                "engine": wake.engine,
+                "label": wake.label,
+                "confidence": wake.confidence,
+            },
+            timings_ms={"wake": wake_ms},
+        ),
+        wake_audio=wake,
+    )
+    if debug_dir:
+        print(f"debug> saved={debug_dir}")
+
+
+def _pcm_duration_ms(pcm: bytes, sample_rate: int) -> int:
+    if sample_rate <= 0:
+        return 0
+    return int(len(pcm) / 2 / sample_rate * 1000)
 
 
 if __name__ == "__main__":

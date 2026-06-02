@@ -154,6 +154,10 @@ Wake demo configs enable `wake.debug: true`, so `--wake-test` and the full
 assistant loop print periodic `wake_debug>` lines with audio level, top model
 scores, threshold, and inference latency. You can also force this on for any
 config with `--wake-debug`.
+When `debug.enabled` and `debug.save_audio` are true, wake tests and full
+assistant turns also save `wake.wav` under `debug_sessions/<turn>/`. Use this to
+hear the exact selected wake channel that openWakeWord received. `--wake-monitor`
+saves the monitored wake audio even when no wake word is detected.
 For hardware bring-up, `config.demo.wake.yaml` uses `wake.threshold: 0.5`.
 Lower it temporarily toward `0.35` if it misses real wake words, or raise it if
 it false-wakes.
@@ -175,6 +179,13 @@ If `alexa` is still not reliable enough, compare the built-in openWakeWord model
 ```powershell
 python -m voiceui --list-wake-models
 python -m voiceui --config config.demo.wake.aliyun.yaml --wake-monitor --wake-model any --seconds 20
+```
+
+For device/channel diagnosis, record a shorter wake monitor sample and listen to
+the saved `wake.wav`:
+
+```powershell
+python -m voiceui --config config.demo.wake.aliyun.yaml --wake-monitor --wake-model alexa --seconds 10
 ```
 
 During `--wake-monitor`, try "alexa", "hey mycroft", "hey rhasspy", "timer",
