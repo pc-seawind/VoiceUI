@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import threading
 import time
 import wave
 from collections import deque
@@ -65,12 +66,69 @@ class RecordingAudioInput:
             self._size -= len(removed)
 
 
+class RawAudioRecording:
+    def __init__(
+        self,
+        *,
+        sample_rate: int,
+        channels: int,
+        max_seconds: float | None = None,
+    ):
+        self.sample_rate = sample_rate
+        self.channels = channels
+        self.max_bytes = (
+            int(sample_rate * channels * 2 * max_seconds)
+            if max_seconds is not None and max_seconds > 0
+            else 0
+        )
+        self._chunks: deque[bytes] = deque()
+        self._size = 0
+        self._lock = threading.Lock()
+
+    def append(self, chunk: bytes) -> None:
+        if not chunk:
+            return
+        with self._lock:
+            self._chunks.append(chunk)
+            self._size += len(chunk)
+            while self.max_bytes > 0 and self._size > self.max_bytes and self._chunks:
+                removed = self._chunks.popleft()
+                self._size -= len(removed)
+
+    def pcm(self) -> bytes:
+        with self._lock:
+            return b"".join(self._chunks)
+
+    def duration_ms(self) -> int:
+        if self.sample_rate <= 0 or self.channels <= 0:
+            return 0
+        with self._lock:
+            return int(self._size / 2 / self.channels / self.sample_rate * 1000)
+
+
 class SoundDeviceAudioInput:
     def __init__(self, config: AudioConfig, selected_channel: int = 0):
         self.config = config
         self.selected_channel = selected_channel
         self.sample_rate = config.sample_rate
         self.block_ms = config.block_ms
+        self._raw_recordings: list[RawAudioRecording] = []
+        self._raw_recordings_lock = threading.Lock()
+
+    def start_raw_recording(self, max_seconds: float | None = None) -> RawAudioRecording:
+        recording = RawAudioRecording(
+            sample_rate=self.sample_rate,
+            channels=self.config.channels,
+            max_seconds=max_seconds,
+        )
+        with self._raw_recordings_lock:
+            self._raw_recordings.append(recording)
+        return recording
+
+    def stop_raw_recording(self, recording: RawAudioRecording) -> None:
+        with self._raw_recordings_lock:
+            if recording in self._raw_recordings:
+                self._raw_recordings.remove(recording)
 
     def chunks(self) -> Iterator[bytes]:
         try:
@@ -116,6 +174,7 @@ class SoundDeviceAudioInput:
                 if overflowed:
                     continue
                 chunk = bytes(data)
+                self._append_raw_recording_chunk(chunk)
                 if self.config.channels > 1:
                     chunk = select_pcm16_channel(
                         chunk,
@@ -124,6 +183,12 @@ class SoundDeviceAudioInput:
                     )
                 chunk = apply_pcm16_gain_db(chunk, self.config.input_gain_db)
                 yield chunk
+
+    def _append_raw_recording_chunk(self, chunk: bytes) -> None:
+        with self._raw_recordings_lock:
+            recordings = list(self._raw_recordings)
+        for recording in recordings:
+            recording.append(chunk)
 
 
 def create_audio_input(
@@ -176,11 +241,16 @@ def apply_pcm16_gain_db(pcm: bytes, gain_db: float) -> bytes:
     return bytes(output)
 
 
-def write_pcm16_wav(path: str | Path, pcm: bytes, sample_rate: int) -> None:
+def write_pcm16_wav(
+    path: str | Path,
+    pcm: bytes,
+    sample_rate: int,
+    channels: int = 1,
+) -> None:
     output_path = Path(path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with wave.open(str(output_path), "wb") as wav:
-        wav.setnchannels(1)
+        wav.setnchannels(channels)
         wav.setsampwidth(2)
         wav.setframerate(sample_rate)
         wav.writeframes(pcm)

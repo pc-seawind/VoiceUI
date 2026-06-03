@@ -5,6 +5,7 @@ import tempfile
 from pathlib import Path
 
 from voiceui.audio import (
+    RawAudioRecording,
     apply_pcm16_gain_db,
     pcm16_rms,
     read_pcm16_wav,
@@ -57,6 +58,27 @@ class AudioTests(unittest.TestCase):
 
         self.assertEqual(loaded_pcm, pcm)
         self.assertEqual(sample_rate, 16000)
+
+    def test_write_and_read_stereo_pcm16_wav_selected_channel(self) -> None:
+        samples = [1, 10, 2, 20]
+        pcm = b"".join(sample.to_bytes(2, "little", signed=True) for sample in samples)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "sample.wav"
+            write_pcm16_wav(path, pcm, sample_rate=16000, channels=2)
+            loaded_pcm, sample_rate = read_pcm16_wav(path, selected_channel=1)
+
+        self.assertEqual(_decode_pcm16(loaded_pcm), [10, 20])
+        self.assertEqual(sample_rate, 16000)
+
+    def test_raw_audio_recording_keeps_interleaved_audio(self) -> None:
+        recording = RawAudioRecording(sample_rate=16000, channels=2)
+
+        recording.append(b"\x01\x00\x02\x00")
+        recording.append(b"\x03\x00\x04\x00")
+
+        self.assertEqual(recording.pcm(), b"\x01\x00\x02\x00\x03\x00\x04\x00")
+        self.assertEqual(recording.duration_ms(), 0)
 
 
 def _decode_pcm16(pcm: bytes) -> list[int]:

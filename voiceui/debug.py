@@ -79,10 +79,11 @@ class DebugRecorder:
         sample_rate: int,
         duration_ms: int,
         metadata: dict[str, Any] | None = None,
+        extra_wavs: dict[str, tuple[bytes, int, int]] | None = None,
     ) -> Path | None:
         if not self.config.enabled:
             return None
-        if not pcm and not self.config.save_metadata:
+        if not pcm and not extra_wavs and not self.config.save_metadata:
             return None
 
         self._barge_in_index += 1
@@ -107,6 +108,22 @@ class DebugRecorder:
             wav_path = output_dir / "barge_in_monitor.wav"
             write_pcm16_wav(wav_path, pcm, sample_rate)
             data["wav_path"] = str(wav_path)
+
+        if extra_wavs and self.config.save_audio:
+            extra_paths: dict[str, str] = {}
+            for filename, (extra_pcm, extra_sample_rate, extra_channels) in extra_wavs.items():
+                if not extra_pcm:
+                    continue
+                wav_path = output_dir / filename
+                write_pcm16_wav(
+                    wav_path,
+                    extra_pcm,
+                    extra_sample_rate,
+                    channels=extra_channels,
+                )
+                extra_paths[filename] = str(wav_path)
+            if extra_paths:
+                data["extra_wav_paths"] = extra_paths
 
         if self.config.save_metadata:
             metadata_path = output_dir / "metadata.json"

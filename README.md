@@ -268,7 +268,10 @@ Each audio turn writes debug artifacts under `debug_sessions/` when
 `metadata.json` with wake/VAD/STT/LLM/TTS timings, transcript, and reply.
 During TTS playback, barge-in monitoring writes separate `*-barge-in-*` folders
 containing `barge_in_monitor.wav` and metadata. Listen to that file when logs
-show `barge_in> no_speech` to confirm what VAD heard.
+show `barge_in> no_speech` to confirm what VAD heard. The same folder also
+saves `barge_in_raw.wav` plus `barge_in_raw_ch0.wav` and
+`barge_in_raw_ch1.wav` when the capture device exposes multiple channels, so
+you can compare the selected VAD channel with the raw XVF3800 channels.
 For clipped-start issues, listen to `utterance.wav`: if the beginning is missing
 there, tune VAD; if the WAV is complete but the transcript is missing the
 beginning, tune ASR. The Aliyun demo also prints `stt_debug>` with the exact

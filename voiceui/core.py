@@ -5,7 +5,7 @@ import threading
 import time
 from collections.abc import Iterator
 
-from voiceui.audio import RecordingAudioInput, create_audio_input
+from voiceui.audio import RecordingAudioInput, create_audio_input, select_pcm16_channel
 from voiceui.debug import DebugRecorder, TurnDebugData
 from voiceui.home_assistant import HomeAssistantClient
 from voiceui.llm import create_chat_client
@@ -324,12 +324,26 @@ class VoiceAssistant:
             f"command_channel={self.config.audio.command_stream_channel}"
         )
 
+    def _start_barge_in_raw_recording(self):
+        start_raw_recording = getattr(self.command_audio, "start_raw_recording", None)
+        if not callable(start_raw_recording):
+            return None
+        return start_raw_recording()
+
+    def _stop_barge_in_raw_recording(self, raw_recording) -> None:
+        if raw_recording is None:
+            return
+        stop_raw_recording = getattr(self.command_audio, "stop_raw_recording", None)
+        if callable(stop_raw_recording):
+            stop_raw_recording(raw_recording)
+
     def _save_barge_in_monitor(
         self,
         *,
         mode: str,
         state: dict[str, object],
         monitor_audio: RecordingAudioInput,
+        raw_recording=None,
     ) -> None:
         pcm = monitor_audio.pcm()
         result = "no_speech"
@@ -351,6 +365,30 @@ class VoiceAssistant:
         if "error" in state:
             metadata["error"] = str(state["error"])
 
+        extra_wavs: dict[str, tuple[bytes, int, int]] = {}
+        if raw_recording is not None:
+            raw_pcm = raw_recording.pcm()
+            raw_channels = int(getattr(raw_recording, "channels", 0) or 0)
+            raw_sample_rate = int(getattr(raw_recording, "sample_rate", 0) or 0)
+            raw_duration_ms = int(raw_recording.duration_ms())
+            metadata["raw_channels"] = raw_channels
+            metadata["raw_duration_ms"] = raw_duration_ms
+            metadata["raw_bytes"] = len(raw_pcm)
+            if raw_pcm and raw_channels > 0 and raw_sample_rate > 0:
+                extra_wavs["barge_in_raw.wav"] = (raw_pcm, raw_sample_rate, raw_channels)
+                if raw_channels > 1:
+                    for channel in range(raw_channels):
+                        channel_pcm = select_pcm16_channel(
+                            raw_pcm,
+                            channels=raw_channels,
+                            selected_channel=channel,
+                        )
+                        extra_wavs[f"barge_in_raw_ch{channel}.wav"] = (
+                            channel_pcm,
+                            raw_sample_rate,
+                            1,
+                        )
+
         debug_dir = self.debug.save_barge_in_monitor(
             mode=mode,
             result=result,
@@ -358,6 +396,7 @@ class VoiceAssistant:
             sample_rate=monitor_audio.sample_rate,
             duration_ms=monitor_audio.duration_ms(),
             metadata=metadata,
+            extra_wavs=extra_wavs,
         )
         if debug_dir:
             print(
@@ -439,6 +478,7 @@ class VoiceAssistant:
         monitor_stop_event = threading.Event()
         state: dict[str, object] = {}
         monitor_audio = RecordingAudioInput(self.command_audio)
+        raw_recording = self._start_barge_in_raw_recording()
 
         def on_speech_start() -> None:
             if not playback_stop_event.is_set():
@@ -491,11 +531,13 @@ class VoiceAssistant:
             else:
                 monitor_stop_event.set()
                 monitor_thread.join(timeout=1.0)
+            self._stop_barge_in_raw_recording(raw_recording)
 
         self._save_barge_in_monitor(
             mode="full",
             state=state,
             monitor_audio=monitor_audio,
+            raw_recording=raw_recording,
         )
 
         error = state.get("error")
@@ -527,6 +569,7 @@ class VoiceAssistant:
         monitor_stop_event = threading.Event()
         state: dict[str, object] = {}
         monitor_audio = RecordingAudioInput(self.command_audio)
+        raw_recording = self._start_barge_in_raw_recording()
 
         def on_speech_start() -> None:
             if not playback_stop_event.is_set():
@@ -581,11 +624,13 @@ class VoiceAssistant:
             else:
                 monitor_stop_event.set()
                 monitor_thread.join(timeout=1.0)
+            self._stop_barge_in_raw_recording(raw_recording)
 
         self._save_barge_in_monitor(
             mode="stream",
             state=state,
             monitor_audio=monitor_audio,
+            raw_recording=raw_recording,
         )
 
         error = state.get("error")

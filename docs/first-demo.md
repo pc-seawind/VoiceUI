@@ -155,7 +155,10 @@ utterance. Barge-in capture uses the same streaming ASR path and reuses that
 transcript when the interrupted utterance becomes the next turn.
 If logs show `barge_in> no_speech`, listen to
 `debug_sessions\<timestamp>-barge-in-*\barge_in_monitor.wav`; that file is the
-actual command-channel audio monitored during TTS playback.
+actual command-channel audio monitored during TTS playback. The same folder
+also saves `barge_in_raw.wav`, `barge_in_raw_ch0.wav`, and
+`barge_in_raw_ch1.wav` when the device exposes multiple capture channels, so
+you can compare channel routing directly.
 It also prints `audio_debug>` for stream open and first-chunk latency; if those
 numbers are large, the capture stream is not ready early enough.
 The local wake acknowledgement plays in the background, so VAD starts

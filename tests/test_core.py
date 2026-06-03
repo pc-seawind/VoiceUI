@@ -9,6 +9,7 @@ import unittest
 from collections.abc import Iterator
 from pathlib import Path
 
+from voiceui.audio import RawAudioRecording
 from voiceui.core import VoiceAssistant
 from voiceui.llm import ChatMessage
 from voiceui.models import (
@@ -79,10 +80,23 @@ class InfiniteAudio:
 
     def __init__(self, chunk: bytes = b"\x00\x00" * 320):
         self.chunk = chunk
+        self.raw_recordings: list[RawAudioRecording] = []
 
     def chunks(self) -> Iterator[bytes]:
         while True:
+            raw_chunk = b"\x01\x00\x02\x00" * 320
+            for recording in list(self.raw_recordings):
+                recording.append(raw_chunk)
             yield self.chunk
+
+    def start_raw_recording(self, max_seconds=None) -> RawAudioRecording:
+        recording = RawAudioRecording(sample_rate=self.sample_rate, channels=2)
+        self.raw_recordings.append(recording)
+        return recording
+
+    def stop_raw_recording(self, recording: RawAudioRecording) -> None:
+        if recording in self.raw_recordings:
+            self.raw_recordings.remove(recording)
 
 
 class ConsumingTimeoutVad:
@@ -349,6 +363,9 @@ class CoreTests(unittest.TestCase):
             debug_dirs = list(Path(temp_dir).glob("*-barge-in-*"))
             self.assertEqual(len(debug_dirs), 1)
             self.assertTrue((debug_dirs[0] / "barge_in_monitor.wav").exists())
+            self.assertTrue((debug_dirs[0] / "barge_in_raw.wav").exists())
+            self.assertTrue((debug_dirs[0] / "barge_in_raw_ch0.wav").exists())
+            self.assertTrue((debug_dirs[0] / "barge_in_raw_ch1.wav").exists())
             self.assertTrue((debug_dirs[0] / "metadata.json").exists())
 
     def test_audio_turn_streams_stt_during_vad(self) -> None:

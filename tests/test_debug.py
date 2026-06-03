@@ -78,16 +78,23 @@ class DebugTests(unittest.TestCase):
                 sample_rate=16000,
                 duration_ms=10,
                 metadata={"vad_engine": "silero"},
+                extra_wavs={
+                    "raw.wav": (b"\x01\x00\x02\x00" * 160, 16000, 2),
+                    "raw_ch0.wav": (b"\x01\x00" * 160, 16000, 1),
+                },
             )
 
             self.assertIsNotNone(debug_dir)
             assert debug_dir is not None
             self.assertTrue((debug_dir / "barge_in_monitor.wav").exists())
+            self.assertTrue((debug_dir / "raw.wav").exists())
+            self.assertTrue((debug_dir / "raw_ch0.wav").exists())
             metadata = json.loads((debug_dir / "metadata.json").read_text(encoding="utf-8"))
             self.assertEqual(metadata["mode"], "stream")
             self.assertEqual(metadata["result"], "no_speech")
             self.assertEqual(metadata["vad_engine"], "silero")
             self.assertIn("wav_path", metadata)
+            self.assertIn("extra_wav_paths", metadata)
 
 
 if __name__ == "__main__":
