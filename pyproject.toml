@@ -27,6 +27,7 @@ aliyun = [
 ]
 vad = ["silero-vad>=5.1.0", "numpy>=1.26.0", "webrtcvad-wheels>=2.0.14"]
 tts = ["soundfile>=0.12.1", "sounddevice>=0.4.6"]
+miot = ["cryptography>=42.0.0"]
 dev = ["pytest>=8.0.0", "ruff>=0.5.0"]
 all = [
   "PyYAML>=6.0.1",
@@ -38,11 +39,13 @@ all = [
   "silero-vad>=5.1.0",
   "webrtcvad-wheels>=2.0.14",
   "soundfile>=0.12.1",
-  "scipy>=1.11.0"
+  "scipy>=1.11.0",
+  "cryptography>=42.0.0"
 ]
 
 [project.scripts]
 voiceui = "voiceui.__main__:main"
+voiceui-wake-proximity = "voiceui.wake_proximity:main"
 
 [tool.ruff]
 line-length = 100

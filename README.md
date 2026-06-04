@@ -60,14 +60,32 @@ python -m voiceui --list-audio-devices
 ```
 
 The current demo configs explicitly select the reSpeaker XVF3800 WASAPI devices
-instead of the system default. On this machine, the input device is index `24`
-and the output device is index `22`, so configs use `audio.device: 24` and
-`playback_device: 22`.
+instead of the system default. Use the full device display string from
+`python -m voiceui --list-audio-devices`, including the host API and channel
+direction, instead of numeric indexes that can change after reboot:
+
+```yaml
+audio:
+  device: "回音消除话筒 (reSpeaker XVF3800 4-Mic Array), Windows WASAPI (2 in, 0 out)"
+
+tts:
+  playback_device: "回音消除话筒 (reSpeaker XVF3800 4-Mic Array), Windows WASAPI (0 in, 2 out)"
+```
+
+For a second XVF3800 on Windows, use the `2-` endpoint names, for example
+`回音消除话筒 (2- reSpeaker XVF3800 4-Mic Array), Windows WASAPI (2 in, 0 out)`
+for input and
+`回音消除话筒 (2- reSpeaker XVF3800 4-Mic Array), Windows WASAPI (0 in, 2 out)`
+for output. VoiceUI resolves these names to the current sounddevice index at
+runtime and prefers the `Windows WASAPI` host API when a bare name is used.
 The WASAPI XVF3800 input endpoint reports two capture channels, so the demo
-configs use `audio.channels: 2`, `audio.wake_stream_channel: 1`, and
-`audio.command_stream_channel: 0`. If wake detection stops responding after an
-audio-device change, confirm the next `wake_debug>` line prints
-`channels=2 selected_channel=1`.
+configs use `audio.channels: 2`, `audio.wake_stream_channel: 0`, and
+`audio.command_stream_channel: 0`. On the current XVF3800 firmware, channel 0
+is the denoised/AEC-oriented stream and channel 1 is the raw/noisier stream, so
+use channel 0 for wake detection and proximity scoring. If wake detection stops responding after an
+audio-device change, enable `logging.continuous.wake.score: true` and confirm
+the next `module=wake | event=score` line prints
+`channels=2 selected_channel=0`.
 The WASAPI XVF3800 output endpoint accepts `16000Hz` on this machine, so demo
 TTS configs keep `tts.sample_rate: 24000` as the source/model rate and use
 `tts.playback_sample_rate: 16000` plus `tts.playback_channels: 2` for device
@@ -81,8 +99,8 @@ python -m voiceui --config config.example.yaml --record-wav recordings\command.w
 ```
 
 The demo configs keep `audio.input_gain_db: 0.0` by default. Raise it only for
-input-level experiments; if `utterance.wav` sounds clipped or distorted, bring
-it back down.
+input-level experiments; if the `utterance_01_<start>_<end>.wav` dump sounds
+clipped or distorted, bring it back down.
 
 Transcribe a saved WAV through the configured ASR backend:
 
@@ -128,8 +146,88 @@ smoke test. Wake demo configs also enable `conversation.barge_in_enabled`, so
 VoiceUI keeps VAD active while streaming TTS is playing. When speech starts, the
 current playback is stopped and the captured utterance becomes the next turn.
 When debug audio is enabled, the barge-in monitor stream is also saved under
-`debug_sessions/*-barge-in-*/barge_in_monitor.wav`, including `no_speech`
-cases where VAD never starts an utterance.
+`debug_sessions/<run>/audio_dumps/barge_in_monitor_01_<start>_<end>.wav`,
+including `no_speech` cases where VAD never starts an utterance.
+
+## Logging
+
+Runtime logs use one fixed format:
+
+```text
+2026-06-03T19:30:01.234 | module=vad | event=completed | params=duration_ms=820 latency_ms=104
+```
+
+The four fields are timestamp to milliseconds, module, event, and parameters.
+New runtime logs should use `voiceui.logs.log_event()` for one-off events and
+`voiceui.logs.log_continuous()` for logs that can repeat in a loop or playback
+path. Device lists and JSON command results can still be printed directly when
+they are command output rather than runtime logs.
+
+ASR/STT and TTS text is highlighted on the next line instead of being folded
+into the parameter list:
+
+```text
+2026-06-03T19:30:02.234 | module=stt | event=completed | params=latency_ms=186
+    >>> ASR TEXT: turn on the living room light
+2026-06-03T19:30:02.780 | module=tts | event=completed | params=latency_ms=312 ok=true
+    >>> TTS TEXT: OK.
+```
+
+Event logs are enabled by default unless their log ID is a debug-only event.
+Continuous logs such as `wake.score`, `tts.limiter`, and `music.limiter` are
+off by default to avoid console spam. Show the full switch list and effective
+state for the current config with:
+
+```powershell
+python -m voiceui --config config.example.yaml --list-log-switches
+```
+
+Each log can be toggled individually:
+
+```yaml
+logging:
+  enabled: true
+  events:
+    vad.completed: true
+    audio.stream_opened: false
+    stt.transcribe_audio: false
+  continuous:
+    wake.score: false
+    tts.limiter: false
+    music.limiter: false
+```
+
+Audio dumps are also normalized. When `debug.enabled` and `debug.save_audio`
+are true, each process creates a timestamped debug session directory containing
+`debug.log` and a flat `audio_dumps/` directory. VoiceUI starts a long-running
+`system_input` dump while the audio runtime is active. It records the configured
+input device with all channels and splits files every
+`debug.system_input_dump_segment_seconds` seconds:
+
+```text
+debug_sessions/20260604-210501/debug.log
+debug_sessions/20260604-210501/audio_dumps/system_input_00.00.00.000_00.00.30.000.wav
+```
+
+Other dumps only save audio that actually travels through a voice path. They
+are named with the turn number plus start/end times in `hh.mm.ss.mmm` format,
+relative to the `system_input` origin:
+
+```text
+debug_sessions/20260604-210501/audio_dumps/utterance_01_00.00.12.340_00.00.13.820.wav
+debug_sessions/20260604-210501/audio_dumps/tts_output_01_00.00.14.000_00.00.16.120.wav
+```
+
+Barge-in uses the same microphone input path, so it does not create extra raw
+input dumps. Use the long `system_input` dump for raw channel diagnosis and the
+barge-in monitor dump for the processed audio VAD actually saw.
+
+ASR/STT, LLM, and TTS text is also accumulated by day as JSONL for future
+training-data review:
+
+```text
+debug_sessions/text_records/voice_text_2026-06-04.jsonl
+```
 
 ## First Demo
 
@@ -158,16 +256,18 @@ python -m voiceui --config config.demo.wake.yaml --wake-test
 ```
 
 Say "alexa". The first run downloads the openWakeWord feature model and
-`alexa` ONNX model. A successful detection prints `wake>` with the label,
-confidence, and latency, then plays the local wake acknowledgement WAV.
-Wake demo configs enable `wake.debug: true`, so `--wake-test` and the full
-assistant loop print periodic `wake_debug>` lines with audio level, top model
-scores, threshold, and inference latency. You can also force this on for any
-config with `--wake-debug`.
+`alexa` ONNX model. A successful detection prints `module=wake | event=detected`
+with the label, confidence, and latency, then plays the local wake
+acknowledgement WAV.
+Periodic `module=wake | event=score` lines are continuous logs and stay off by
+default to avoid console spam. Enable `logging.continuous.wake.score: true`, or
+use `--wake-debug` / `--wake-monitor`, when you need audio level, top model
+scores, threshold, and inference latency.
 When `debug.enabled` and `debug.save_audio` are true, wake tests and full
-assistant turns also save `wake.wav` under `debug_sessions/<turn>/`. Use this to
-hear the exact selected wake channel that openWakeWord received. `--wake-monitor`
-saves the monitored wake audio even when no wake word is detected.
+assistant turns also save `wake_01_<start>_<end>.wav` under
+`debug_sessions/<run>/audio_dumps/`. Use this to hear the exact selected wake
+channel that openWakeWord received. `--wake-monitor` saves the monitored wake
+audio even when no wake word is detected.
 For hardware bring-up, `config.demo.wake.yaml` uses `wake.threshold: 0.5`.
 Lower it temporarily toward `0.35` if it misses real wake words, or raise it if
 it false-wakes.
@@ -192,7 +292,7 @@ python -m voiceui --config config.demo.wake.aliyun.yaml --wake-monitor --wake-mo
 ```
 
 For device/channel diagnosis, record a shorter wake monitor sample and listen to
-the saved `wake.wav`:
+the saved `wake_01_<start>_<end>.wav`:
 
 ```powershell
 python -m voiceui --config config.demo.wake.aliyun.yaml --wake-monitor --wake-model alexa --seconds 10
@@ -222,7 +322,7 @@ The wake acknowledgement is configured separately from TTS:
 wake_ack:
   enabled: true
   wav_path: default
-  playback_device: 22
+  playback_device: "回音消除话筒 (reSpeaker XVF3800 4-Mic Array), Windows WASAPI (0 in, 2 out)"
 ```
 
 `default` uses the bundled local `voiceui/resources/wake_ack_wo_zai.wav`
@@ -263,27 +363,27 @@ over a TTS answer to interrupt it and start the next turn.
 The local wake acknowledgement plays in the background; VAD starts immediately
 after wake detection so command audio is not blocked by the "我在" WAV.
 
-Each audio turn writes debug artifacts under `debug_sessions/` when
-`debug.enabled` is true. The folder contains `utterance.wav` and
-`metadata.json` with wake/VAD/STT/LLM/TTS timings, transcript, and reply.
-During TTS playback, barge-in monitoring writes separate `*-barge-in-*` folders
-containing `barge_in_monitor.wav` and metadata. Listen to that file when logs
-show `barge_in> no_speech` to confirm what VAD heard. The same folder also
-saves `barge_in_raw.wav` plus `barge_in_raw_ch0.wav` and
-`barge_in_raw_ch1.wav` when the capture device exposes multiple channels, so
-you can compare the selected VAD channel with the raw XVF3800 channels.
-For clipped-start issues, listen to `utterance.wav`: if the beginning is missing
-there, tune VAD; if the WAV is complete but the transcript is missing the
-beginning, tune ASR. The Aliyun demo also prints `stt_debug>` with the exact
-audio path. In live audio turns, Aliyun NLS starts streaming when VAD confirms
-speech start, receives the buffered pre-roll first, then receives command audio
-while VAD continues endpointing. `--transcribe-wav` remains a full-WAV test path
-and adds `stt.leading_silence_ms: 200` before sending. Barge-in capture uses
-the same streaming ASR path and reuses the transcript when processing the next
-turn.
-It also prints `audio_debug>` for command-stream startup latency; large
-`stream_opened latency_ms` or `first_chunk read_ms` values mean the capture path
-is not ready early enough.
+Each process writes debug artifacts under a timestamped
+`debug_sessions/<run>/` directory when `debug.enabled` is true. Runtime logs go
+to `debug.log`, metadata is appended into one `metadata.json`, and all WAV
+files go directly under `audio_dumps/`. Listen to
+`barge_in_monitor_01_<start>_<end>.wav` when logs
+show `module=barge_in | event=no_speech` to confirm what VAD heard. Raw
+multi-channel diagnosis now comes from the flat `system_input_<start>_<end>.wav`
+dumps in the same `audio_dumps/` directory.
+For clipped-start issues, listen to `utterance_01_<start>_<end>.wav`: if the
+beginning is missing there, tune VAD; if the WAV is complete but the transcript
+is missing the
+beginning, tune ASR. Enable `logging.events.stt.transcribe_audio: true` to log
+Aliyun send-side audio parameters. In live audio turns, Aliyun NLS starts
+streaming when VAD confirms speech start, receives the buffered pre-roll first,
+then receives command audio while VAD continues endpointing. `--transcribe-wav`
+remains a full-WAV test path and adds `stt.leading_silence_ms: 200` before
+sending. Barge-in capture uses the same streaming ASR path and reuses the
+transcript when processing the next turn.
+Enable `logging.events.audio.stream_opened` and `logging.events.audio.first_chunk`
+for command-stream startup latency; large `stream_opened latency_ms` or
+`first_chunk read_ms` values mean the capture path is not ready early enough.
 If you speak the wake word and command as one continuous phrase, the command can
 still start before the wake detector returns. That requires a future rolling
 audio buffer around wake detection.
@@ -297,7 +397,8 @@ For the first XVF3800 prototype:
   `vad.threshold` as a probability threshold, raise it if background noise
   triggers speech, and adjust `vad.silence_ms` if command endings are clipped
   or the assistant waits too long. If command starts are clipped, inspect
-  `vad_debug>` and raise `vad.pre_roll_ms`.
+  `module=vad | event=debug_start` / `module=vad | event=debug_stop` and raise
+  `vad.pre_roll_ms`.
 - STT: `faster_whisper` on GPU if available, otherwise CPU `int8` with a smaller
   model.
 - LLM: Ollama or any OpenAI-compatible endpoint.
@@ -323,6 +424,112 @@ llm:
     enable_thinking: false
 ```
 
+## Function Calling Tools
+
+VoiceUI can expose a small set of OpenAI-compatible function tools to the LLM.
+The tool loop is disabled by default. When enabled, VoiceUI sends tool
+definitions to the LLM, executes returned `tool_calls`, adds `role: tool`
+results to the current model call, and asks the model for the final spoken
+reply. Tool-enabled turns currently use non-streaming LLM calls so tool results
+can be handled before TTS starts.
+
+```yaml
+tools:
+  enabled: true
+  max_iterations: 4
+  allow_time: true
+  allow_weather: true
+  allow_volume: true
+  allow_music: true
+  allow_miot: true
+  allow_search: true
+
+music:
+  provider: meting
+  endpoint: https://meting.mikus.ink/api
+  server: netease
+  playback_device: "回音消除话筒 (reSpeaker XVF3800 4-Mic Array), Windows WASAPI (0 in, 2 out)"
+  playback_sample_rate: 16000
+  playback_channels: 2
+  playback_volume: 1.0
+  ducking_volume_factor: 0.2
+  limiter_enabled: true
+  limiter_threshold: 0.92
+
+search:
+  provider: auto
+  tavily_api_key_env: TAVILY_API_KEY
+  tavily_search_depth: basic
+  tavily_topic: general
+  baidu_ai_enabled: true
+  baidu_ai_endpoint: https://qianfan.baidubce.com/v2/ai_search/chat/completions
+  baidu_ai_api_key_env: QIANFAN_API_KEY
+  baidu_ai_model: deepseek-v3
+  baidu_ai_search_mode: required
+  baidu_ai_deep_search: false
+  baidu_ai_fallback_to_html: true
+  baidu_endpoint: https://www.baidu.com/baidu
+  timeout_seconds: 15
+  max_results: 5
+
+xiaomi_miot:
+  enabled: true
+  cloud_server: cn
+  token_file: .voiceui/miot_token.json
+  cache_dir: .voiceui/miot_cache
+  control_verify: true
+  control_verify_delay_seconds: 0.8
+```
+
+Built-in tools:
+
+- `get_current_time`: local Python time and timezone lookup.
+- `get_current_weather`: Open-Meteo geocoding and current weather.
+- `web_search`: search current web information. Chinese queries use Baidu;
+  when `QIANFAN_API_KEY` is set, Baidu uses AppBuilder AI Search and returns a
+  summarized answer plus references. If the Baidu AI quota expires or the call
+  fails and `TAVILY_API_KEY` is set, VoiceUI falls back to Tavily. Without a
+  usable Tavily key, it falls back to the HTML Baidu parser. Non-Chinese queries
+  use Tavily directly.
+- `get_system_volume` / `set_system_volume`: Windows playback endpoint volume.
+- `search_music`: search the configured music provider.
+- `play_music`: search and start local speaker playback in a background thread.
+- `stop_music`: stop the current local music playback.
+- `xiaomi_miot_control_device`: fuzzy-match a Xiaomi Home room/device command,
+  choose the MIoT property/action, execute it, and verify readable property writes.
+- `xiaomi_miot_get_area_info`: list Xiaomi Home homes and rooms.
+- `xiaomi_miot_get_device_classes`: list Xiaomi Home device classes.
+- `xiaomi_miot_get_devices`: list Xiaomi Home devices, optionally by area/class.
+- `xiaomi_miot_get_device_spec`: list readable/writeable MIoT properties and actions.
+- `xiaomi_miot_get_property`: read one MIoT property.
+- `xiaomi_miot_control`: set one MIoT property or invoke one MIoT action.
+
+Volume examples: "set volume to 30%", "turn it up a little", or "mute".
+If music sounds clipped, keep `music.limiter_enabled: true`; lower
+`music.limiter_threshold` slightly for more headroom.
+When music is playing, VoiceUI applies `music.ducking_volume_factor` after wake
+and during TTS/listening windows. This is an in-app music gain and does not
+change the Windows system volume.
+
+The first music provider is `meting`, using a pure HTTP adapter for NetEase,
+Tencent, KuGou, Kuwo, and similar sources exposed by the Meting API shape. It
+is useful for immediate real playback, but it is not an official domestic music
+service contract. For production use, prefer replacing this provider with an
+approved KuGou, Migu, QQ Music, or NetEase partner API when credentials and
+usage rights are available.
+
+Xiaomi Home support is ported into VoiceUI as native Python code. It uses the
+same MIoT cloud protocol shape as miloco, but the Windows runtime does not
+import or call the WSL-hosted miloco checkout. Tokens can be supplied through
+`XIAOMI_MIOT_TOKEN_JSON`, `XIAOMI_MIOT_ACCESS_TOKEN`/`XIAOMI_MIOT_REFRESH_TOKEN`,
+or a local `.voiceui/miot_token.json` file. If a token is missing, call
+`xiaomi_miot_auth_url`, open the URL, then pass the redirect `code` to
+`xiaomi_miot_exchange_auth_code`. For ordinary voice commands like "turn on the
+study light", use `xiaomi_miot_control_device`; it fuzzy matches the room/device
+and directly executes when exactly one low-risk device matches. If several
+devices match, VoiceUI asks the user to choose. Low-level control should follow
+this order: list devices, inspect the device spec, then use the returned iid.
+
 Example ASR config:
 
 ```yaml
@@ -341,7 +548,9 @@ Replace `endpoint` with your Mify MiMo-compatible base URL when you have it.
 `api_key_env: MIFY_API_KEY` resolves from either the process environment or the
 local `.env` file.
 When `llm.stream: true` is enabled, VoiceUI requests streaming chat completions
-and logs `llm> first_token_ms`, total `latency_ms`, and `stream_chunks`.
+and logs `module=llm | event=first_token` plus
+`module=llm | event=stream_completed` with total `latency_ms` and
+`stream_chunks`.
 Streaming LLM output is sent directly into `tts.speak_text_stream()`. Aliyun NLS
 TTS uses true stream-input synthesis, while other TTS providers speak short
 sentence-sized segments as they become available.
@@ -380,6 +589,8 @@ tts:
   playback_sample_rate: 16000
   playback_channels: 2
   stream: true
+  limiter_enabled: true
+  limiter_threshold: 0.92
 ```
 
 For TTS, VoiceUI puts the text to synthesize in an `assistant` message and sends
@@ -388,8 +599,9 @@ and played through the configured speaker.
 
 When `tts.stream: true` is enabled, VoiceUI sends `stream: true` and requests
 `audio.format: pcm16`, then plays base64 PCM16 chunks as they arrive. VoiceUI
-logs `tts> stream_first_audio_ms`, `stream_chunks`, and
-`playback_latency_ms` so the streaming bottleneck is visible. The MiMo-V2.5-TTS
+logs `module=tts | event=stream_completed` with `first_audio_ms`,
+`stream_chunks`, and `playback_latency_ms` so the streaming bottleneck is
+visible. The MiMo-V2.5-TTS
 series still documents low-latency streaming as not yet available, so keep the
 V2 TTS model for this low-latency path unless your backend exposes a newer
 streaming-capable model.
@@ -412,7 +624,12 @@ tts:
   playback_sample_rate: 16000
   playback_channels: 2
   stream: true
+  limiter_enabled: true
+  limiter_threshold: 0.92
 ```
+
+If TTS playback clips on the target speaker, keep `tts.limiter_enabled: true`
+and lower `tts.limiter_threshold` for more headroom.
 
 Quick synthesis test:
 
@@ -432,6 +649,8 @@ Full templates are available in [config.demo.mify.yaml](config.demo.mify.yaml),
 [config.mify.example.yaml](config.mify.example.yaml). The runnable first demo
 flow is documented in [docs/first-demo.md](docs/first-demo.md).
 Local streaming TTS setup is documented in [docs/local-tts.md](docs/local-tts.md).
+Nearest-wake arbitration for two XVF3800 devices is documented in
+[docs/wake-proximity.md](docs/wake-proximity.md).
 
 See [docs/implementation-plan.md](docs/implementation-plan.md) and
 [docs/xvf3800.md](docs/xvf3800.md) for the detailed plan.

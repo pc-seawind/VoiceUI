@@ -449,6 +449,49 @@ class TtsTests(unittest.TestCase):
         self.assertEqual(len(written), 1)
         self.assertEqual(len(written[0]), 160 * 2 * 2)
 
+    def test_play_pcm_stream_limiter_scales_pcm16_before_write(self) -> None:
+        written: list[bytes] = []
+
+        class FakeStream:
+            def __init__(self, **kwargs):
+                pass
+
+            def start(self):
+                return None
+
+            def write(self, data: bytes):
+                written.append(data)
+
+            def stop(self):
+                return None
+
+            def close(self):
+                return None
+
+        samples = [32767, -32768, 0]
+        pcm = b"".join(sample.to_bytes(2, "little", signed=True) for sample in samples)
+
+        with patch("sounddevice.RawOutputStream", FakeStream):
+            with patch("sounddevice.check_output_settings", return_value=None):
+                with patch(
+                    "sounddevice.query_devices",
+                    return_value={"default_samplerate": 24000, "max_output_channels": 1},
+                ):
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        count = _play_pcm_stream(
+                            iter([pcm]),
+                            sample_rate=24000,
+                            source_channels=1,
+                            limiter_enabled=True,
+                            limiter_threshold=0.5,
+                        )
+
+        limited = [
+            int.from_bytes(written[0][index : index + 2], "little", signed=True)
+            for index in range(0, len(written[0]), 2)
+        ]
+        self.assertEqual(count, 1)
+        self.assertLessEqual(max(abs(sample) for sample in limited), 16384)
 
 if __name__ == "__main__":
     unittest.main()

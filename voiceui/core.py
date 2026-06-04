@@ -5,13 +5,23 @@ import threading
 import time
 from collections.abc import Iterator
 
-from voiceui.audio import RecordingAudioInput, create_audio_input, select_pcm16_channel
+from voiceui.audio import RecordingAudioInput, create_audio_input
+from voiceui.audio_dump import AudioDumpManager, configure_audio_dump
 from voiceui.debug import DebugRecorder, TurnDebugData
 from voiceui.home_assistant import HomeAssistantClient
 from voiceui.llm import create_chat_client
+from voiceui.logs import configure_log_files, log_event, record_text_event
 from voiceui.models import AssistantConfig, AssistantReply, Utterance, WakeEvent
 from voiceui.session import ConversationSession
 from voiceui.stt import create_stt
+from voiceui.tools import (
+    create_tool_runner,
+    format_current_time_response,
+    format_weather_response,
+    get_current_time,
+    get_current_weather,
+    warm_weather_cache,
+)
 from voiceui.tts import create_tts
 from voiceui.vad import SpeechStartTimeoutError, create_vad_recorder
 from voiceui.wake import create_wake_detector
@@ -126,8 +136,18 @@ class VoiceAssistant:
             fallback_device=config.tts.playback_device,
         )
         self.home = HomeAssistantClient(config.home_assistant)
+        self.tool_runner = create_tool_runner(config, self.chat)
+        self.music_controller = (
+            self.tool_runner.music_controller if self.tool_runner is not None else None
+        )
         self.session = ConversationSession(config.llm, config.conversation)
-        self.debug = DebugRecorder(config.debug)
+        self.audio_dump = AudioDumpManager(config.debug)
+        configure_audio_dump(self.audio_dump)
+        configure_log_files(
+            debug_log_path=self.audio_dump.debug_log_path(),
+            text_record_dir=self.audio_dump.text_record_dir(),
+        )
+        self.debug = DebugRecorder(config.debug, audio_dump=self.audio_dump)
         self._pending_barge_utterance: Utterance | None = None
         self._pending_barge_transcript: str | None = None
         self._pending_barge_stt_ms = 0
@@ -135,54 +155,232 @@ class VoiceAssistant:
         if audio_enabled:
             self._warm_up_audio_path()
         self._print_barge_in_config()
+        self._start_weather_cache_warmup()
+
+    def close(self) -> None:
+        self.audio_dump.stop_system_input_dump()
+        configure_audio_dump(None)
+        configure_log_files()
+
+    def _start_system_input_dump(self) -> None:
+        if self.config.input.mode != "audio":
+            return
+        self.audio_dump.start_system_input_dump(self.config.audio)
 
     def _warm_up_audio_path(self) -> None:
         warm_up_started = time.monotonic()
         try:
             warmed = self.vad.warm_up()
         except Exception as exc:
-            print(f"vad> warm_up_error={exc}")
+            log_event("vad", "warm_up_error", log_id="vad.warm_up_error", error=exc)
             return
         if warmed:
             latency_ms = int((time.monotonic() - warm_up_started) * 1000)
-            print(f"vad> warmed_up latency_ms={latency_ms}")
+            log_event("vad", "warmed_up", log_id="vad.warmed_up", latency_ms=latency_ms)
+
+    def _start_weather_cache_warmup(self) -> None:
+        if not (
+            self.config.tools.enabled
+            and self.config.tools.allow_weather
+            and self.config.tools.default_weather_location
+        ):
+            return
+
+        def warm_up() -> None:
+            started = time.monotonic()
+            try:
+                warm_weather_cache(self.config.tools.default_weather_location)
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                log_event(
+                    "weather",
+                    "warmup_error",
+                    log_id="weather.warmup_error",
+                    error=exc,
+                )
+                return
+            latency_ms = int((time.monotonic() - started) * 1000)
+            log_event(
+                "weather",
+                "warmed_up",
+                log_id="weather.warmed_up",
+                latency_ms=latency_ms,
+            )
+
+        thread = threading.Thread(target=warm_up, name="voiceui-weather-warmup", daemon=True)
+        thread.start()
 
     def run_text_turn(self, text: str) -> AssistantReply:
         transcript = text.strip()
         if not transcript:
             return AssistantReply(text="I did not hear anything.", routed_to="system")
 
-        reply, _timings = self._complete_transcript(transcript)
-        return reply
+        turn_index = self.audio_dump.begin_turn()
+        try:
+            reply, _timings = self._complete_transcript(transcript)
+            return reply
+        finally:
+            self.audio_dump.end_turn(turn_index)
 
     def _complete_transcript(self, transcript: str) -> tuple[AssistantReply, dict[str, int]]:
         self.session.add_user(transcript)
         timings: dict[str, int] = {}
-        barge_utterance = None
 
-        if self.config.llm.stream:
-            response, barge_utterance = self._stream_and_speak_response(timings)
-        else:
+        try:
+            local_response = self._try_handle_local_music_command(transcript)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            return self._finish_processing_error(exc, timings, mode="local_music")
+        if local_response is not None:
+            timings["llm"] = 0
+            return self._finish_generated_response(local_response, timings)
+
+        try:
+            local_response = self._try_handle_local_info_command(transcript)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            return self._finish_processing_error(exc, timings, mode="local_tools")
+        if local_response is not None:
+            timings["llm"] = 0
+            log_event(
+                "llm",
+                "completed",
+                log_id="llm.completed",
+                latency_ms=0,
+                mode="local_tools",
+            )
+            return self._finish_generated_response(local_response, timings)
+
+        if self.tool_runner is not None and self.tool_runner.enabled:
             llm_started = time.monotonic()
-            response = self.chat.complete(self.session.messages)
+            try:
+                response = self.tool_runner.complete(self.session.messages)
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                timings["llm"] = int((time.monotonic() - llm_started) * 1000)
+                return self._finish_processing_error(exc, timings, mode="tools")
             timings["llm"] = int((time.monotonic() - llm_started) * 1000)
-            print(f"llm> latency_ms={timings['llm']}")
+            log_event(
+                "llm",
+                "completed",
+                log_id="llm.completed",
+                latency_ms=timings["llm"],
+                mode="tools",
+            )
             if not response:
                 response = "I could not produce a response."
-            self.session.add_assistant(response)
-
-            tts_started = time.monotonic()
-            if self._should_listen_for_barge_in():
-                barge_utterance = self._speak_with_barge_in(response)
-            else:
-                self.tts.speak(response)
-            timings["tts"] = int((time.monotonic() - tts_started) * 1000)
+            return self._finish_generated_response(response, timings)
+        elif self.config.llm.stream:
+            try:
+                response, barge_utterance = self._stream_and_speak_response(timings)
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                return self._finish_processing_error(exc, timings, mode="llm_stream")
+        else:
+            llm_started = time.monotonic()
+            try:
+                response = self.chat.complete(self.session.messages)
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                timings["llm"] = int((time.monotonic() - llm_started) * 1000)
+                return self._finish_processing_error(exc, timings, mode="llm")
+            timings["llm"] = int((time.monotonic() - llm_started) * 1000)
+            log_event("llm", "completed", log_id="llm.completed", latency_ms=timings["llm"])
+            if not response:
+                response = "I could not produce a response."
+            return self._finish_generated_response(response, timings)
 
         if barge_utterance is not None:
             self._pending_barge_utterance = barge_utterance
             timings["barge_in"] = barge_utterance.duration_ms
-        print(f"tts> latency_ms={timings['tts']}")
+        record_text_event("llm", "completed", response, mode="stream")
+        log_event(
+            "tts",
+            "completed",
+            log_id="tts.completed",
+            latency_ms=timings["tts"],
+            ok=True,
+            text=response,
+        )
         return AssistantReply(text=response), timings
+
+    def _finish_generated_response(
+        self,
+        response: str,
+        timings: dict[str, int],
+        *,
+        routed_to: str = "llm",
+    ) -> tuple[AssistantReply, dict[str, int]]:
+        self.session.add_assistant(response)
+        record_text_event("llm", "completed", response, routed_to=routed_to)
+        barge_utterance = self._speak_response_safely(response, timings)
+        if barge_utterance is not None:
+            self._pending_barge_utterance = barge_utterance
+            timings["barge_in"] = barge_utterance.duration_ms
+        return AssistantReply(text=response, routed_to=routed_to), timings
+
+    def _finish_processing_error(
+        self,
+        exc: Exception,
+        timings: dict[str, int],
+        *,
+        mode: str,
+    ) -> tuple[AssistantReply, dict[str, int]]:
+        timings.setdefault("llm", 0)
+        response = _format_processing_error_response(exc)
+        log_event(
+            "llm",
+            "completed",
+            log_id="llm.completed",
+            latency_ms=timings["llm"],
+            mode=mode,
+            ok=False,
+            error=str(exc),
+        )
+        log_event(
+            "error",
+            "runtime",
+            log_id="error.runtime",
+            stage=mode,
+            error=str(exc),
+        )
+        return self._finish_generated_response(response, timings, routed_to="error")
+
+    def _speak_response_safely(
+        self,
+        response: str,
+        timings: dict[str, int],
+    ) -> Utterance | None:
+        tts_started = time.monotonic()
+        barge_utterance = None
+        try:
+            if self._should_listen_for_barge_in():
+                barge_utterance = self._speak_with_barge_in(response)
+            else:
+                self._speak_plain(response)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            timings["tts"] = int((time.monotonic() - tts_started) * 1000)
+            log_event(
+                "tts",
+                "completed",
+                log_id="tts.completed",
+                latency_ms=timings["tts"],
+                ok=False,
+                error=str(exc),
+                text=response,
+            )
+            log_event(
+                "error",
+                "runtime",
+                log_id="error.runtime",
+                stage="tts",
+                error=str(exc),
+            )
+            return None
+        timings["tts"] = int((time.monotonic() - tts_started) * 1000)
+        log_event(
+            "tts",
+            "completed",
+            log_id="tts.completed",
+            latency_ms=timings["tts"],
+            ok=True,
+            text=response,
+        )
+        return barge_utterance
 
     def _stream_and_speak_response(self, timings: dict[str, int]) -> tuple[str, Utterance | None]:
         messages = list(self.session.messages)
@@ -203,7 +401,7 @@ class VoiceAssistant:
                     llm_stop_event=llm_stop_event,
                 )
             else:
-                response = self.tts.speak_text_stream(text_chunks)
+                response = self._speak_stream_plain(text_chunks)
         finally:
             llm_stop_event.set()
         timings["tts"] = int((time.monotonic() - tts_started) * 1000)
@@ -215,10 +413,164 @@ class VoiceAssistant:
             if self._should_listen_for_barge_in():
                 barge_utterance = self._speak_with_barge_in(response)
             else:
-                self.tts.speak(response)
+                self._speak_plain(response)
             timings["tts"] += int((time.monotonic() - fallback_tts_started) * 1000)
         self.session.add_assistant(response)
         return response, barge_utterance
+
+    def _speak_plain(self, text: str, stop_event: threading.Event | None = None) -> None:
+        self._duck_music("tts")
+        try:
+            self.tts.speak(text, stop_event=stop_event)
+        finally:
+            self._unduck_music("tts")
+
+    def _speak_stream_plain(
+        self,
+        text_chunks: Iterator[str],
+        stop_event: threading.Event | None = None,
+    ) -> str:
+        self._duck_music("tts")
+        try:
+            return self.tts.speak_text_stream(text_chunks, stop_event=stop_event)
+        finally:
+            self._unduck_music("tts")
+
+    def _duck_music(self, reason: str) -> None:
+        duck = getattr(self.music_controller, "duck", None)
+        if callable(duck):
+            duck(reason)
+
+    def _unduck_music(self, reason: str) -> None:
+        unduck = getattr(self.music_controller, "unduck", None)
+        if callable(unduck):
+            unduck(reason)
+
+    def _try_handle_local_music_command(self, transcript: str) -> str | None:
+        music = self.music_controller
+        if music is None or not self._music_is_active():
+            return None
+
+        normalized = transcript.lower().replace(" ", "")
+        stop_terms = (
+            "停止播放",
+            "停止音乐",
+            "暂停播放",
+            "暂停音乐",
+            "别放了",
+            "不要放了",
+            "关掉音乐",
+            "关闭音乐",
+            "把音乐关了",
+            "stopmusic",
+            "pausemusic",
+            "stopthemusic",
+        )
+        if not any(term in normalized for term in stop_terms):
+            return None
+
+        result = music.stop(wait=True)
+        status = result.get("status") if isinstance(result, dict) else ""
+        if status == "idle":
+            return "当前没有音乐在播放。"
+        return "已停止播放。"
+
+    def _music_is_active(self) -> bool:
+        is_active = getattr(self.music_controller, "is_active", None)
+        if callable(is_active):
+            return bool(is_active())
+        return False
+
+    def _try_handle_local_info_command(self, transcript: str) -> str | None:
+        if not self.config.tools.enabled:
+            return None
+        normalized = transcript.lower().replace(" ", "")
+        if self.config.tools.allow_weather and _looks_like_weather_query(normalized):
+            location = _extract_weather_location(
+                transcript,
+                default_location=self.config.tools.default_weather_location,
+            )
+            if not location:
+                return None
+            arguments = {"location": location}
+            target_day = _extract_weather_target_day(transcript)
+            if target_day != "today":
+                arguments["target_day"] = target_day
+            started = time.monotonic()
+            try:
+                result = get_current_weather(arguments)
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                latency_ms = int((time.monotonic() - started) * 1000)
+                log_event(
+                    "tool",
+                    "executed",
+                    log_id="tool.executed",
+                    name="get_current_weather",
+                    latency_ms=latency_ms,
+                    ok=False,
+                    mode="local",
+                    error=str(exc),
+                )
+                fallback_location = self.config.tools.default_weather_location.strip()
+                if fallback_location and fallback_location != location:
+                    fallback_arguments = {"location": fallback_location}
+                    if target_day != "today":
+                        fallback_arguments["target_day"] = target_day
+                    fallback_started = time.monotonic()
+                    try:
+                        result = get_current_weather(fallback_arguments)
+                    except Exception as fallback_exc:  # pylint: disable=broad-exception-caught
+                        fallback_latency_ms = int((time.monotonic() - fallback_started) * 1000)
+                        log_event(
+                            "tool",
+                            "executed",
+                            log_id="tool.executed",
+                            name="get_current_weather",
+                            latency_ms=fallback_latency_ms,
+                            ok=False,
+                            mode="local_fallback",
+                            error=str(fallback_exc),
+                        )
+                        return _format_weather_error_response(fallback_exc)
+                    fallback_latency_ms = int((time.monotonic() - fallback_started) * 1000)
+                    log_event(
+                        "tool",
+                        "executed",
+                        log_id="tool.executed",
+                        name="get_current_weather",
+                        latency_ms=fallback_latency_ms,
+                        ok=True,
+                        mode="local_fallback",
+                    )
+                    return str(result.get("direct_response") or format_weather_response(result))
+                return _format_weather_error_response(exc)
+            latency_ms = int((time.monotonic() - started) * 1000)
+            log_event(
+                "tool",
+                "executed",
+                log_id="tool.executed",
+                name="get_current_weather",
+                latency_ms=latency_ms,
+                ok=True,
+                mode="local",
+            )
+            return str(result.get("direct_response") or format_weather_response(result))
+
+        if self.config.tools.allow_time and _looks_like_time_query(normalized):
+            started = time.monotonic()
+            result = get_current_time({"timezone": "Asia/Shanghai"})
+            latency_ms = int((time.monotonic() - started) * 1000)
+            log_event(
+                "tool",
+                "executed",
+                log_id="tool.executed",
+                name="get_current_time",
+                latency_ms=latency_ms,
+                ok=True,
+                mode="local",
+            )
+            return str(result.get("direct_response") or format_current_time_response(result))
+        return None
 
     def _start_tracked_llm_stream(
         self,
@@ -277,7 +629,12 @@ class VoiceAssistant:
                 and "llm_first_token" in timings
             ):
                 stream_stats["first_token_logged"] = 1
-                print(f"llm> first_token_ms={timings['llm_first_token']}")
+                log_event(
+                    "llm",
+                    "first_token",
+                    log_id="llm.first_token",
+                    latency_ms=timings["llm_first_token"],
+                )
             yield item  # type: ignore[misc]
 
     def _print_streaming_llm_stats(
@@ -287,11 +644,13 @@ class VoiceAssistant:
     ) -> None:
         if "llm" not in timings:
             return
-        print(
-            "llm> "
-            f"latency_ms={timings['llm']} "
-            f"first_token_ms={timings.get('llm_first_token', timings['llm'])} "
-            f"stream_chunks={stream_stats.get('chunks', 0)}"
+        log_event(
+            "llm",
+            "stream_completed",
+            log_id="llm.stream_completed",
+            latency_ms=timings["llm"],
+            first_token_ms=timings.get("llm_first_token", timings["llm"]),
+            stream_chunks=stream_stats.get("chunks", 0),
         )
 
     def _should_listen_for_barge_in(self) -> bool:
@@ -307,35 +666,30 @@ class VoiceAssistant:
             reason = f"input_mode_{self.config.input.mode}"
         elif not self.config.conversation.barge_in_enabled:
             reason = "conversation_disabled"
-        print(
-            "barge_in> "
-            f"enabled={str(enabled).lower()} reason={reason} "
-            f"input_mode={self.config.input.mode} "
-            f"conversation_enabled={str(self.config.conversation.barge_in_enabled).lower()} "
-            f"vad_engine={self.config.vad.engine} threshold={self.config.vad.threshold} "
-            f"command_channel={self.config.audio.command_stream_channel}"
+        log_event(
+            "barge_in",
+            "config",
+            log_id="barge_in.config",
+            enabled=enabled,
+            reason=reason,
+            input_mode=self.config.input.mode,
+            conversation_enabled=self.config.conversation.barge_in_enabled,
+            vad_engine=self.config.vad.engine,
+            threshold=self.config.vad.threshold,
+            command_channel=self.config.audio.command_stream_channel,
         )
 
     def _print_barge_in_monitor_started(self, mode: str) -> None:
-        print(
-            "barge_in> monitor_started "
-            f"mode={mode} start_timeout_seconds=0.0 "
-            f"vad_engine={self.config.vad.engine} threshold={self.config.vad.threshold} "
-            f"command_channel={self.config.audio.command_stream_channel}"
+        log_event(
+            "barge_in",
+            "monitor_started",
+            log_id="barge_in.monitor_started",
+            mode=mode,
+            start_timeout_seconds=0.0,
+            vad_engine=self.config.vad.engine,
+            threshold=self.config.vad.threshold,
+            command_channel=self.config.audio.command_stream_channel,
         )
-
-    def _start_barge_in_raw_recording(self):
-        start_raw_recording = getattr(self.command_audio, "start_raw_recording", None)
-        if not callable(start_raw_recording):
-            return None
-        return start_raw_recording()
-
-    def _stop_barge_in_raw_recording(self, raw_recording) -> None:
-        if raw_recording is None:
-            return
-        stop_raw_recording = getattr(self.command_audio, "stop_raw_recording", None)
-        if callable(stop_raw_recording):
-            stop_raw_recording(raw_recording)
 
     def _save_barge_in_monitor(
         self,
@@ -343,7 +697,6 @@ class VoiceAssistant:
         mode: str,
         state: dict[str, object],
         monitor_audio: RecordingAudioInput,
-        raw_recording=None,
     ) -> None:
         pcm = monitor_audio.pcm()
         result = "no_speech"
@@ -365,30 +718,6 @@ class VoiceAssistant:
         if "error" in state:
             metadata["error"] = str(state["error"])
 
-        extra_wavs: dict[str, tuple[bytes, int, int]] = {}
-        if raw_recording is not None:
-            raw_pcm = raw_recording.pcm()
-            raw_channels = int(getattr(raw_recording, "channels", 0) or 0)
-            raw_sample_rate = int(getattr(raw_recording, "sample_rate", 0) or 0)
-            raw_duration_ms = int(raw_recording.duration_ms())
-            metadata["raw_channels"] = raw_channels
-            metadata["raw_duration_ms"] = raw_duration_ms
-            metadata["raw_bytes"] = len(raw_pcm)
-            if raw_pcm and raw_channels > 0 and raw_sample_rate > 0:
-                extra_wavs["barge_in_raw.wav"] = (raw_pcm, raw_sample_rate, raw_channels)
-                if raw_channels > 1:
-                    for channel in range(raw_channels):
-                        channel_pcm = select_pcm16_channel(
-                            raw_pcm,
-                            channels=raw_channels,
-                            selected_channel=channel,
-                        )
-                        extra_wavs[f"barge_in_raw_ch{channel}.wav"] = (
-                            channel_pcm,
-                            raw_sample_rate,
-                            1,
-                        )
-
         debug_dir = self.debug.save_barge_in_monitor(
             mode=mode,
             result=result,
@@ -396,12 +725,15 @@ class VoiceAssistant:
             sample_rate=monitor_audio.sample_rate,
             duration_ms=monitor_audio.duration_ms(),
             metadata=metadata,
-            extra_wavs=extra_wavs,
         )
         if debug_dir:
-            print(
-                "barge_in> monitor_saved="
-                f"{debug_dir} duration_ms={monitor_audio.duration_ms()} result={result}"
+            log_event(
+                "barge_in",
+                "monitor_saved",
+                log_id="barge_in.monitor_saved",
+                path=debug_dir,
+                duration_ms=monitor_audio.duration_ms(),
+                result=result,
             )
 
     def _record_barge_in_utterance(
@@ -431,7 +763,14 @@ class VoiceAssistant:
             stream_handle = _StreamingSttHandle(self.stt, monitor_audio.sample_rate)
             stream_handle.start()
             start_ms = int((time.monotonic() - stt_start_reference) * 1000)
-            print(f"stt> streaming_started source=barge_in mode={mode} elapsed_ms={start_ms}")
+            log_event(
+                "stt",
+                "streaming_started",
+                log_id="stt.streaming_started",
+                source="barge_in",
+                mode=mode,
+                elapsed_ms=start_ms,
+            )
 
         def combined_speech_start() -> None:
             on_speech_start()
@@ -464,12 +803,21 @@ class VoiceAssistant:
         stt_ms = int((time.monotonic() - finalize_started) * 1000)
         stt_total_ms = stream_handle.total_latency_ms()
         ready_ms = stream_handle.ready_latency_ms()
-        ready_fragment = f" ready_ms={ready_ms}" if ready_ms is not None else ""
-        print(
-            "stt> "
-            f"latency_ms={stt_ms} mode=streaming source=barge_in "
-            f"total_latency_ms={stt_total_ms} sent_chunks={stream_handle.sent_chunks}"
-            f"{ready_fragment} text={transcript}"
+        params = {
+            "latency_ms": stt_ms,
+            "mode": "streaming",
+            "source": "barge_in",
+            "total_latency_ms": stt_total_ms,
+            "sent_chunks": stream_handle.sent_chunks,
+            "text": transcript,
+        }
+        if ready_ms is not None:
+            params["ready_ms"] = ready_ms
+        log_event(
+            "stt",
+            "completed",
+            log_id="stt.completed",
+            **params,
         )
         return utterance, transcript, stt_ms, {"stt_total": stt_total_ms}
 
@@ -478,11 +826,10 @@ class VoiceAssistant:
         monitor_stop_event = threading.Event()
         state: dict[str, object] = {}
         monitor_audio = RecordingAudioInput(self.command_audio)
-        raw_recording = self._start_barge_in_raw_recording()
 
         def on_speech_start() -> None:
             if not playback_stop_event.is_set():
-                print("barge_in> speech_start")
+                log_event("barge_in", "speech_start", log_id="barge_in.speech_start")
             playback_stop_event.set()
 
         def monitor() -> None:
@@ -514,7 +861,7 @@ class VoiceAssistant:
         monitor_thread.start()
 
         try:
-            self.tts.speak(text, stop_event=playback_stop_event)
+            self._speak_plain(text, stop_event=playback_stop_event)
         finally:
             if playback_stop_event.is_set():
                 max_wait_seconds = max(
@@ -527,22 +874,25 @@ class VoiceAssistant:
                 if monitor_thread.is_alive():
                     monitor_stop_event.set()
                     monitor_thread.join(timeout=1.0)
-                    print("barge_in> timeout waiting_for_utterance")
+                    log_event(
+                        "barge_in",
+                        "timeout",
+                        log_id="barge_in.timeout",
+                        reason="waiting_for_utterance",
+                    )
             else:
                 monitor_stop_event.set()
                 monitor_thread.join(timeout=1.0)
-            self._stop_barge_in_raw_recording(raw_recording)
 
         self._save_barge_in_monitor(
             mode="full",
             state=state,
             monitor_audio=monitor_audio,
-            raw_recording=raw_recording,
         )
 
         error = state.get("error")
         if isinstance(error, Exception):
-            print(f"barge_in> error={error}")
+            log_event("barge_in", "error", log_id="barge_in.error", error=error)
             return None
 
         utterance = state.get("utterance")
@@ -555,9 +905,14 @@ class VoiceAssistant:
                 self._pending_barge_stt_extra_timings = (
                     dict(extra_timings) if isinstance(extra_timings, dict) else {}
                 )
-            print(f"barge_in> captured duration_ms={utterance.duration_ms}")
+            log_event(
+                "barge_in",
+                "captured",
+                log_id="barge_in.captured",
+                duration_ms=utterance.duration_ms,
+            )
             return utterance
-        print("barge_in> no_speech")
+        log_event("barge_in", "no_speech", log_id="barge_in.no_speech")
         return None
 
     def _speak_text_stream_with_barge_in(
@@ -569,11 +924,10 @@ class VoiceAssistant:
         monitor_stop_event = threading.Event()
         state: dict[str, object] = {}
         monitor_audio = RecordingAudioInput(self.command_audio)
-        raw_recording = self._start_barge_in_raw_recording()
 
         def on_speech_start() -> None:
             if not playback_stop_event.is_set():
-                print("barge_in> speech_start")
+                log_event("barge_in", "speech_start", log_id="barge_in.speech_start")
             playback_stop_event.set()
             if llm_stop_event is not None:
                 llm_stop_event.set()
@@ -607,7 +961,7 @@ class VoiceAssistant:
         monitor_thread.start()
 
         try:
-            text = self.tts.speak_text_stream(text_chunks, stop_event=playback_stop_event)
+            text = self._speak_stream_plain(text_chunks, stop_event=playback_stop_event)
         finally:
             if playback_stop_event.is_set():
                 max_wait_seconds = max(
@@ -620,22 +974,25 @@ class VoiceAssistant:
                 if monitor_thread.is_alive():
                     monitor_stop_event.set()
                     monitor_thread.join(timeout=1.0)
-                    print("barge_in> timeout waiting_for_utterance")
+                    log_event(
+                        "barge_in",
+                        "timeout",
+                        log_id="barge_in.timeout",
+                        reason="waiting_for_utterance",
+                    )
             else:
                 monitor_stop_event.set()
                 monitor_thread.join(timeout=1.0)
-            self._stop_barge_in_raw_recording(raw_recording)
 
         self._save_barge_in_monitor(
             mode="stream",
             state=state,
             monitor_audio=monitor_audio,
-            raw_recording=raw_recording,
         )
 
         error = state.get("error")
         if isinstance(error, Exception):
-            print(f"barge_in> error={error}")
+            log_event("barge_in", "error", log_id="barge_in.error", error=error)
             return text, None
 
         utterance = state.get("utterance")
@@ -648,18 +1005,28 @@ class VoiceAssistant:
                 self._pending_barge_stt_extra_timings = (
                     dict(extra_timings) if isinstance(extra_timings, dict) else {}
                 )
-            print(f"barge_in> captured duration_ms={utterance.duration_ms}")
+            log_event(
+                "barge_in",
+                "captured",
+                log_id="barge_in.captured",
+                duration_ms=utterance.duration_ms,
+            )
             return text, utterance
-        print("barge_in> no_speech")
+        log_event("barge_in", "no_speech", log_id="barge_in.no_speech")
         return text, None
 
     def _wait_for_wake(self) -> tuple[WakeEvent, int]:
         wake_started = time.monotonic()
         wake = self.wake.wait(self.wake_audio)
         wake_ms = int((time.monotonic() - wake_started) * 1000)
-        print(
-            f"wake> engine={wake.engine} label={wake.label} "
-            f"confidence={wake.confidence:.3f} latency_ms={wake_ms}"
+        log_event(
+            "wake",
+            "detected",
+            log_id="wake.detected",
+            engine=wake.engine,
+            label=wake.label,
+            confidence=f"{wake.confidence:.3f}",
+            latency_ms=wake_ms,
         )
         return wake, wake_ms
 
@@ -671,13 +1038,19 @@ class VoiceAssistant:
             try:
                 self.wake_ack.play()
             except Exception as exc:
-                print(f"wake_ack> error={exc}")
+                log_event("wake_ack", "error", log_id="wake_ack.error", error=exc)
                 result["latency_ms"] = 0
                 return
             ack_ms = int((time.monotonic() - ack_started) * 1000)
             result["latency_ms"] = ack_ms
             if ack_ms:
-                print(f"wake_ack> latency_ms={ack_ms} mode=background")
+                log_event(
+                    "wake_ack",
+                    "played",
+                    log_id="wake_ack.played",
+                    latency_ms=ack_ms,
+                    mode="background",
+                )
 
         thread = threading.Thread(target=play, name="voiceui-wake-ack", daemon=True)
         thread.start()
@@ -689,7 +1062,10 @@ class VoiceAssistant:
         wake_ms: int,
         wake_ack_handle: _WakeAckHandle | None = None,
         speech_start_timeout_seconds: float = 0.0,
+        turn_index: int | None = None,
     ) -> tuple[AssistantReply, str]:
+        if turn_index is None:
+            turn_index = self.audio_dump.begin_turn()
         stt_extra_timings: dict[str, int] = {}
         if self._pending_barge_utterance is not None:
             utterance = self._pending_barge_utterance
@@ -697,7 +1073,14 @@ class VoiceAssistant:
             self._pending_barge_utterance = None
             self._pending_barge_transcript = None
             vad_ms = 0
-            print(f"vad> source=barge_in duration_ms={utterance.duration_ms} latency_ms=0")
+            log_event(
+                "vad",
+                "completed",
+                log_id="vad.completed",
+                source="barge_in",
+                duration_ms=utterance.duration_ms,
+                latency_ms=0,
+            )
             wake_ack_ms = wake_ack_handle.join() if wake_ack_handle is not None else 0
             if pending_transcript is not None:
                 transcript = pending_transcript
@@ -705,12 +1088,25 @@ class VoiceAssistant:
                 stt_extra_timings = dict(self._pending_barge_stt_extra_timings)
                 self._pending_barge_stt_ms = 0
                 self._pending_barge_stt_extra_timings = {}
-                print(f"stt> source=barge_in_stream latency_ms={stt_ms} text={transcript}")
+                log_event(
+                    "stt",
+                    "completed",
+                    log_id="stt.completed",
+                    source="barge_in_stream",
+                    latency_ms=stt_ms,
+                    text=transcript,
+                )
             else:
                 stt_started = time.monotonic()
                 transcript = self.stt.transcribe(utterance)
                 stt_ms = int((time.monotonic() - stt_started) * 1000)
-                print(f"stt> latency_ms={stt_ms} text={transcript}")
+                log_event(
+                    "stt",
+                    "completed",
+                    log_id="stt.completed",
+                    latency_ms=stt_ms,
+                    text=transcript,
+                )
         elif self._should_stream_stt():
             (
                 utterance,
@@ -729,19 +1125,31 @@ class VoiceAssistant:
                 start_timeout_seconds=speech_start_timeout_seconds,
             )
             vad_ms = int((time.monotonic() - vad_started) * 1000)
-            print(f"vad> duration_ms={utterance.duration_ms} latency_ms={vad_ms}")
+            log_event(
+                "vad",
+                "completed",
+                log_id="vad.completed",
+                duration_ms=utterance.duration_ms,
+                latency_ms=vad_ms,
+            )
 
             wake_ack_ms = wake_ack_handle.join() if wake_ack_handle is not None else 0
             stt_started = time.monotonic()
             transcript = self.stt.transcribe(utterance)
             stt_ms = int((time.monotonic() - stt_started) * 1000)
-            print(f"stt> latency_ms={stt_ms} text={transcript}")
+            log_event(
+                "stt",
+                "completed",
+                log_id="stt.completed",
+                latency_ms=stt_ms,
+                text=transcript,
+            )
 
         transcript = transcript.strip()
         if not transcript:
             reply = AssistantReply(text="I did not hear anything.", routed_to="system")
             response_timings = {"llm": 0, "tts": 0}
-            print("assistant> I did not hear anything.")
+            log_event("assistant", "empty_input", log_id="assistant.empty_input")
         else:
             reply, response_timings = self._complete_transcript(transcript)
         timings = {
@@ -772,7 +1180,7 @@ class VoiceAssistant:
         )
         debug_dir = self.debug.save_turn(debug_data, utterance, wake_audio=wake)
         if debug_dir:
-            print(f"debug> saved={debug_dir}")
+            log_event("debug", "saved", log_id="debug.saved", path=debug_dir)
         return reply, transcript
 
     def _should_stream_stt(self) -> bool:
@@ -794,7 +1202,12 @@ class VoiceAssistant:
             stream_handle = _StreamingSttHandle(self.stt, self.command_audio.sample_rate)
             stream_handle.start()
             start_ms = int((time.monotonic() - vad_started) * 1000)
-            print(f"stt> streaming_started vad_elapsed_ms={start_ms}")
+            log_event(
+                "stt",
+                "streaming_started",
+                log_id="stt.streaming_started",
+                vad_elapsed_ms=start_ms,
+            )
 
         def on_speech_audio(pcm: bytes) -> None:
             if stream_handle is None:
@@ -815,13 +1228,26 @@ class VoiceAssistant:
             raise
 
         vad_ms = int((time.monotonic() - vad_started) * 1000)
-        print(f"vad> duration_ms={utterance.duration_ms} latency_ms={vad_ms}")
+        log_event(
+            "vad",
+            "completed",
+            log_id="vad.completed",
+            duration_ms=utterance.duration_ms,
+            latency_ms=vad_ms,
+        )
 
         if stream_handle is None:
             stt_started = time.monotonic()
             transcript = self.stt.transcribe(utterance)
             stt_ms = int((time.monotonic() - stt_started) * 1000)
-            print(f"stt> latency_ms={stt_ms} mode=fallback text={transcript}")
+            log_event(
+                "stt",
+                "completed",
+                log_id="stt.completed",
+                latency_ms=stt_ms,
+                mode="fallback",
+                text=transcript,
+            )
             return utterance, transcript, vad_ms, stt_ms, {}
 
         finalize_started = time.monotonic()
@@ -829,77 +1255,257 @@ class VoiceAssistant:
         stt_ms = int((time.monotonic() - finalize_started) * 1000)
         stt_total_ms = stream_handle.total_latency_ms()
         ready_ms = stream_handle.ready_latency_ms()
-        ready_fragment = f" ready_ms={ready_ms}" if ready_ms is not None else ""
-        print(
-            "stt> "
-            f"latency_ms={stt_ms} mode=streaming total_latency_ms={stt_total_ms} "
-            f"sent_chunks={stream_handle.sent_chunks}{ready_fragment} text={transcript}"
+        params = {
+            "latency_ms": stt_ms,
+            "mode": "streaming",
+            "total_latency_ms": stt_total_ms,
+            "sent_chunks": stream_handle.sent_chunks,
+            "text": transcript,
+        }
+        if ready_ms is not None:
+            params["ready_ms"] = ready_ms
+        log_event(
+            "stt",
+            "completed",
+            log_id="stt.completed",
+            **params,
         )
         return utterance, transcript, vad_ms, stt_ms, {"stt_total": stt_total_ms}
 
     def run_once(self) -> AssistantReply:
+        self._start_system_input_dump()
         if self.config.input.mode == "text":
-            text = input("you> ")
-            return self.run_text_turn(text)
-
-        wake, wake_ms = self._wait_for_wake()
-        wake_ack_handle = self._start_wake_ack()
-        reply, _transcript = self._run_audio_turn(
-            wake,
-            wake_ms,
-            wake_ack_handle=wake_ack_handle,
-        )
-        return reply
-
-    def run_conversation(self) -> AssistantReply:
-        if self.config.input.mode == "text":
-            return self.run_once()
-
-        wake, wake_ms = self._wait_for_wake()
-        wake_ack_handle = self._start_wake_ack()
-        self.session.reset()
-        reply, transcript = self._run_audio_turn(
-            wake,
-            wake_ms,
-            wake_ack_handle=wake_ack_handle,
-        )
-        follow_up_seconds = self.config.conversation.follow_up_seconds
-        if (follow_up_seconds <= 0 or not transcript) and self._pending_barge_utterance is None:
-            return reply
-
-        while True:
-            if self._pending_barge_utterance is None:
-                if follow_up_seconds <= 0:
-                    return reply
-                print(f"session> listening_for_follow_up seconds={follow_up_seconds}")
-                speech_start_timeout_seconds = follow_up_seconds
-            else:
-                print("session> processing_barge_in")
-                speech_start_timeout_seconds = 0.0
-            follow_up_wake = WakeEvent(
-                engine="follow_up",
-                confidence=1.0,
-                label="no_wake",
-            )
             try:
-                reply, transcript = self._run_audio_turn(
-                    follow_up_wake,
-                    wake_ms=0,
-                    speech_start_timeout_seconds=speech_start_timeout_seconds,
+                text = input("you> ")
+                return self.run_text_turn(text)
+            finally:
+                self.close()
+
+        try:
+            wake, wake_ms = self._wait_for_wake()
+            self._duck_music("conversation")
+            try:
+                turn_index = self.audio_dump.begin_turn()
+                wake_ack_handle = self._start_wake_ack()
+                reply, _transcript = self._run_audio_turn(
+                    wake,
+                    wake_ms,
+                    wake_ack_handle=wake_ack_handle,
+                    turn_index=turn_index,
                 )
-            except SpeechStartTimeoutError:
-                print("session> follow_up_timeout returning_to_wake")
                 return reply
-            if not transcript:
-                print("session> empty_follow_up returning_to_wake")
-                return reply
+            finally:
+                self._unduck_music("conversation")
+        finally:
+            self.close()
+
+    def run_conversation(self, keep_audio_dump_running: bool = False) -> AssistantReply:
+        self._start_system_input_dump()
+        if self.config.input.mode == "text":
+            try:
+                return self.run_once()
+            finally:
+                if not keep_audio_dump_running:
+                    self.close()
+
+        try:
+            wake, wake_ms = self._wait_for_wake()
+            self._duck_music("conversation")
+            try:
+                turn_index = self.audio_dump.begin_turn()
+                wake_ack_handle = self._start_wake_ack()
+                self.session.reset()
+                reply, transcript = self._run_audio_turn(
+                    wake,
+                    wake_ms,
+                    wake_ack_handle=wake_ack_handle,
+                    turn_index=turn_index,
+                )
+                follow_up_seconds = self.config.conversation.follow_up_seconds
+                if (
+                    follow_up_seconds <= 0 or not transcript
+                ) and self._pending_barge_utterance is None:
+                    return reply
+
+                while True:
+                    if self._pending_barge_utterance is None:
+                        if follow_up_seconds <= 0:
+                            return reply
+                        log_event(
+                            "session",
+                            "listening_for_follow_up",
+                            log_id="session.listening_for_follow_up",
+                            seconds=follow_up_seconds,
+                        )
+                        speech_start_timeout_seconds = follow_up_seconds
+                    else:
+                        log_event(
+                            "session",
+                            "processing_barge_in",
+                            log_id="session.processing_barge_in",
+                        )
+                        speech_start_timeout_seconds = 0.0
+                    follow_up_wake = WakeEvent(
+                        engine="follow_up",
+                        confidence=1.0,
+                        label="no_wake",
+                    )
+                    try:
+                        reply, transcript = self._run_audio_turn(
+                            follow_up_wake,
+                            wake_ms=0,
+                            speech_start_timeout_seconds=speech_start_timeout_seconds,
+                        )
+                    except SpeechStartTimeoutError:
+                        log_event(
+                            "session",
+                            "follow_up_timeout",
+                            log_id="session.follow_up_timeout",
+                            next_state="returning_to_wake",
+                        )
+                        return reply
+                    if not transcript:
+                        log_event(
+                            "session",
+                            "empty_follow_up",
+                            log_id="session.empty_follow_up",
+                            next_state="returning_to_wake",
+                        )
+                        return reply
+            finally:
+                self._unduck_music("conversation")
+        finally:
+            if not keep_audio_dump_running:
+                self.close()
 
     def run_forever(self) -> None:
-        while True:
-            try:
-                self.run_conversation()
-            except KeyboardInterrupt:
-                raise
-            except Exception as exc:
-                print(f"error> {exc}")
-                time.sleep(1)
+        self._start_system_input_dump()
+        try:
+            while True:
+                try:
+                    self.run_conversation(keep_audio_dump_running=True)
+                except KeyboardInterrupt:
+                    raise
+                except Exception as exc:
+                    log_event("error", "runtime", log_id="error.runtime", error=exc)
+                    time.sleep(1)
+        finally:
+            self.close()
+
+
+def _looks_like_weather_query(normalized: str) -> bool:
+    return any(term in normalized for term in ("天气", "气温", "温度", "下雨", "降雨", "有雨"))
+
+
+def _looks_like_time_query(normalized: str) -> bool:
+    return any(term in normalized for term in ("几点", "时间", "现在几点"))
+
+
+def _extract_weather_location(transcript: str, default_location: str = "") -> str:
+    text = transcript.strip()
+    marker_index = -1
+    for term in (
+        "天气",
+        "气温",
+        "温度",
+        "下雨",
+        "降雨",
+        "有雨",
+    ):
+        index = text.find(term)
+        if index >= 0 and (marker_index < 0 or index < marker_index):
+            marker_index = index
+    candidates = []
+    if marker_index >= 0:
+        candidates.append(text[:marker_index])
+    candidates.append(text)
+    for candidate in candidates:
+        cleaned = _clean_weather_location_candidate(candidate)
+        if _is_weather_location_candidate(cleaned):
+            return cleaned
+    return default_location.strip()
+
+
+def _extract_weather_target_day(transcript: str) -> str:
+    if "明天" in transcript or "明日" in transcript:
+        return "tomorrow"
+    return "today"
+
+
+def _format_weather_error_response(exc: Exception) -> str:
+    message = str(exc)
+    if "Could not find weather location" in message:
+        return "我没找到这个地点的天气，你可以说具体城市或区域。"
+    return "天气服务暂时不可用，稍后再试。"
+
+
+def _format_processing_error_response(exc: Exception) -> str:
+    del exc
+    return "刚才处理失败了，请再说一遍。"
+
+
+def _clean_weather_location_candidate(text: str) -> str:
+    cleaned = text.strip()
+    variants = [cleaned]
+    for separator in ("，", ",", "。", "；", ";"):
+        if separator in cleaned:
+            variants.insert(0, cleaned.rsplit(separator, 1)[-1])
+
+    for variant in variants:
+        candidate = variant
+        for term in (
+            "你知道",
+            "我想知道",
+            "想知道",
+            "帮我查一下",
+            "帮我看一下",
+            "帮我查查",
+            "帮我",
+            "你看一下",
+            "查一下",
+            "看一下",
+            "告诉我",
+            "请问",
+            "麻烦",
+            "我在",
+            "今天",
+            "明天",
+            "明日",
+            "现在",
+            "当前",
+            "当地",
+            "这边",
+            "会不会",
+            "有没有",
+            "天气",
+            "气温",
+            "温度",
+            "下雨",
+            "降雨",
+            "有雨",
+            "怎么样",
+            "如何",
+            "怎样",
+            "的",
+            "吗",
+            "呢",
+            "？",
+            "?",
+            "。",
+            "，",
+            ",",
+            "、",
+            "！",
+            "!",
+        ):
+            candidate = candidate.replace(term, "")
+        candidate = candidate.strip()
+        if candidate:
+            return candidate
+    return ""
+
+
+def _is_weather_location_candidate(candidate: str) -> bool:
+    if not 1 < len(candidate) <= 12:
+        return False
+    return candidate not in {"你知道", "知道", "帮我", "请问", "麻烦", "今天", "明天", "明日"}

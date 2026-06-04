@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import unittest
 import tempfile
+import unittest
 from pathlib import Path
 
 from voiceui.audio import (
@@ -9,12 +9,76 @@ from voiceui.audio import (
     apply_pcm16_gain_db,
     pcm16_rms,
     read_pcm16_wav,
+    resolve_sounddevice_device,
     select_pcm16_channel,
     write_pcm16_wav,
 )
 
 
 class AudioTests(unittest.TestCase):
+    def test_resolve_sounddevice_device_uses_full_wasapi_input_display_name(self) -> None:
+        sd = _FakeSoundDevice()
+
+        device = resolve_sounddevice_device(
+            sd,
+            "回音消除话筒 (reSpeaker XVF3800 4-Mic Array), "
+            "Windows WASAPI (2 in, 0 out)",
+            kind="input",
+        )
+
+        self.assertEqual(device, 1)
+
+    def test_resolve_sounddevice_device_uses_full_wasapi_output_display_name(self) -> None:
+        sd = _FakeSoundDevice()
+
+        device = resolve_sounddevice_device(
+            sd,
+            "回音消除话筒 (reSpeaker XVF3800 4-Mic Array), "
+            "Windows WASAPI (0 in, 2 out)",
+            kind="output",
+        )
+
+        self.assertEqual(device, 2)
+
+    def test_resolve_sounddevice_device_distinguishes_second_xvf3800(self) -> None:
+        sd = _FakeSoundDevice()
+
+        device = resolve_sounddevice_device(
+            sd,
+            "回音消除话筒 (2- reSpeaker XVF3800 4-Mic Array), "
+            "Windows WASAPI (2 in, 0 out)",
+            kind="input",
+        )
+
+        self.assertEqual(device, 3)
+
+    def test_resolve_sounddevice_device_prefers_wasapi_for_bare_name(self) -> None:
+        sd = _FakeSoundDevice()
+
+        device = resolve_sounddevice_device(
+            sd,
+            "回音消除话筒 (reSpeaker XVF3800 4-Mic Array)",
+            kind="input",
+        )
+
+        self.assertEqual(device, 1)
+
+    def test_resolve_sounddevice_device_rejects_ambiguous_substring(self) -> None:
+        sd = _FakeSoundDevice()
+
+        with self.assertRaisesRegex(RuntimeError, "ambiguous"):
+            resolve_sounddevice_device(
+                sd,
+                "reSpeaker XVF3800 4-Mic Array",
+                kind="input",
+            )
+
+    def test_resolve_sounddevice_device_keeps_numeric_index_fallback(self) -> None:
+        sd = _FakeSoundDevice()
+
+        self.assertEqual(resolve_sounddevice_device(sd, "24", kind="input"), 24)
+        self.assertEqual(resolve_sounddevice_device(sd, 22, kind="output"), 22)
+
     def test_select_pcm16_channel_extracts_interleaved_samples(self) -> None:
         samples = [1, 10, 2, 20, 3, 30]
         pcm = b"".join(sample.to_bytes(2, "little", signed=True) for sample in samples)
@@ -86,6 +150,48 @@ def _decode_pcm16(pcm: bytes) -> list[int]:
         int.from_bytes(pcm[index : index + 2], "little", signed=True)
         for index in range(0, len(pcm), 2)
     ]
+
+
+class _FakeSoundDevice:
+    def query_hostapis(self):
+        return [
+            {"name": "MME"},
+            {"name": "Windows WASAPI"},
+        ]
+
+    def query_devices(self):
+        return [
+            {
+                "name": "回音消除话筒 (reSpeaker XVF3800 4-Mic Array)",
+                "hostapi": 0,
+                "max_input_channels": 2,
+                "max_output_channels": 0,
+            },
+            {
+                "name": "回音消除话筒 (reSpeaker XVF3800 4-Mic Array)",
+                "hostapi": 1,
+                "max_input_channels": 2,
+                "max_output_channels": 0,
+            },
+            {
+                "name": "回音消除话筒 (reSpeaker XVF3800 4-Mic Array)",
+                "hostapi": 1,
+                "max_input_channels": 0,
+                "max_output_channels": 2,
+            },
+            {
+                "name": "回音消除话筒 (2- reSpeaker XVF3800 4-Mic Array)",
+                "hostapi": 1,
+                "max_input_channels": 2,
+                "max_output_channels": 0,
+            },
+            {
+                "name": "回音消除话筒 (2- reSpeaker XVF3800 4-Mic Array)",
+                "hostapi": 1,
+                "max_input_channels": 0,
+                "max_output_channels": 2,
+            },
+        ]
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from voiceui.audio import AudioInput
+from voiceui.logs import is_log_enabled, log_continuous, log_event
 from voiceui.models import WakeConfig, WakeEvent
 
 _OPENWAKEWORD_ANY_MODELS = {"", "*", "all", "any"}
@@ -25,7 +26,7 @@ class DisabledWakeDetector(WakeDetector):
 
 class ManualWakeDetector(WakeDetector):
     def wait(self, audio: AudioInput) -> WakeEvent:
-        input("wake> press Enter, then speak your command...")
+        input("Press Enter, then speak your command...")
         return WakeEvent(engine="manual", confidence=1.0, label="enter")
 
 
@@ -58,9 +59,13 @@ class OpenWakeWordDetector(WakeDetector):
         )
         _download_openwakeword_models(download_models, model_args)
         loaded = "all built-ins" if not model_args else ", ".join(model_args)
-        print(
-            "wake> loading openWakeWord "
-            f"model={loaded} framework={self.config.inference_framework}"
+        log_event(
+            "wake",
+            "loading",
+            log_id="wake.loading",
+            engine="openwakeword",
+            model=loaded,
+            framework=self.config.inference_framework,
         )
         try:
             return Model(
@@ -88,9 +93,27 @@ class OpenWakeWordDetector(WakeDetector):
 
         if self._model is None:
             self._model = self._load_model()
+        self._reset_model_state()
 
         started = time.monotonic()
-        debug_enabled = self.config.debug
+        score_log_enabled = is_log_enabled(
+            "wake.score",
+            kind="continuous",
+        )
+        debug_enabled_log_enabled = is_log_enabled(
+            "wake.debug_enabled",
+            default_enabled=self.config.debug,
+        )
+        detected_debug_log_enabled = is_log_enabled(
+            "wake.detected_debug",
+            default_enabled=self.config.debug,
+        )
+        debug_enabled = (
+            self.config.debug
+            or score_log_enabled
+            or debug_enabled_log_enabled
+            or detected_debug_log_enabled
+        )
         debug_interval = max(0.1, self.config.debug_interval_seconds)
         next_debug_at = started + debug_interval
         debug_window = _WakeDebugWindow()
@@ -99,12 +122,16 @@ class OpenWakeWordDetector(WakeDetector):
                 audio.sample_rate * 2 * max(0.0, self.config.debug_audio_seconds)
             )
         )
-        if debug_enabled:
-            print(
-                "wake_debug> enabled "
-                f"{_describe_audio_input(audio)} "
-                f"model={self.config.model} threshold={self.config.threshold:.3f} "
-                f"framework={self.config.inference_framework}"
+        if debug_enabled_log_enabled:
+            log_event(
+                "wake",
+                "debug_enabled",
+                log_id="wake.debug_enabled",
+                default_enabled=self.config.debug,
+                **_audio_input_params(audio),
+                model=self.config.model,
+                threshold=f"{self.config.threshold:.3f}",
+                framework=self.config.inference_framework,
             )
 
         for chunk in audio.chunks():
@@ -126,20 +153,30 @@ class OpenWakeWordDetector(WakeDetector):
                 )
                 if now >= next_debug_at:
                     elapsed = now - started
-                    print(
-                        "wake_debug> "
-                        f"elapsed_s={elapsed:.1f} "
-                        f"{debug_window.format(self.config.threshold, self.config.debug_top_predictions)}"
+                    log_continuous(
+                        "wake",
+                        "score",
+                        log_id="wake.score",
+                        elapsed_s=f"{elapsed:.1f}",
+                        **debug_window.snapshot(
+                            self.config.threshold,
+                            self.config.debug_top_predictions,
+                        ),
                     )
                     debug_window.reset()
                     next_debug_at = now + debug_interval
             if confidence >= self.config.threshold:
-                if debug_enabled:
+                if detected_debug_log_enabled:
                     elapsed = time.monotonic() - started
-                    print(
-                        "wake_debug> detected "
-                        f"elapsed_s={elapsed:.2f} label={label} confidence={confidence:.3f} "
-                        f"threshold={self.config.threshold:.3f}"
+                    log_event(
+                        "wake",
+                        "detected_debug",
+                        log_id="wake.detected_debug",
+                        default_enabled=self.config.debug,
+                        elapsed_s=f"{elapsed:.2f}",
+                        label=label,
+                        confidence=f"{confidence:.3f}",
+                        threshold=f"{self.config.threshold:.3f}",
                     )
                 pcm = audio_buffer.pcm()
                 return WakeEvent(
@@ -156,6 +193,11 @@ class OpenWakeWordDetector(WakeDetector):
                     raise TimeoutError("Timed out waiting for wake word.")
 
         raise RuntimeError("Audio stream ended while waiting for wake word.")
+
+    def _reset_model_state(self) -> None:
+        reset = getattr(self._model, "reset", None)
+        if callable(reset):
+            reset()
 
 
 class SherpaOnnxDetector(WakeDetector):
@@ -244,18 +286,27 @@ class _WakeDebugWindow:
         self.last_stats = _pcm16_stats(samples)
 
     def format(self, threshold: float, top_predictions: int) -> str:
+        params = self.snapshot(threshold, top_predictions)
+        return " ".join(f"{key}={value}" for key, value in params.items())
+
+    def snapshot(self, threshold: float, top_predictions: int) -> dict[str, int | str]:
         avg_predict_ms = self.predict_total_ms / self.chunks if self.chunks else 0.0
         stats = self.last_stats
-        return (
-            f"chunks={self.chunks} audio_ms={self.audio_ms} "
-            f"rms={stats['rms']:.1f} peak={stats['peak']} dbfs={stats['dbfs']:.1f} "
-            f"near_zero_pct={stats['near_zero_pct']:.1f} clipped_pct={stats['clipped_pct']:.2f} "
-            f"last={self.last_label}:{self.last_confidence:.3f} "
-            f"best_window={self.best_label}:{self.best_confidence:.3f} "
-            f"threshold={threshold:.3f} "
-            f"top={_format_predictions(self.last_predictions, top_predictions)} "
-            f"predict_avg_ms={avg_predict_ms:.1f} predict_max_ms={self.predict_max_ms:.1f}"
-        )
+        return {
+            "chunks": self.chunks,
+            "audio_ms": self.audio_ms,
+            "rms": f"{stats['rms']:.1f}",
+            "peak": int(stats["peak"]),
+            "dbfs": f"{stats['dbfs']:.1f}",
+            "near_zero_pct": f"{stats['near_zero_pct']:.1f}",
+            "clipped_pct": f"{stats['clipped_pct']:.2f}",
+            "last": f"{self.last_label}:{self.last_confidence:.3f}",
+            "best_window": f"{self.best_label}:{self.best_confidence:.3f}",
+            "threshold": f"{threshold:.3f}",
+            "top": _format_predictions(self.last_predictions, top_predictions),
+            "predict_avg_ms": f"{avg_predict_ms:.1f}",
+            "predict_max_ms": f"{self.predict_max_ms:.1f}",
+        }
 
 
 class _PcmRingBuffer:
@@ -317,20 +368,26 @@ def _format_predictions(predictions: dict[str, float], limit: int) -> str:
 
 
 def _describe_audio_input(audio: AudioInput) -> str:
+    return " ".join(f"{key}={value}" for key, value in _audio_input_params(audio).items())
+
+
+def _audio_input_params(audio: AudioInput) -> dict[str, object]:
     config = getattr(audio, "config", None)
     selected_channel = getattr(audio, "selected_channel", "?")
     if config is None:
-        return (
-            f"sample_rate={audio.sample_rate} block_ms={audio.block_ms} "
-            f"selected_channel={selected_channel}"
-        )
-    return (
-        f"device={getattr(config, 'device', None)} "
-        f"channels={getattr(config, 'channels', '?')} "
-        f"selected_channel={selected_channel} "
-        f"input_gain_db={getattr(config, 'input_gain_db', 0.0)} "
-        f"sample_rate={audio.sample_rate} block_ms={audio.block_ms}"
-    )
+        return {
+            "sample_rate": audio.sample_rate,
+            "block_ms": audio.block_ms,
+            "selected_channel": selected_channel,
+        }
+    return {
+        "device": getattr(config, "device", None),
+        "channels": getattr(config, "channels", "?"),
+        "selected_channel": selected_channel,
+        "input_gain_db": getattr(config, "input_gain_db", 0.0),
+        "sample_rate": audio.sample_rate,
+        "block_ms": audio.block_ms,
+    }
 
 
 def _normalize_openwakeword_label(value: str) -> str:
