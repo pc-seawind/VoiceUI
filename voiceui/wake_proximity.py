@@ -928,9 +928,8 @@ def _run_collect(args) -> int:
         channels=args.channels,
     )
     _write_run_config(run_dir, args, specs, positions, weights)
-    print(f"输出目录: {run_dir}")
-    print("采集规则: 每轮按 Enter 后先保持安静 1 秒，再喊一次唤醒词。")
-    print("按 Ctrl+C 可以中断；已完成的轮次会保留在 trials.jsonl/csv。")
+    _configure_wake_proximity_logging(run_dir)
+    _log_run_started("collect", run_dir, args, specs)
 
     results: list[TrialResult] = []
     trial_id = 0
@@ -954,11 +953,12 @@ def _run_collect(args) -> int:
                 write_trials_csv(run_dir / "trials.csv", results, [spec.label for spec in specs])
                 _print_trial_result(result)
     except KeyboardInterrupt:
-        print("\n采集中断，开始汇总已完成轮次。")
+        _log_run_interrupted("collect", len(results))
 
     summary = summarize_trial_results(results)
     write_summary(run_dir / "summary.json", summary)
     print_summary(summary)
+    _log_run_stopped("collect", len(results))
     return 0
 
 
@@ -980,9 +980,8 @@ def _run_free(args) -> int:
         channels=args.channels,
     )
     _write_run_config(run_dir, args, specs, positions, weights)
-    print(f"输出目录: {run_dir}")
-    print("自由唤醒模式：脚本会自动重复监听；每轮开始后先安静 1 秒，再自由喊唤醒词。")
-    print("按 Ctrl+C 停止；已完成轮次会保留在 trials.jsonl/csv。")
+    _configure_wake_proximity_logging(run_dir)
+    _log_run_started("free", run_dir, args, specs)
 
     results: list[TrialResult] = []
     trial_id = 0
@@ -1008,11 +1007,12 @@ def _run_free(args) -> int:
             write_trials_csv(run_dir / "trials.csv", results, [spec.label for spec in specs])
             _print_trial_result(result)
     except KeyboardInterrupt:
-        print("\n自由唤醒测试停止，开始汇总已完成轮次。")
+        _log_run_interrupted("free", len(results))
 
     summary = summarize_trial_results(results)
     write_summary(run_dir / "summary.json", summary)
     print_summary(summary)
+    _log_run_stopped("free", len(results))
     return 0
 
 
@@ -1038,9 +1038,8 @@ def _run_e2e(args) -> int:
         args.label_a: args.output_a,
         args.label_b: args.output_b,
     }
-    print(f"输出目录: {run_dir}")
-    print("端到端模式：按提示站到指定位置喊唤醒词，脚本会选择近端设备并在该设备播放 ack。")
-    print("按 Ctrl+C 可以中断；已完成轮次会保留在 trials.jsonl/csv。")
+    _configure_wake_proximity_logging(run_dir)
+    _log_run_started("e2e", run_dir, args, specs)
 
     results: list[TrialResult] = []
     trial_id = 0
@@ -1065,11 +1064,12 @@ def _run_e2e(args) -> int:
                 write_trials_csv(run_dir / "trials.csv", results, [spec.label for spec in specs])
                 _print_trial_result(result)
     except KeyboardInterrupt:
-        print("\n端到端测试中断，开始汇总已完成轮次。")
+        _log_run_interrupted("e2e", len(results))
 
     summary = summarize_trial_results(results)
     write_summary(run_dir / "summary.json", summary)
     print_summary(summary)
+    _log_run_stopped("e2e", len(results))
     return 0
 
 
@@ -1092,8 +1092,8 @@ def _run_wake_live(args) -> int:
         channels=args.channels,
     )
     _write_run_config(run_dir, args, specs, positions, weights)
-    print(f"输出目录: {run_dir}")
-    print("纯唤醒 live：直接喊唤醒词，脚本会选择近端设备并在该设备播放 ack。Ctrl+C 停止。")
+    _configure_wake_proximity_logging(run_dir)
+    _log_run_started("wake_live", run_dir, args, specs)
 
     results: list[TrialResult] = []
     monitors, event_queue = _start_live_monitors(
@@ -1124,13 +1124,14 @@ def _run_wake_live(args) -> int:
             if args.cooldown_seconds > 0:
                 time.sleep(args.cooldown_seconds)
     except KeyboardInterrupt:
-        print("\n纯唤醒 live 已停止。")
+        _log_run_interrupted("wake_live", len(results))
     finally:
         _stop_live_monitors(monitors)
 
     summary = summarize_trial_results(results)
     write_summary(run_dir / "summary.json", summary)
     print_summary(summary)
+    _log_run_stopped("wake_live", len(results))
     return 0
 
 
@@ -1155,16 +1156,27 @@ def _run_prod_live(args) -> int:
         channels=args.channels,
     )
     _write_run_config(run_dir, args, specs, positions, weights)
-    print(f"输出目录: {run_dir}")
-    print("生产端到端 live：直接喊唤醒词，然后按正式链路说指令；Ctrl+C 停止。")
-    print("正在预热正式链路：VAD/STT/LLM/TTS 会按两台设备各初始化一次...")
+    _configure_wake_proximity_logging(run_dir)
+    _log_run_started("prod_live", run_dir, args, specs)
+    log_event(
+        "wake_proximity",
+        "prod_live_warmup_started",
+        log_id="wake_proximity.prod_live_warmup_started",
+        labels=[spec.label for spec in specs],
+    )
     assistants = _build_production_assistants(
         args,
         run_dir=run_dir,
         input_devices=input_devices,
         output_devices=output_devices,
     )
-    print("正式链路预热完成，开始监听近端唤醒。")
+    _configure_wake_proximity_logging(run_dir)
+    log_event(
+        "wake_proximity",
+        "prod_live_warmup_completed",
+        log_id="wake_proximity.prod_live_warmup_completed",
+        labels=[spec.label for spec in specs],
+    )
 
     results: list[TrialResult] = []
     results_lock = threading.Lock()
@@ -1182,8 +1194,14 @@ def _run_prod_live(args) -> int:
         sd=sd,
     )
     try:
+        log_event(
+            "wake_proximity",
+            "monitor_started",
+            log_id="wake_proximity.monitor_started",
+            mode="prod_live",
+            labels=[spec.label for spec in specs],
+        )
         while True:
-            print("近端唤醒监听中...")
             with monitor_lock:
                 current_monitors = dict(monitors)
             _raise_live_errors(current_monitors.values())
@@ -1260,6 +1278,7 @@ def _run_prod_live(args) -> int:
                         output_devices=output_devices,
                     )
                 finally:
+                    _configure_wake_proximity_logging(run_dir)
                     _record_live_result(
                         live_result.trial,
                         results=results,
@@ -1292,7 +1311,9 @@ def _run_prod_live(args) -> int:
             turn_threads.append(thread)
             thread.start()
     except KeyboardInterrupt:
-        print("\n生产端到端 live 已停止。")
+        with results_lock:
+            completed_results = len(results)
+        _log_run_interrupted("prod_live", completed_results)
     finally:
         shutdown_event.set()
         with monitor_lock:
@@ -1302,9 +1323,11 @@ def _run_prod_live(args) -> int:
             thread.join(timeout=2.0)
         _close_production_assistants(assistants)
 
+    _configure_wake_proximity_logging(run_dir)
     summary = summarize_trial_results(results)
     write_summary(run_dir / "summary.json", summary)
     print_summary(summary)
+    _log_run_stopped("prod_live", len(results))
     return 0
 
 
@@ -1677,7 +1700,15 @@ def _run_selected_production_turn(
     if assistant is None:
         live.trial.assistant_error = f"No production assistant configured for {selected}"
         return
-    print(f"近端唤醒: selected={selected}，开始正式交互。")
+    log_event(
+        "wake_proximity",
+        "prod_live_turn_started",
+        log_id="wake_proximity.prod_live_turn_started",
+        selected_device=selected,
+        trigger_source=live.trial.trigger_source_device or "none",
+        confidence=f"{selected_metrics.best_confidence:.3f}",
+        output_device=output_device,
+    )
     _activate_production_assistant(assistant)
     wake_pcm = live.wake_pcm_by_label.get(selected, b"")
     wake = WakeEvent(
@@ -1885,7 +1916,13 @@ def _play_selected_wake_ack(
     output_device = output_devices.get(result.selected_device)
     if output_device is None:
         result.ack_error = f"No output device configured for {result.selected_device}"
-        print(f"ack skipped: {result.ack_error}")
+        log_event(
+            "wake_proximity",
+            "ack_skipped",
+            log_id="wake_proximity.ack_skipped",
+            selected_device=result.selected_device,
+            error=result.ack_error,
+        )
         return
 
     result.ack_output_device = str(output_device)
@@ -1899,10 +1936,26 @@ def _play_selected_wake_ack(
             )
         ).play()
         result.ack_latency_ms = int((time.monotonic() - started) * 1000)
+        log_event(
+            "wake_proximity",
+            "ack_played",
+            log_id="wake_proximity.ack_played",
+            selected_device=result.selected_device,
+            output_device=output_device,
+            latency_ms=result.ack_latency_ms,
+        )
     except Exception as exc:  # pylint: disable=broad-exception-caught
         result.ack_latency_ms = int((time.monotonic() - started) * 1000)
         result.ack_error = str(exc)
-        print(f"ack error: {result.ack_error}")
+        log_event(
+            "wake_proximity",
+            "ack_error",
+            log_id="wake_proximity.ack_error",
+            selected_device=result.selected_device,
+            output_device=output_device,
+            latency_ms=result.ack_latency_ms,
+            error=result.ack_error,
+        )
 
 
 def _run_one_trial(
@@ -1947,13 +2000,18 @@ def _run_one_trial(
             f"重复={repetition}/{args.repetitions}\n"
             "按 Enter 开始..."
         )
-    else:
-        print(
-            f"\n第 {trial_id} 轮 | 自由唤醒 | 监听 {args.listen_seconds:g}s | "
-            f"先安静 {args.baseline_seconds:g}s 后喊唤醒词"
-        )
     started_at = datetime.now().isoformat(timespec="milliseconds")
-    print(f"开始监听 {args.listen_seconds:g}s：先安静 {args.baseline_seconds:g}s，然后喊唤醒词。")
+    log_event(
+        "wake_proximity",
+        "trial_started",
+        log_id="wake_proximity.trial_started",
+        trial_id=trial_id,
+        position=position.name,
+        expected_device=expected,
+        repetition=repetition,
+        listen_seconds=f"{args.listen_seconds:g}",
+        baseline_seconds=f"{args.baseline_seconds:g}",
+    )
     start_event.set()
     deadline = time.monotonic() + args.listen_seconds + 3.0
     for worker in workers:
@@ -2603,6 +2661,50 @@ def _create_run_dir(base_dir: Path) -> Path:
     return run_dir
 
 
+def _configure_wake_proximity_logging(run_dir: Path) -> None:
+    configure_log_files(debug_log_path=run_dir / "debug.log")
+
+
+def _log_run_started(
+    mode: str,
+    run_dir: Path,
+    args,
+    specs: list[DeviceSpec],
+) -> None:
+    log_event(
+        "wake_proximity",
+        "run_started",
+        log_id="wake_proximity.run_started",
+        mode=mode,
+        output_dir=run_dir,
+        labels=[spec.label for spec in specs],
+        model=args.model,
+        threshold=f"{args.threshold:.3f}",
+        sample_rate=args.sample_rate,
+        channels=args.channels,
+    )
+
+
+def _log_run_interrupted(mode: str, completed_trials: int) -> None:
+    log_event(
+        "wake_proximity",
+        "run_interrupted",
+        log_id="wake_proximity.run_interrupted",
+        mode=mode,
+        completed_trials=completed_trials,
+    )
+
+
+def _log_run_stopped(mode: str, completed_trials: int) -> None:
+    log_event(
+        "wake_proximity",
+        "run_stopped",
+        log_id="wake_proximity.run_stopped",
+        mode=mode,
+        completed_trials=completed_trials,
+    )
+
+
 def _write_run_config(
     run_dir: Path,
     args,
@@ -2624,36 +2726,50 @@ def _write_run_config(
 
 
 def _print_trial_result(result: TrialResult) -> None:
-    correctness = ""
-    if result.correct is True:
-        correctness = " ok"
-    elif result.correct is False:
-        correctness = " wrong"
-    print(
-        f"结果: selected={result.selected_device} margin={result.margin:.3f}{correctness} "
-        f"trigger_source={result.trigger_source_device or 'none'} "
-        f"global_window={result.global_wake_window_start_ms}-{result.global_wake_window_end_ms}ms"
+    log_event(
+        "wake_proximity",
+        "trial_completed",
+        log_id="wake_proximity.trial_completed",
+        trial_id=result.trial_id,
+        position=result.position,
+        expected_device=result.expected_device or "unscored",
+        selected_device=result.selected_device,
+        correct=result.correct,
+        margin=f"{result.margin:.3f}",
+        trigger_source=result.trigger_source_device or "none",
+        global_window_start_ms=result.global_wake_window_start_ms,
+        global_window_end_ms=result.global_wake_window_end_ms,
+        ack_output_device=result.ack_output_device or "none",
+        ack_latency_ms=result.ack_latency_ms,
+        ack_error=result.ack_error or "none",
     )
-    if result.ack_output_device or result.ack_error:
-        print(
-            f"  ack: output={result.ack_output_device or 'none'} "
-            f"latency={result.ack_latency_ms}ms "
-            f"error={result.ack_error or 'none'}"
-        )
     if result.assistant_transcript or result.assistant_reply or result.assistant_error:
-        print(
-            f"  assistant: transcript={result.assistant_transcript or '<empty>'} "
-            f"reply={result.assistant_reply or '<empty>'} "
-            f"error={result.assistant_error or 'none'}"
+        log_event(
+            "wake_proximity",
+            "assistant_result",
+            log_id="wake_proximity.assistant_result",
+            trial_id=result.trial_id,
+            selected_device=result.selected_device,
+            transcript=result.assistant_transcript or "<empty>",
+            reply=result.assistant_reply or "<empty>",
+            error=result.assistant_error or "none",
         )
     for label, metrics in result.devices.items():
-        print(
-            f"  {label}: wake_ch={metrics.channel} prox_ch={metrics.proximity_channel} "
-            f"score={metrics.score:.3f} "
-            f"conf={metrics.best_confidence:.3f} "
-            f"band_rms={metrics.band_rms:.1f} band_snr={metrics.band_snr_db:.1f}dB "
-            f"window={metrics.wake_window_start_ms}-{metrics.wake_window_end_ms}ms "
-            f"trigger_ms={metrics.first_trigger_ms}"
+        log_event(
+            "wake_proximity",
+            "device_score",
+            log_id="wake_proximity.device_score",
+            trial_id=result.trial_id,
+            label=label,
+            wake_channel=metrics.channel,
+            proximity_channel=metrics.proximity_channel,
+            score=f"{metrics.score:.3f}",
+            confidence=f"{metrics.best_confidence:.3f}",
+            band_rms=f"{metrics.band_rms:.1f}",
+            band_snr_db=f"{metrics.band_snr_db:.1f}",
+            wake_window_start_ms=metrics.wake_window_start_ms,
+            wake_window_end_ms=metrics.wake_window_end_ms,
+            trigger_ms=metrics.first_trigger_ms,
         )
 
 

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import contextlib
+import io
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
+from voiceui.logs import log_switch_rows, reset_logging
 from voiceui.wake_proximity import (
     DEFAULT_DEVICE_A_OUTPUT,
     DEFAULT_DEVICE_B_OUTPUT,
@@ -16,6 +19,7 @@ from voiceui.wake_proximity import (
     ScoreWeights,
     TrialResult,
     _parse_channel_candidates,
+    _print_trial_result,
     _production_config_for_selected_device,
     append_trial_jsonl,
     apply_global_wake_window,
@@ -277,6 +281,33 @@ class WakeProximityTests(unittest.TestCase):
         self.assertIn("ack_output_device", csv_text)
         self.assertIn("assistant_transcript", csv_text)
         self.assertIn("near_xvf1", csv_text)
+
+    def test_trial_result_uses_structured_log_output(self) -> None:
+        reset_logging()
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            _print_trial_result(
+                _trial(
+                    1,
+                    position="near_xvf1",
+                    expected="xvf1",
+                    selected="xvf1",
+                    correct=True,
+                )
+            )
+        reset_logging()
+
+        text = output.getvalue()
+        self.assertNotIn("结果:", text)
+        self.assertIn("module=wake_proximity | event=trial_completed", text)
+        self.assertIn("module=wake_proximity | event=device_score", text)
+
+    def test_wake_proximity_logs_are_listed_as_switches(self) -> None:
+        ids = {row["id"] for row in log_switch_rows()}
+
+        self.assertIn("wake_proximity.run_started", ids)
+        self.assertIn("wake_proximity.trial_completed", ids)
+        self.assertIn("wake_proximity.device_score", ids)
 
 
 def _metrics(
