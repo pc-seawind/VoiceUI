@@ -200,6 +200,73 @@ class XiaomiMiotTests(unittest.TestCase):
         self.assertEqual(result["device"]["name"], "书房吸顶灯")
         send_ctrl.assert_called_once_with("did-light", "prop.0.2.1", True, verify=True)
 
+    def test_read_device_property_selects_air_quality_property(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            client = XiaomiMiotClient(
+                XiaomiMiotConfig(
+                    token_file=str(Path(temp_dir) / "token.json"),
+                    uuid_file=str(Path(temp_dir) / "uuid"),
+                    cache_dir=str(Path(temp_dir) / "cache"),
+                ),
+                token=XiaomiMiotToken(access_token="access-secret"),
+            )
+        devices = {
+            "did-purifier": {
+                "did": "did-purifier",
+                "name": "Living Room Air Purifier",
+                "room_name": "Living Room",
+                "home_name": "Home",
+                "device_class": "airpurifier",
+                "online": True,
+                "model": "zhimi.airpurifier.test",
+                "urn": "urn:test",
+            }
+        }
+        spec = {
+            "items": {
+                "prop.0.2.1": {
+                    "iid": "prop.0.2.1",
+                    "kind": "property",
+                    "name": "pm2.5-density",
+                    "description": "Air Quality - PM2.5 Density",
+                    "service": "Air Quality",
+                    "format": "uint16",
+                    "readable": True,
+                    "writeable": False,
+                    "unit": "ug/m3",
+                },
+                "prop.0.2.2": {
+                    "iid": "prop.0.2.2",
+                    "kind": "property",
+                    "name": "temperature",
+                    "description": "Temperature",
+                    "service": "Environment",
+                    "format": "float",
+                    "readable": True,
+                    "writeable": False,
+                    "unit": "C",
+                },
+            }
+        }
+
+        with patch.object(client, "get_devices", return_value=devices):
+            with patch.object(client, "get_device_spec", return_value=spec):
+                with patch.object(client, "send_get_rpc") as send_get:
+                    send_get.return_value = {
+                        "did": "did-purifier",
+                        "iid": "prop.0.2.1",
+                        "value": 12,
+                    }
+                    result = client.read_device_property(
+                        request="check home air purifier air quality"
+                    )
+
+        self.assertEqual(result["status"], "property_read")
+        self.assertEqual(result["iid"], "prop.0.2.1")
+        self.assertEqual(result["value"], 12)
+        self.assertIn("Living Room Air Purifier", result["direct_response"])
+        send_get.assert_called_once_with("did-purifier", "prop.0.2.1")
+
     def test_control_device_returns_ambiguous_for_multiple_room_lights(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             client = XiaomiMiotClient(

@@ -76,6 +76,8 @@ _TOOL_USE_INSTRUCTIONS = (
     "search, music playback, stopping music, or Xiaomi Home device state/control, "
     "call the matching tool instead of guessing. For natural Xiaomi Home commands "
     "such as turning a room light on or off, prefer xiaomi_miot_control_device. "
+    "For natural Xiaomi Home state questions, such as checking an air purifier's "
+    "air quality, prefer xiaomi_miot_read_device_property and do not use web_search. "
     "If exactly one low-risk "
     "device matches, execute it without asking a second confirmation; ask only when "
     "the tool reports ambiguity or the target is sensitive. Never say a Xiaomi Home "
@@ -554,6 +556,7 @@ def create_tool_runner(
         definitions.append(create_xiaomi_miot_device_classes_tool(miot))
         definitions.append(create_xiaomi_miot_devices_tool(miot))
         definitions.append(create_xiaomi_miot_device_spec_tool(miot))
+        definitions.append(create_xiaomi_miot_read_device_property_tool(miot))
         definitions.append(create_xiaomi_miot_get_property_tool(miot))
         definitions.append(create_xiaomi_miot_control_tool(miot))
 
@@ -1332,6 +1335,50 @@ def create_xiaomi_miot_get_property_tool(miot: XiaomiMiotController) -> ToolDefi
     )
 
 
+def create_xiaomi_miot_read_device_property_tool(miot: XiaomiMiotController) -> ToolDefinition:
+    return ToolDefinition(
+        name="xiaomi_miot_read_device_property",
+        description=(
+            "Read a Xiaomi Home device property from a natural spoken request. "
+            "Use this for state questions such as checking a room device status, "
+            "an air purifier's displayed air quality, PM2.5, temperature, humidity, "
+            "or power state. It fuzzy matches the device and readable MIoT property."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "request": {
+                    "type": "string",
+                    "description": "Original user request, e.g. 查一下家里净化器的空气质量.",
+                },
+                "area": {
+                    "type": "string",
+                    "description": "Optional room or home name.",
+                },
+                "device": {
+                    "type": "string",
+                    "description": "Optional device name or type.",
+                },
+                "device_class": {
+                    "type": "string",
+                    "description": "Optional device class, e.g. airpurifier, light, sensor.",
+                },
+                "property": {
+                    "type": "string",
+                    "description": "Optional property query, e.g. air quality, pm2.5, power.",
+                },
+                "property_query": {
+                    "type": "string",
+                    "description": "Alias of property.",
+                },
+            },
+            "required": ["request"],
+            "additionalProperties": False,
+        },
+        handler=miot.read_device_property,
+    )
+
+
 def create_xiaomi_miot_control_tool(miot: XiaomiMiotController) -> ToolDefinition:
     return ToolDefinition(
         name="xiaomi_miot_control",
@@ -1418,6 +1465,7 @@ def _last_user_text(messages: list[ChatMessage]) -> str:
 def _select_tool_names_for_text(text: str, available_names: set[str]) -> set[str]:
     normalized = text.lower().replace(" ", "")
     selected: set[str] = set()
+    miot_read_text = _looks_like_miot_read_text(text)
     if any(term in normalized for term in ("天气", "气温", "温度", "下雨", "雨", "weather")):
         selected.add("get_current_weather")
     if any(
@@ -1440,6 +1488,8 @@ def _select_tool_names_for_text(text: str, available_names: set[str]) -> set[str
         )
     ):
         selected.add("web_search")
+    if miot_read_text:
+        selected.discard("web_search")
     if any(term in normalized for term in ("几点", "时间", "现在几点", "time")):
         selected.add("get_current_time")
     if any(term in normalized for term in ("音乐", "歌曲", "播放", "暂停", "歌", "music")):
@@ -1457,6 +1507,14 @@ def _select_tool_names_for_text(text: str, available_names: set[str]) -> set[str
             "传感器",
             "摄像",
             "门锁",
+            "家里",
+            "设备",
+            "状态",
+            "显示",
+            "空气质量",
+            "pm2.5",
+            "pm25",
+            "净化器",
             "打开",
             "关闭",
             "开了",
@@ -1470,11 +1528,55 @@ def _select_tool_names_for_text(text: str, available_names: set[str]) -> set[str
                 "xiaomi_miot_control_device",
                 "xiaomi_miot_get_devices",
                 "xiaomi_miot_get_device_spec",
+                "xiaomi_miot_read_device_property",
                 "xiaomi_miot_get_property",
                 "xiaomi_miot_control",
             }
         )
+    if miot_read_text:
+        selected.update(
+            {
+                "xiaomi_miot_read_device_property",
+                "xiaomi_miot_get_devices",
+                "xiaomi_miot_get_device_spec",
+                "xiaomi_miot_get_property",
+                "xiaomi_miot_get_area_info",
+            }
+        )
     return selected & available_names
+
+
+def _looks_like_miot_read_text(text: str) -> bool:
+    normalized = text.lower().replace(" ", "")
+    if any(term in normalized for term in ("音乐", "歌曲", "播放", "music")):
+        return False
+    if _looks_like_miot_control_text(text):
+        return False
+    if not _has_explicit_miot_device_text(normalized) and not any(
+        term in normalized for term in ("家里", "米家", "设备")
+    ):
+        return False
+    return any(
+        term in normalized
+        for term in (
+            "查一下",
+            "查询",
+            "看一下",
+            "看看",
+            "显示",
+            "状态",
+            "多少",
+            "空气质量",
+            "pm2.5",
+            "pm25",
+            "温度",
+            "湿度",
+            "开着",
+            "关着",
+            "开没开",
+            "关没关",
+        )
+    )
 
 
 def _looks_like_miot_control_text(text: str) -> bool:
@@ -1560,6 +1662,10 @@ def _has_explicit_miot_device_text(normalized: str) -> bool:
             "风扇",
             "净化器",
             "加湿器",
+            "空气净化器",
+            "空气质量",
+            "pm2.5",
+            "pm25",
         )
     )
 
@@ -1613,6 +1719,17 @@ def _format_tool_payload_response(payload: dict[str, Any]) -> str:
         return str(payload.get("message") or "找到多个匹配设备，请再说具体一点。")
     if status in ("not_found", "offline", "unsupported"):
         return str(payload.get("message") or "没有完成设备控制。")
+    if status == "property_read":
+        direct_response = str(payload.get("direct_response") or "").strip()
+        if direct_response:
+            return direct_response
+        device = payload.get("device") if isinstance(payload.get("device"), dict) else {}
+        item = payload.get("property") if isinstance(payload.get("property"), dict) else {}
+        name = str(device.get("name") or "设备")
+        prop = str(item.get("description") or item.get("name") or "状态")
+        value = payload.get("value")
+        unit = str(payload.get("unit") or "")
+        return f"{name}的{prop}是{value}{unit}。"
     if status in ("verified", "ok", "resolved"):
         device = payload.get("device") if isinstance(payload.get("device"), dict) else {}
         name = str(device.get("name") or "")

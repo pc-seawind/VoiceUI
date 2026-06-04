@@ -27,6 +27,8 @@ from voiceui.vad import SpeechStartTimeoutError, create_vad_recorder
 from voiceui.wake import create_wake_detector
 from voiceui.wake_ack import create_wake_ack_player
 
+_TOOL_PROGRESS_PROMPT_DELAY_SECONDS = 1.2
+
 
 class _WakeAckHandle:
     def __init__(
@@ -251,7 +253,7 @@ class VoiceAssistant:
         if self.tool_runner is not None and self.tool_runner.enabled:
             llm_started = time.monotonic()
             try:
-                response = self.tool_runner.complete(self.session.messages)
+                response = self._complete_tools_with_progress_prompt(transcript)
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 timings["llm"] = int((time.monotonic() - llm_started) * 1000)
                 return self._finish_processing_error(exc, timings, mode="tools")
@@ -297,6 +299,82 @@ class VoiceAssistant:
             text=response,
         )
         return AssistantReply(text=response), timings
+
+    def _complete_tools_with_progress_prompt(self, transcript: str) -> str:
+        assert self.tool_runner is not None
+        messages = list(self.session.messages)
+        return self._run_with_progress_prompt(
+            operation=lambda: self.tool_runner.complete(messages),
+            prompt=_tool_progress_prompt_for_text(transcript),
+            label=_tool_progress_label_for_text(transcript),
+        )
+
+    def _run_with_progress_prompt(self, operation, prompt: str, label: str) -> str:
+        completed = threading.Event()
+        result: dict[str, object] = {}
+
+        def worker() -> None:
+            try:
+                result["value"] = operation()
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                result["error"] = exc
+            finally:
+                completed.set()
+
+        worker_thread = threading.Thread(
+            target=worker,
+            name=f"voiceui-tool-{label}",
+            daemon=True,
+        )
+        worker_thread.start()
+
+        prompt_stop_event = threading.Event()
+        prompt_thread: threading.Thread | None = None
+        try:
+            if not completed.wait(_TOOL_PROGRESS_PROMPT_DELAY_SECONDS):
+                log_event(
+                    "tools",
+                    "progress_prompt",
+                    log_id="tools.progress_prompt",
+                    label=label,
+                    prompt=prompt,
+                )
+                prompt_thread = threading.Thread(
+                    target=self._speak_progress_prompt,
+                    args=(prompt, prompt_stop_event, label),
+                    name=f"voiceui-tool-progress-{label}",
+                    daemon=True,
+                )
+                prompt_thread.start()
+                completed.wait()
+        finally:
+            prompt_stop_event.set()
+            if prompt_thread is not None:
+                prompt_thread.join(timeout=1.5)
+            worker_thread.join(timeout=0.1)
+
+        error = result.get("error")
+        if isinstance(error, Exception):
+            raise error
+        return str(result.get("value") or "")
+
+    def _speak_progress_prompt(
+        self,
+        prompt: str,
+        stop_event: threading.Event,
+        label: str,
+    ) -> None:
+        try:
+            self._speak_plain(prompt, stop_event=stop_event)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            log_event(
+                "tools",
+                "progress_prompt",
+                log_id="tools.progress_prompt",
+                label=label,
+                ok=False,
+                error=exc,
+            )
 
     def _finish_generated_response(
         self,
@@ -1442,6 +1520,44 @@ def _format_weather_error_response(exc: Exception) -> str:
 def _format_processing_error_response(exc: Exception) -> str:
     del exc
     return "刚才处理失败了，请再说一遍。"
+
+
+def _tool_progress_label_for_text(text: str) -> str:
+    normalized = text.lower().replace(" ", "")
+    if any(
+        term in normalized
+        for term in (
+            "\u641c\u7d22",
+            "\u767e\u5ea6",
+            "tavily",
+            "websearch",
+            "\u65b0\u95fb",
+            "\u6700\u65b0",
+        )
+    ):
+        return "search"
+    if any(
+        term in normalized
+        for term in (
+            "\u7c73\u5bb6",
+            "\u5bb6\u91cc",
+            "\u51c0\u5316\u5668",
+            "\u7a7a\u6c14\u51c0\u5316\u5668",
+            "\u8bbe\u5907",
+            "\u663e\u793a",
+        )
+    ):
+        return "device"
+    return "tool"
+
+
+def _tool_progress_prompt_for_text(text: str) -> str:
+    label = _tool_progress_label_for_text(text)
+    if label == "search":
+        return "\u6b63\u5728\u641c\u7d22\uff0c\u8bf7\u7a0d\u7b49\u3002"
+    if label == "device":
+        return "\u6b63\u5728\u67e5\u8be2\u8bbe\u5907\u72b6\u6001\uff0c\u8bf7\u7a0d\u7b49\u3002"
+    return "\u6b63\u5728\u5904\u7406\uff0c\u8bf7\u7a0d\u7b49\u3002"
 
 
 def _clean_weather_location_candidate(text: str) -> str:

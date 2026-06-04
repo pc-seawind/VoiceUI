@@ -261,6 +261,19 @@ class FailingToolRunner:
         raise RuntimeError("tool runner unavailable")
 
 
+class SlowToolRunner:
+    enabled = True
+
+    def __init__(self, delay: float = 0.05):
+        self.delay = delay
+        self.calls: list[list[ChatMessage]] = []
+
+    def complete(self, messages: list[ChatMessage]) -> str:
+        self.calls.append(list(messages))
+        time.sleep(self.delay)
+        return "tool reply"
+
+
 class BargeFirstTts(FakeTts):
     def speak(self, text: str, stop_event: threading.Event | None = None) -> None:
         self.spoken.append(text)
@@ -563,6 +576,28 @@ class CoreTests(unittest.TestCase):
             [message.content for message in assistant.session.messages],
             ["system", "time", reply.text],
         )
+
+    def test_text_turn_speaks_progress_prompt_when_tool_runner_is_slow(self) -> None:
+        config = AssistantConfig(
+            input=InputConfig(mode="text"),
+            llm=LlmConfig(system_prompt="system"),
+            tools=ToolsConfig(enabled=True, allow_weather=False),
+        )
+        with patch("voiceui.core.warm_weather_cache"):
+            assistant = VoiceAssistant(config)
+        tts = FakeTts()
+        tool_runner = SlowToolRunner()
+        assistant.tts = tts
+        assistant.tool_runner = tool_runner
+
+        with patch("voiceui.core._TOOL_PROGRESS_PROMPT_DELAY_SECONDS", 0.01):
+            with contextlib.redirect_stdout(io.StringIO()):
+                reply = assistant.run_text_turn("帮我搜索一下新闻")
+
+        self.assertEqual(reply.text, "tool reply")
+        self.assertEqual(tts.spoken[0], "正在搜索，请稍等。")
+        self.assertEqual(tts.spoken[-1], "tool reply")
+        self.assertEqual(len(tool_runner.calls), 1)
 
     def test_text_turn_reports_tool_runner_error_without_raising(self) -> None:
         config = AssistantConfig(

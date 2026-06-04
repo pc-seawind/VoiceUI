@@ -61,6 +61,7 @@ LOG_SPECS: tuple[LogSpec, ...] = (
     LogSpec("stt.transcribe_audio", "event", "stt", "transcribe_audio", False),
     LogSpec("tool.executed", "event", "tool", "executed"),
     LogSpec("tools.llm_round", "event", "tools", "llm_round"),
+    LogSpec("tools.progress_prompt", "event", "tools", "progress_prompt"),
     LogSpec("tts.completed", "event", "tts", "completed"),
     LogSpec("tts.converted", "event", "tts", "converted"),
     LogSpec("tts.first_text_segment", "event", "tts", "first_text_segment", False),

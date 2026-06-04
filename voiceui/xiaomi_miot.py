@@ -320,6 +320,76 @@ class XiaomiMiotClient:
             "item": control["item"],
         }
 
+    def read_device_property(
+        self,
+        *,
+        request: str = "",
+        area: str = "",
+        device: str = "",
+        device_class: str = "",
+        property_query: str = "",
+    ) -> dict[str, Any]:
+        devices = list(self.get_devices().values())
+        command = _miot_read_command_from_arguments(
+            devices=devices,
+            request=request,
+            area=area,
+            device=device,
+            device_class=device_class,
+            property_query=property_query,
+        )
+        matches = _resolve_device_matches(devices, command)
+        if not matches and command.get("device_class") and command.get("device"):
+            relaxed_command = {**command, "device_class": ""}
+            matches = _resolve_device_matches(devices, relaxed_command)
+        if not matches:
+            return {
+                "status": "not_found",
+                "message": "没有找到匹配的米家设备。",
+                "query": command,
+            }
+
+        best_score = matches[0][0]
+        best_matches = [match for match in matches if best_score - match[0] <= 4]
+        if len(best_matches) > 1:
+            return {
+                "status": "ambiguous",
+                "message": "找到多个匹配的米家设备，需要用户指定其中一个。",
+                "candidates": [_public_device(match[1]) for match in best_matches[:5]],
+                "query": command,
+            }
+
+        target_device = dict(best_matches[0][1])
+        if not target_device.get("online", True):
+            return {
+                "status": "offline",
+                "message": f"{target_device.get('name') or '设备'} 当前离线，无法读取。",
+                "device": _public_device(target_device),
+            }
+
+        spec = self.get_device_spec(str(target_device["did"]))
+        item = _select_read_property(spec, command)
+        if item is None:
+            return {
+                "status": "unsupported",
+                "message": "匹配到了设备，但没有找到适合读取的 MIoT 属性。",
+                "device": _public_device(target_device),
+                "query": command,
+            }
+
+        readback = self.send_get_rpc(str(target_device["did"]), str(item["iid"]))
+        value = readback.get("value")
+        return {
+            "status": "property_read",
+            "device": _public_device(target_device),
+            "iid": item["iid"],
+            "property": item,
+            "value": value,
+            "unit": item.get("unit"),
+            "readback": readback,
+            "direct_response": _format_property_read_response(target_device, item, value),
+        }
+
     def send_get_rpc(self, did: str, iid: str) -> dict[str, Any]:
         cmd, siid, piid_or_aiid = split_miot_iid(iid)
         if cmd != "prop":
@@ -766,6 +836,15 @@ class XiaomiMiotController:
             iid=_required_text(arguments, "iid"),
         )
 
+    def read_device_property(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        return self._get_client().read_device_property(
+            request=str(arguments.get("request") or ""),
+            area=str(arguments.get("area") or ""),
+            device=str(arguments.get("device") or ""),
+            device_class=str(arguments.get("device_class") or ""),
+            property_query=str(arguments.get("property") or arguments.get("property_query") or ""),
+        )
+
     def control_device(self, arguments: dict[str, Any]) -> dict[str, Any]:
         return self._get_client().control_device(
             request=str(arguments.get("request") or ""),
@@ -993,6 +1072,13 @@ _DEVICE_CLASS_ALIASES: dict[str, tuple[str, ...]] = {
     "curtain": ("curtain", "窗帘", "帘"),
     "aircondition": ("aircondition", "air-conditioner", "空调"),
     "airfresh": ("airfresh", "新风"),
+    "airpurifier": (
+        "airpurifier",
+        "air-purifier",
+        "purifier",
+        "\u7a7a\u6c14\u51c0\u5316\u5668",
+        "\u51c0\u5316\u5668",
+    ),
     "humidifier": ("humidifier", "加湿器"),
     "fan": ("fan", "风扇"),
     "wifispeaker": ("wifispeaker", "音箱", "小爱", "speaker"),
@@ -1029,6 +1115,30 @@ def _miot_command_from_arguments(
         command["area"] = _infer_area(devices, request_text)
     if not command["device"] and request_text:
         command["device"] = _infer_device_query(request_text, command["area"], command["action"])
+    return command
+
+
+def _miot_read_command_from_arguments(
+    *,
+    devices: list[dict[str, Any]],
+    request: str,
+    area: str,
+    device: str,
+    device_class: str,
+    property_query: str,
+) -> dict[str, Any]:
+    request_text = str(request or "")
+    command = {
+        "request": request_text,
+        "area": str(area or "").strip(),
+        "device": str(device or "").strip(),
+        "device_class": _infer_device_class(device_class, device, request_text),
+        "property": str(property_query or "").strip() or _infer_property_query(request_text),
+    }
+    if not command["area"] and request_text:
+        command["area"] = _infer_area(devices, request_text)
+    if not command["device"] and request_text:
+        command["device"] = _infer_device_query(request_text, command["area"], "")
     return command
 
 
@@ -1107,6 +1217,70 @@ def _select_control_item(
     if selected_action is not None:
         return selected_action
     return None
+
+
+def _select_read_property(
+    spec: dict[str, Any],
+    command: dict[str, Any],
+) -> dict[str, Any] | None:
+    items = spec.get("items") if isinstance(spec, dict) else None
+    if not isinstance(items, dict):
+        return None
+
+    query = str(command.get("property") or command.get("request") or "")
+    query_norm = _normalize_text(query)
+    aliases = _property_aliases_for_query(query_norm)
+    candidates: list[tuple[int, dict[str, Any]]] = []
+    for item in items.values():
+        if not isinstance(item, dict):
+            continue
+        if item.get("kind") != "property" or not item.get("readable"):
+            continue
+
+        item_text = " ".join(
+            str(item.get(key) or "")
+            for key in ("name", "description", "service", "unit")
+        )
+        item_norm = _normalize_text(item_text)
+        score = max(
+            _text_match_score(query, str(item.get("name") or "")),
+            _text_match_score(query, str(item.get("description") or "")),
+            _text_match_score(query, str(item.get("service") or "")),
+        )
+        for alias in aliases:
+            alias_norm = _normalize_text(alias)
+            if alias_norm and alias_norm in item_norm:
+                score += 90
+
+        if _looks_like_air_quality_query(query_norm):
+            if any(
+                token in item_norm
+                for token in (
+                    "airquality",
+                    "aqi",
+                    "pm25",
+                    "pm2.5",
+                    "pm2p5",
+                    "density",
+                    "particulate",
+                    "particle",
+                    "空气",
+                    "质量",
+                    "颗粒",
+                )
+            ):
+                score += 120
+            if "temperature" in item_norm or "温度" in item_norm:
+                score -= 40
+            if "humidity" in item_norm or "湿度" in item_norm:
+                score -= 40
+
+        if score > 0:
+            candidates.append((score, item))
+
+    if not candidates:
+        return None
+    return sorted(candidates, key=lambda candidate: candidate[0], reverse=True)[0][1]
 
 
 def _select_bool_property(items: dict[str, Any]) -> dict[str, Any] | None:
@@ -1193,9 +1367,109 @@ def _infer_device_query(request: str, area: str, action: str) -> str:
     for value in (area, *_TURN_ON_WORDS, *_TURN_OFF_WORDS):
         if value:
             text = text.replace(str(value), "")
-    for filler in ("帮我", "请", "把", "给我", "一下", "的", "设备", "米家"):
+    for filler in (
+        "帮我",
+        "请",
+        "把",
+        "给我",
+        "一下",
+        "的",
+        "设备",
+        "米家",
+        "查一下",
+        "查询",
+        "看一下",
+        "看看",
+        "我们",
+        "家里",
+        "家中",
+        "家里的",
+        "家中的",
+        "显示的",
+        "显示",
+        "状态",
+        "空气质量",
+        "空气",
+        "质量",
+    ):
         text = text.replace(filler, "")
     return text.strip()
+
+
+def _infer_property_query(request: str) -> str:
+    request_norm = _normalize_text(request)
+    if _looks_like_air_quality_query(request_norm):
+        return "air quality pm2.5 aqi"
+    if "温度" in request_norm or "temperature" in request_norm:
+        return "temperature"
+    if "湿度" in request_norm or "humidity" in request_norm:
+        return "humidity"
+    if any(term in request_norm for term in ("开关", "开着", "关着", "power", "switch", "on")):
+        return "power on switch"
+    return request
+
+
+def _property_aliases_for_query(query_norm: str) -> tuple[str, ...]:
+    if _looks_like_air_quality_query(query_norm):
+        return (
+            "air quality",
+            "air-quality",
+            "aqi",
+            "pm2.5",
+            "pm25",
+            "pm2p5",
+            "pm10",
+            "density",
+            "particulate matter",
+            "空气质量",
+            "空气",
+            "颗粒物",
+        )
+    if "温度" in query_norm or "temperature" in query_norm:
+        return ("temperature", "温度")
+    if "湿度" in query_norm or "humidity" in query_norm:
+        return ("humidity", "湿度")
+    if any(term in query_norm for term in ("开关", "开着", "关着", "power", "switch", "on")):
+        return ("power", "switch", "on", "开关")
+    return ()
+
+
+def _looks_like_air_quality_query(query_norm: str) -> bool:
+    return any(
+        term in query_norm
+        for term in (
+            "空气质量",
+            "空气",
+            "质量",
+            "aqi",
+            "pm2.5",
+            "pm25",
+            "pm2p5",
+            "颗粒物",
+            "particulate",
+            "airquality",
+        )
+    )
+
+
+def _format_property_read_response(
+    device: dict[str, Any],
+    item: dict[str, Any],
+    value: Any,
+) -> str:
+    name = str(device.get("name") or "设备")
+    description = str(item.get("description") or item.get("name") or "状态")
+    unit = str(item.get("unit") or "")
+    value_text = _format_property_value(value)
+    if unit and unit not in value_text:
+        value_text = f"{value_text}{unit}"
+    return f"{name}的{description}是{value_text}。"
+
+
+def _format_property_value(value: Any) -> str:
+    if isinstance(value, bool):
+        return "开" if value else "关"
+    return str(value)
 
 
 def _infer_action(action: str, request: str, value: Any) -> str:

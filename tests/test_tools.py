@@ -533,10 +533,29 @@ class ToolsTests(unittest.TestCase):
                 "xiaomi_miot_get_device_classes",
                 "xiaomi_miot_get_devices",
                 "xiaomi_miot_get_device_spec",
+                "xiaomi_miot_read_device_property",
                 "xiaomi_miot_get_property",
                 "xiaomi_miot_control",
             ],
         )
+
+    def test_tool_selection_routes_home_air_quality_to_miot_not_search(self) -> None:
+        available_names = {
+            "web_search",
+            "xiaomi_miot_read_device_property",
+            "xiaomi_miot_get_devices",
+            "xiaomi_miot_get_device_spec",
+            "xiaomi_miot_get_property",
+        }
+
+        selected = tools_module._select_tool_names_for_text(
+            "查一下我们家里的空气净化器显示的空气质量",
+            available_names,
+        )
+
+        self.assertNotIn("web_search", selected)
+        self.assertIn("xiaomi_miot_read_device_property", selected)
+        self.assertIn("xiaomi_miot_get_devices", selected)
 
     def test_tool_runner_registers_web_search_when_enabled(self) -> None:
         config = AssistantConfig(
