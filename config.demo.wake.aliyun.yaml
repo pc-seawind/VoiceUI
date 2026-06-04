@@ -57,14 +57,14 @@ llm:
   endpoint: https://dashscope.aliyuncs.com/compatible-mode/v1
   api_key_env: BAILIAN_API_KEY
   model: qwen3.6-flash
-  temperature: 0.3
+  temperature: 0.5
   stream: true
   extra_body:
     enable_thinking: false
   system_prompt: >
     You are a concise Chinese smart speaker assistant. Reply in short spoken
     Chinese. Do not include English words unless the user explicitly asks.
-    For routine Xiaomi Home light, switch, and curtain commands, execute directly
+    For routine Xiaomi HomeKit commands, execute directly
     when exactly one device matches. Ask for confirmation only when the target is
     ambiguous or the action is sensitive, such as locks or cooking appliances.
 
@@ -140,7 +140,7 @@ tts:
   limiter_threshold: 0.92
 
 conversation:
-  follow_up_seconds: 10
+  follow_up_seconds: 8
   max_turns: 12
   barge_in_enabled: true
 
