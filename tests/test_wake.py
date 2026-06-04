@@ -1,22 +1,29 @@
 from __future__ import annotations
 
+import contextlib
+import io
+import time
 import unittest
 
-from voiceui.models import WakeConfig
+from voiceui.logs import configure_logging, reset_logging
+from voiceui.models import LoggingConfig, WakeConfig
 from voiceui.wake import (
     DisabledWakeDetector,
     ManualWakeDetector,
     OpenWakeWordDetector,
-    _PcmRingBuffer,
     _best_prediction,
     _format_predictions,
     _normalize_openwakeword_label,
+    _PcmRingBuffer,
     _resolve_openwakeword_models,
     create_wake_detector,
 )
 
 
 class WakeTests(unittest.TestCase):
+    def tearDown(self) -> None:
+        reset_logging()
+
     def test_create_manual_wake_detector(self) -> None:
         detector = create_wake_detector(WakeConfig(engine="manual"))
 
@@ -31,6 +38,112 @@ class WakeTests(unittest.TestCase):
         detector = create_wake_detector(WakeConfig(engine="openwakeword"))
 
         self.assertIsInstance(detector, OpenWakeWordDetector)
+
+    def test_openwakeword_resets_model_state_before_wait(self) -> None:
+        class FakeAudio:
+            sample_rate = 16000
+
+            def chunks(self):
+                yield b"\x00\x00" * 1280
+
+        class FakeModel:
+            def __init__(self):
+                self.reset_calls = 0
+                self.predict_calls = 0
+
+            def reset(self):
+                self.reset_calls += 1
+
+            def predict(self, _samples):
+                self.predict_calls += 1
+                return {"alexa": 0.9}
+
+        detector = OpenWakeWordDetector(WakeConfig(engine="openwakeword", threshold=0.5))
+        fake_model = FakeModel()
+        detector._model = fake_model
+
+        event = detector.wait(FakeAudio())
+
+        self.assertEqual(event.label, "alexa")
+        self.assertEqual(fake_model.reset_calls, 1)
+        self.assertEqual(fake_model.predict_calls, 1)
+
+    def test_wake_debug_does_not_print_score_without_continuous_switch(self) -> None:
+        class FakeAudio:
+            sample_rate = 16000
+            block_ms = 80
+
+            def chunks(self):
+                yield b"\x00\x00" * 1280
+                time.sleep(0.12)
+                yield b"\x00\x00" * 1280
+
+        class FakeModel:
+            def __init__(self):
+                self.predict_calls = 0
+
+            def reset(self):
+                return None
+
+            def predict(self, _samples):
+                self.predict_calls += 1
+                return {"alexa": 0.0 if self.predict_calls == 1 else 0.9}
+
+        configure_logging(LoggingConfig())
+        detector = OpenWakeWordDetector(
+            WakeConfig(
+                engine="openwakeword",
+                threshold=0.5,
+                debug=True,
+                debug_interval_seconds=0.01,
+            )
+        )
+        detector._model = FakeModel()
+
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            detector.wait(FakeAudio())
+
+        self.assertIn("module=wake | event=debug_enabled", output.getvalue())
+        self.assertNotIn("module=wake | event=score", output.getvalue())
+
+    def test_wake_score_prints_when_continuous_switch_is_enabled(self) -> None:
+        class FakeAudio:
+            sample_rate = 16000
+            block_ms = 80
+
+            def chunks(self):
+                yield b"\x00\x00" * 1280
+                time.sleep(0.12)
+                yield b"\x00\x00" * 1280
+
+        class FakeModel:
+            def __init__(self):
+                self.predict_calls = 0
+
+            def reset(self):
+                return None
+
+            def predict(self, _samples):
+                self.predict_calls += 1
+                return {"alexa": 0.0 if self.predict_calls == 1 else 0.9}
+
+        configure_logging(LoggingConfig(continuous={"wake.score": True}))
+        detector = OpenWakeWordDetector(
+            WakeConfig(
+                engine="openwakeword",
+                threshold=0.5,
+                debug=True,
+                debug_interval_seconds=0.01,
+            )
+        )
+        detector._model = FakeModel()
+
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            detector.wait(FakeAudio())
+
+        self.assertIn("module=wake | event=score", output.getvalue())
 
     def test_best_prediction_casts_confidence_to_float(self) -> None:
         label, confidence = _best_prediction({"hey_jarvis": 0.2, "alexa": 0.7})

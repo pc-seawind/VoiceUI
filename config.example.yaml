@@ -9,8 +9,8 @@ audio:
   sample_rate: 16000
   channels: 2
   block_ms: 80
-  device: 24
-  wake_stream_channel: 1
+  device: "回音消除话筒 (reSpeaker XVF3800 4-Mic Array), Windows WASAPI (2 in, 0 out)"
+  wake_stream_channel: 0
   command_stream_channel: 0
   input_gain_db: 0.0
 
@@ -24,7 +24,7 @@ wake:
 wake_ack:
   enabled: true
   wav_path: default
-  playback_device: 22
+  playback_device: "回音消除话筒 (reSpeaker XVF3800 4-Mic Array), Windows WASAPI (0 in, 2 out)"
 
 vad:
   engine: silero
@@ -65,7 +65,9 @@ tts:
   playback_channels: 2
   piper_url: http://localhost:5000
   piper_model: models/voice.onnx
-  playback_device: 22
+  playback_device: "回音消除话筒 (reSpeaker XVF3800 4-Mic Array), Windows WASAPI (0 in, 2 out)"
+  limiter_enabled: true
+  limiter_threshold: 0.92
 
 conversation:
   follow_up_seconds: 10
@@ -76,3 +78,79 @@ home_assistant:
   url: http://homeassistant.local:8123
   token_env: HA_TOKEN
   default_area: living_room
+
+tools:
+  enabled: false
+  max_iterations: 4
+  allow_time: true
+  allow_weather: true
+  default_weather_location: ""
+  allow_volume: false
+  allow_music: false
+  allow_miot: false
+  allow_search: false
+
+music:
+  provider: disabled
+  endpoint: https://meting.mikus.ink/api
+  server: netease
+  playback_volume: 1.0
+  ducking_volume_factor: 0.2
+  limiter_enabled: true
+  limiter_threshold: 0.92
+
+search:
+  provider: auto
+  tavily_endpoint: https://api.tavily.com/search
+  tavily_api_key_env: TAVILY_API_KEY
+  tavily_search_depth: basic
+  tavily_topic: general
+  baidu_ai_enabled: true
+  baidu_ai_endpoint: https://qianfan.baidubce.com/v2/ai_search/chat/completions
+  baidu_ai_api_key_env: QIANFAN_API_KEY
+  baidu_ai_model: deepseek-v3
+  baidu_ai_search_mode: required
+  baidu_ai_deep_search: false
+  baidu_ai_fallback_to_html: true
+  baidu_endpoint: https://www.baidu.com/baidu
+  timeout_seconds: 15
+  max_results: 5
+
+xiaomi_miot:
+  enabled: false
+  cloud_server: cn
+  token_file: .voiceui/miot_token.json
+  cache_dir: .voiceui/miot_cache
+  fetch_share_home: false
+  auto_refresh: true
+  control_verify: true
+  control_verify_delay_seconds: 0.8
+
+debug:
+  enabled: false
+  output_dir: debug_sessions
+  save_audio: true
+  save_metadata: true
+  system_input_dump_enabled: true
+  system_input_dump_segment_seconds: 30
+  voice_path_dump_enabled: true
+
+logging:
+  enabled: true
+  # Event logs are one-off state changes or completed operations. Most are on by default.
+  events:
+    # Set any log ID from `python -m voiceui --list-log-switches` to false to silence it.
+    audio.stream_opened: false
+    audio.first_chunk: false
+    vad.debug_start: false
+    vad.debug_stop: false
+    stt.streaming_config: false
+    stt.transcribe_audio: false
+    tts.first_text_segment: false
+    tts.stream_started: false
+    tts.first_text_sent: false
+  # Continuous logs can repeat during a loop or playback and are off unless explicitly enabled.
+  continuous:
+    wake.score: false
+    tts.limiter: false
+    music.limiter: false

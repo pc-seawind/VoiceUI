@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import array
 import base64
 import io
 import json
@@ -16,8 +17,10 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 
 from voiceui.aliyun import get_aliyun_nls_token
-from voiceui.audio import write_pcm16_wav
+from voiceui.audio import resolve_sounddevice_device, write_pcm16_wav
+from voiceui.audio_dump import current_audio_dump_manager
 from voiceui.http_utils import post_json, require_api_key
+from voiceui.logs import log_continuous, log_event
 from voiceui.models import TtsConfig
 from voiceui.wake_ack import (
     _convert_pcm16_channels,
@@ -46,7 +49,7 @@ class TextToSpeech:
 
 class ConsoleTextToSpeech(TextToSpeech):
     def speak(self, text: str, stop_event: threading.Event | None = None) -> None:
-        _print_assistant(text)
+        return
 
     def speak_text_stream(
         self,
@@ -54,20 +57,13 @@ class ConsoleTextToSpeech(TextToSpeech):
         stop_event: threading.Event | None = None,
     ) -> str:
         full_text_parts: list[str] = []
-        printed = False
-        for chunk in _track_text_chunks(text_chunks, full_text_parts, stop_event):
-            if not printed:
-                _safe_stdout_write("assistant> ", flush=True)
-                printed = True
-            _safe_stdout_write(chunk, flush=True)
-        if printed:
-            _safe_stdout_write("\n")
+        for _ in _track_text_chunks(text_chunks, full_text_parts, stop_event):
+            pass
         return "".join(full_text_parts).strip()
 
 
 class SystemTextToSpeech(TextToSpeech):
     def speak(self, text: str, stop_event: threading.Event | None = None) -> None:
-        _print_assistant(text)
         if _stop_requested(stop_event):
             return
         if sys.platform == "win32":
@@ -101,14 +97,19 @@ class MimoTextToSpeech(TextToSpeech):
         self.config = config
 
     def speak(self, text: str, stop_event: threading.Event | None = None) -> None:
-        _print_assistant(text)
         if self.config.stream:
             self.speak_streaming(text, stop_event=stop_event)
             return
 
         synth_started = time.monotonic()
         audio_data = self.synthesize(text)
-        print(f"tts> synth_latency_ms={int((time.monotonic() - synth_started) * 1000)}")
+        log_event(
+            "tts",
+            "synthesis_completed",
+            log_id="tts.synthesis_completed",
+            provider=self.config.provider,
+            latency_ms=int((time.monotonic() - synth_started) * 1000),
+        )
         playback_started = time.monotonic()
         _play_audio_bytes(
             audio_data.data,
@@ -117,11 +118,19 @@ class MimoTextToSpeech(TextToSpeech):
             device=self.config.playback_device,
             playback_sample_rate=self.config.playback_sample_rate,
             playback_channels=self.config.playback_channels,
+            limiter_enabled=self.config.limiter_enabled,
+            limiter_threshold=self.config.limiter_threshold,
             stop_event=stop_event,
         )
-        print(f"tts> playback_latency_ms={int((time.monotonic() - playback_started) * 1000)}")
+        log_event(
+            "tts",
+            "playback_completed",
+            log_id="tts.playback_completed",
+            provider=self.config.provider,
+            latency_ms=int((time.monotonic() - playback_started) * 1000),
+        )
 
-    def synthesize(self, text: str) -> "SynthesizedAudio":
+    def synthesize(self, text: str) -> SynthesizedAudio:
         headers = self._headers()
         data = _post_json(
             _chat_completions_url(self.config.endpoint),
@@ -174,15 +183,20 @@ class MimoTextToSpeech(TextToSpeech):
             device=self.config.playback_device,
             playback_sample_rate=self.config.playback_sample_rate,
             playback_channels=self.config.playback_channels,
+            limiter_enabled=self.config.limiter_enabled,
+            limiter_threshold=self.config.limiter_threshold,
             stop_event=stop_event,
         )
         if written_chunks == 0 and not _stop_requested(stop_event):
             raise RuntimeError("Streaming TTS response did not contain audio chunks.")
-        print(
-            "tts> stream_first_audio_ms="
-            f"{first_audio_ms if first_audio_ms is not None else 0} "
-            f"stream_chunks={chunks} "
-            f"playback_latency_ms={int((time.monotonic() - playback_started) * 1000)}"
+        log_event(
+            "tts",
+            "stream_completed",
+            log_id="tts.stream_completed",
+            provider=self.config.provider,
+            first_audio_ms=first_audio_ms if first_audio_ms is not None else 0,
+            stream_chunks=chunks,
+            playback_latency_ms=int((time.monotonic() - playback_started) * 1000),
         )
 
     def _headers(self) -> dict[str, str]:
@@ -216,7 +230,6 @@ class OpenAISpeechTextToSpeech(TextToSpeech):
         self.config = config
 
     def speak(self, text: str, stop_event: threading.Event | None = None) -> None:
-        _print_assistant(text)
         if self.config.stream:
             self.speak_streaming(text, stop_event=stop_event)
             return
@@ -230,7 +243,13 @@ class OpenAISpeechTextToSpeech(TextToSpeech):
             timeout=self.config.timeout_seconds,
             error_prefix="OpenAI-compatible TTS request failed",
         )
-        print(f"tts> synth_latency_ms={int((time.monotonic() - request_started) * 1000)}")
+        log_event(
+            "tts",
+            "synthesis_completed",
+            log_id="tts.synthesis_completed",
+            provider=self.config.provider,
+            latency_ms=int((time.monotonic() - request_started) * 1000),
+        )
         playback_started = time.monotonic()
         _play_audio_bytes(
             audio_data,
@@ -239,9 +258,17 @@ class OpenAISpeechTextToSpeech(TextToSpeech):
             device=self.config.playback_device,
             playback_sample_rate=self.config.playback_sample_rate,
             playback_channels=self.config.playback_channels,
+            limiter_enabled=self.config.limiter_enabled,
+            limiter_threshold=self.config.limiter_threshold,
             stop_event=stop_event,
         )
-        print(f"tts> playback_latency_ms={int((time.monotonic() - playback_started) * 1000)}")
+        log_event(
+            "tts",
+            "playback_completed",
+            log_id="tts.playback_completed",
+            provider=self.config.provider,
+            latency_ms=int((time.monotonic() - playback_started) * 1000),
+        )
 
     def speak_streaming(
         self,
@@ -284,15 +311,20 @@ class OpenAISpeechTextToSpeech(TextToSpeech):
             device=self.config.playback_device,
             playback_sample_rate=self.config.playback_sample_rate,
             playback_channels=self.config.playback_channels,
+            limiter_enabled=self.config.limiter_enabled,
+            limiter_threshold=self.config.limiter_threshold,
             stop_event=stop_event,
         )
         if written_chunks == 0 and not _stop_requested(stop_event):
             raise RuntimeError("Streaming TTS response did not contain audio chunks.")
-        print(
-            "tts> stream_first_audio_ms="
-            f"{first_audio_ms if first_audio_ms is not None else 0} "
-            f"stream_chunks={chunks} "
-            f"playback_latency_ms={int((time.monotonic() - playback_started) * 1000)}"
+        log_event(
+            "tts",
+            "stream_completed",
+            log_id="tts.stream_completed",
+            provider=self.config.provider,
+            first_audio_ms=first_audio_ms if first_audio_ms is not None else 0,
+            stream_chunks=chunks,
+            playback_latency_ms=int((time.monotonic() - playback_started) * 1000),
         )
 
     def _headers(self) -> dict[str, str]:
@@ -317,14 +349,19 @@ class AliyunNlsTextToSpeech(TextToSpeech):
         self._token: str | None = None
 
     def speak(self, text: str, stop_event: threading.Event | None = None) -> None:
-        _print_assistant(text)
         if self.config.stream:
             self.speak_streaming(text, stop_event=stop_event)
             return
 
         request_started = time.monotonic()
         audio_data = self.synthesize(text)
-        print(f"tts> synth_latency_ms={int((time.monotonic() - request_started) * 1000)}")
+        log_event(
+            "tts",
+            "synthesis_completed",
+            log_id="tts.synthesis_completed",
+            provider=self.config.provider,
+            latency_ms=int((time.monotonic() - request_started) * 1000),
+        )
         playback_started = time.monotonic()
         _play_audio_bytes(
             audio_data.data,
@@ -333,9 +370,17 @@ class AliyunNlsTextToSpeech(TextToSpeech):
             device=self.config.playback_device,
             playback_sample_rate=self.config.playback_sample_rate,
             playback_channels=self.config.playback_channels,
+            limiter_enabled=self.config.limiter_enabled,
+            limiter_threshold=self.config.limiter_threshold,
             stop_event=stop_event,
         )
-        print(f"tts> playback_latency_ms={int((time.monotonic() - playback_started) * 1000)}")
+        log_event(
+            "tts",
+            "playback_completed",
+            log_id="tts.playback_completed",
+            provider=self.config.provider,
+            latency_ms=int((time.monotonic() - playback_started) * 1000),
+        )
 
     def synthesize(self, text: str) -> SynthesizedAudio:
         chunks = list(
@@ -347,7 +392,10 @@ class AliyunNlsTextToSpeech(TextToSpeech):
         )
         if not chunks:
             raise RuntimeError("Aliyun NLS TTS response did not contain audio data.")
-        return SynthesizedAudio(b"".join(chunks), _aliyun_tts_audio_format(self.config.audio_format))
+        return SynthesizedAudio(
+            b"".join(chunks),
+            _aliyun_tts_audio_format(self.config.audio_format),
+        )
 
     def speak_streaming(
         self,
@@ -380,15 +428,20 @@ class AliyunNlsTextToSpeech(TextToSpeech):
             device=self.config.playback_device,
             playback_sample_rate=self.config.playback_sample_rate,
             playback_channels=self.config.playback_channels,
+            limiter_enabled=self.config.limiter_enabled,
+            limiter_threshold=self.config.limiter_threshold,
             stop_event=stop_event,
         )
         if written_chunks == 0 and not _stop_requested(stop_event):
             raise RuntimeError("Aliyun NLS streaming TTS response did not contain audio chunks.")
-        print(
-            "tts> stream_first_audio_ms="
-            f"{first_audio_ms if first_audio_ms is not None else 0} "
-            f"stream_chunks={chunks} "
-            f"playback_latency_ms={int((time.monotonic() - playback_started) * 1000)}"
+        log_event(
+            "tts",
+            "stream_completed",
+            log_id="tts.stream_completed",
+            provider=self.config.provider,
+            first_audio_ms=first_audio_ms if first_audio_ms is not None else 0,
+            stream_chunks=chunks,
+            playback_latency_ms=int((time.monotonic() - playback_started) * 1000),
         )
 
     def speak_text_stream(
@@ -406,15 +459,7 @@ class AliyunNlsTextToSpeech(TextToSpeech):
         full_text_parts: list[str] = []
 
         def tracked_chunks() -> Iterator[str]:
-            printed = False
-            for chunk in _track_text_chunks(text_chunks, full_text_parts, stop_event):
-                if not printed:
-                    _safe_stdout_write("assistant> ", flush=True)
-                    printed = True
-                _safe_stdout_write(chunk, flush=True)
-                yield chunk
-            if printed:
-                _safe_stdout_write("\n")
+            yield from _track_text_chunks(text_chunks, full_text_parts, stop_event)
 
         def on_tts_event(name: str, fields: dict[str, object]) -> None:
             nonlocal first_text_segment_ms, stream_started_ms, first_text_sent_ms
@@ -423,17 +468,32 @@ class AliyunNlsTextToSpeech(TextToSpeech):
             if name == "first_text_segment":
                 first_text_segment_ms = elapsed_ms
                 first_text_chars = int(fields.get("chars") or 0)
-                print(
-                    "tts_debug> "
-                    f"first_text_segment_ms={elapsed_ms} "
-                    f"chars={first_text_chars}"
+                log_event(
+                    "tts",
+                    "first_text_segment",
+                    log_id="tts.first_text_segment",
+                    provider=self.config.provider,
+                    latency_ms=elapsed_ms,
+                    chars=first_text_chars,
                 )
             elif name == "stream_started":
                 stream_started_ms = elapsed_ms
-                print(f"tts_debug> aliyun_stream_started_ms={elapsed_ms}")
+                log_event(
+                    "tts",
+                    "stream_started",
+                    log_id="tts.stream_started",
+                    provider=self.config.provider,
+                    latency_ms=elapsed_ms,
+                )
             elif name == "first_text_sent":
                 first_text_sent_ms = elapsed_ms
-                print(f"tts_debug> first_text_sent_ms={elapsed_ms}")
+                log_event(
+                    "tts",
+                    "first_text_sent",
+                    log_id="tts.first_text_sent",
+                    provider=self.config.provider,
+                    latency_ms=elapsed_ms,
+                )
 
         def audio_chunks() -> Iterator[bytes]:
             nonlocal first_audio_ms, chunks
@@ -458,19 +518,26 @@ class AliyunNlsTextToSpeech(TextToSpeech):
             device=self.config.playback_device,
             playback_sample_rate=self.config.playback_sample_rate,
             playback_channels=self.config.playback_channels,
+            limiter_enabled=self.config.limiter_enabled,
+            limiter_threshold=self.config.limiter_threshold,
             stop_event=stop_event,
         )
         if written_chunks == 0 and full_text_parts and not _stop_requested(stop_event):
             raise RuntimeError("Aliyun NLS streaming TTS response did not contain audio chunks.")
-        print(
-            "tts> stream_first_audio_ms="
-            f"{first_audio_ms if first_audio_ms is not None else 0} "
-            f"first_text_segment_ms={first_text_segment_ms if first_text_segment_ms is not None else 0} "
-            f"aliyun_stream_started_ms={stream_started_ms if stream_started_ms is not None else 0} "
-            f"first_text_sent_ms={first_text_sent_ms if first_text_sent_ms is not None else 0} "
-            f"first_text_chars={first_text_chars} "
-            f"stream_chunks={chunks} "
-            f"playback_latency_ms={int((time.monotonic() - playback_started) * 1000)}"
+        log_event(
+            "tts",
+            "stream_completed",
+            log_id="tts.stream_completed",
+            provider=self.config.provider,
+            first_audio_ms=first_audio_ms if first_audio_ms is not None else 0,
+            first_text_segment_ms=(
+                first_text_segment_ms if first_text_segment_ms is not None else 0
+            ),
+            stream_started_ms=stream_started_ms if stream_started_ms is not None else 0,
+            first_text_sent_ms=first_text_sent_ms if first_text_sent_ms is not None else 0,
+            first_text_chars=first_text_chars,
+            stream_chunks=chunks,
+            playback_latency_ms=int((time.monotonic() - playback_started) * 1000),
         )
         return "".join(full_text_parts).strip()
 
@@ -500,6 +567,8 @@ class PiperHttpTextToSpeech(TextToSpeech):
             device=self.config.playback_device,
             playback_sample_rate=self.config.playback_sample_rate,
             playback_channels=self.config.playback_channels,
+            limiter_enabled=self.config.limiter_enabled,
+            limiter_threshold=self.config.limiter_threshold,
             stop_event=stop_event,
         )
 
@@ -530,6 +599,8 @@ class PiperCliTextToSpeech(TextToSpeech):
                 device=self.config.playback_device,
                 playback_sample_rate=self.config.playback_sample_rate,
                 playback_channels=self.config.playback_channels,
+                limiter_enabled=self.config.limiter_enabled,
+                limiter_threshold=self.config.limiter_threshold,
                 stop_event=stop_event,
             )
 
@@ -569,21 +640,6 @@ def synthesize_to_wav(config: TtsConfig, text: str, output_path: str | Path) -> 
         write_pcm16_wav(path, audio_data.data, sample_rate=config.sample_rate)
         return path
     raise RuntimeError(f"Cannot save unsupported TTS audio format as WAV: {audio_data.format}")
-
-
-def _print_assistant(text: str) -> None:
-    _safe_stdout_write(f"assistant> {text}\n")
-
-
-def _safe_stdout_write(text: str, flush: bool = False) -> None:
-    try:
-        sys.stdout.write(text)
-    except UnicodeEncodeError:
-        encoding = sys.stdout.encoding or "utf-8"
-        safe_text = text.encode(encoding, errors="replace").decode(encoding, errors="replace")
-        sys.stdout.write(safe_text)
-    if flush:
-        sys.stdout.flush()
 
 
 def _run_tts_command(command: list[str], text: str) -> None:
@@ -831,7 +887,7 @@ def _aliyun_stream_input_tts_chunks_from_text_chunks(
             item = items.get(timeout=timeout)
         except queue.Empty:
             if time.monotonic() >= deadline:
-                raise RuntimeError("Aliyun NLS TTS timed out.")
+                raise RuntimeError("Aliyun NLS TTS timed out.") from None
             continue
         if item is done:
             break
@@ -1011,6 +1067,8 @@ def _play_audio_bytes(
     source_channels: int = 1,
     playback_sample_rate: int | None = None,
     playback_channels: int | None = None,
+    limiter_enabled: bool = False,
+    limiter_threshold: float = 0.92,
     stop_event: threading.Event | None = None,
 ) -> None:
     try:
@@ -1032,12 +1090,25 @@ def _play_audio_bytes(
             device=device,
             playback_sample_rate=playback_sample_rate,
             playback_channels=playback_channels,
+            limiter_enabled=limiter_enabled,
+            limiter_threshold=limiter_threshold,
             stop_event=stop_event,
         )
         return
 
     if normalized_format == "wav" or audio_data.startswith(b"RIFF"):
         data, wav_sample_rate = sf.read(io.BytesIO(audio_data), dtype="float32", always_2d=True)
+        if limiter_enabled:
+            data, peak, gain = _limit_float_audio(data, limiter_threshold)
+            if gain < 0.999:
+                log_continuous(
+                    "tts",
+                    "limiter",
+                    log_id="tts.limiter",
+                    peak=f"{peak:.3f}",
+                    threshold=f"{float(limiter_threshold):.3f}",
+                    gain=f"{gain:.3f}",
+                )
         pcm, wav_channels = _float_audio_to_pcm16(data)
         _play_pcm_stream(
             iter([pcm]),
@@ -1046,6 +1117,8 @@ def _play_audio_bytes(
             device=device,
             playback_sample_rate=playback_sample_rate,
             playback_channels=playback_channels,
+            limiter_enabled=limiter_enabled,
+            limiter_threshold=limiter_threshold,
             stop_event=stop_event,
         )
         return
@@ -1060,7 +1133,10 @@ def _play_pcm_stream(
     device: str | int | None = None,
     playback_sample_rate: int | None = None,
     playback_channels: int | None = None,
+    limiter_enabled: bool = False,
+    limiter_threshold: float = 0.92,
     stop_event: threading.Event | None = None,
+    dump_kind: str = "tts_output",
 ) -> int:
     try:
         import sounddevice as sd  # type: ignore[import-untyped]
@@ -1070,7 +1146,7 @@ def _play_pcm_stream(
             "Install with: pip install -e \".[tts]\""
         ) from exc
 
-    playback_device = None if device == "default" else device
+    playback_device = resolve_sounddevice_device(sd, device, kind="output")
     requested_playback_rate = playback_sample_rate or sample_rate
     requested_playback_channels = playback_channels or source_channels
     selected_rate, selected_channels = _select_output_format(
@@ -1081,6 +1157,10 @@ def _play_pcm_stream(
     )
     should_convert = selected_rate != sample_rate or selected_channels != source_channels
     converter_logged = False
+    limiter_logged = False
+    dump_manager = current_audio_dump_manager()
+    dump_start_ms: int | None = None
+    dump_chunks: list[bytes] = []
     written_chunks = 0
     stream = None
     try:
@@ -1107,13 +1187,32 @@ def _play_pcm_stream(
                         target_channels=selected_channels,
                     )
                 if should_convert and not converter_logged:
-                    print(
-                        "tts> converted "
-                        f"source_sample_rate={sample_rate} playback_sample_rate={selected_rate} "
-                        f"source_channels={source_channels} playback_channels={selected_channels} "
-                        f"resampler={resampler}"
+                    log_event(
+                        "tts",
+                        "converted",
+                        log_id="tts.converted",
+                        source_sample_rate=sample_rate,
+                        playback_sample_rate=selected_rate,
+                        source_channels=source_channels,
+                        playback_channels=selected_channels,
+                        resampler=resampler,
                     )
                     converter_logged = True
+                if limiter_enabled:
+                    playable_chunk, peak, gain = _limit_pcm16_audio(
+                        playable_chunk,
+                        limiter_threshold,
+                    )
+                    if gain < 0.999 and not limiter_logged:
+                        log_continuous(
+                            "tts",
+                            "limiter",
+                            log_id="tts.limiter",
+                            peak=f"{peak:.3f}",
+                            threshold=f"{float(limiter_threshold):.3f}",
+                            gain=f"{gain:.3f}",
+                        )
+                        limiter_logged = True
                 if stream is None:
                     stream = sd.RawOutputStream(
                         samplerate=selected_rate,
@@ -1122,6 +1221,10 @@ def _play_pcm_stream(
                         device=playback_device,
                     )
                     stream.start()
+                if dump_manager is not None and dump_manager.voice_path_enabled:
+                    if dump_start_ms is None:
+                        dump_start_ms = dump_manager.elapsed_ms()
+                    dump_chunks.append(playable_chunk)
                 stream.write(playable_chunk)
                 written_chunks += 1
                 if _stop_requested(stop_event):
@@ -1132,6 +1235,16 @@ def _play_pcm_stream(
         if stream is not None:
             stream.stop()
             stream.close()
+        if dump_manager is not None and dump_start_ms is not None and dump_chunks:
+            dump_manager.write_voice_path_dump(
+                None,
+                dump_kind,
+                b"".join(dump_chunks),
+                sample_rate=selected_rate,
+                channels=selected_channels,
+                start_ms=dump_start_ms,
+                end_ms=dump_manager.elapsed_ms(),
+            )
     return written_chunks
 
 
@@ -1156,6 +1269,51 @@ def _float_audio_to_pcm16(data) -> tuple[bytes, int]:
     clipped = np.clip(data, -1.0, 1.0)
     pcm = np.rint(clipped * 32767.0).astype("<i2")
     return pcm.reshape(-1).tobytes(), channels
+
+
+def _limit_float_audio(data, threshold: float = 0.92):
+    import numpy as np  # type: ignore[import-untyped]
+
+    limit = _normalized_limiter_threshold(threshold)
+    peak = float(np.max(np.abs(data))) if data.size else 0.0
+    if peak <= limit or peak <= 0.0:
+        return data, peak, 1.0
+    gain = limit / peak
+    return data * gain, peak, gain
+
+
+def _limit_pcm16_audio(pcm: bytes, threshold: float = 0.92) -> tuple[bytes, float, float]:
+    if not pcm:
+        return pcm, 0.0, 1.0
+
+    playable_len = len(pcm) - (len(pcm) % 2)
+    if playable_len <= 0:
+        return pcm, 0.0, 1.0
+
+    samples = array.array("h")
+    samples.frombytes(pcm[:playable_len])
+    if sys.byteorder != "little":
+        samples.byteswap()
+    peak_sample = max((abs(sample) for sample in samples), default=0)
+    if peak_sample <= 0:
+        return pcm, 0.0, 1.0
+
+    limit = _normalized_limiter_threshold(threshold)
+    limit_sample = max(1, int(round(32767 * limit)))
+    peak = peak_sample / 32768.0
+    if peak_sample <= limit_sample:
+        return pcm, peak, 1.0
+
+    gain = limit_sample / peak_sample
+    for index, sample in enumerate(samples):
+        samples[index] = max(-32768, min(32767, int(sample * gain)))
+    if sys.byteorder != "little":
+        samples.byteswap()
+    return samples.tobytes() + pcm[playable_len:], peak, gain
+
+
+def _normalized_limiter_threshold(threshold: float) -> float:
+    return max(0.05, min(1.0, float(threshold)))
 
 
 def _stop_requested(stop_event: threading.Event | None) -> bool:

@@ -65,9 +65,10 @@ tts:
 ```
 
 For `openai_speech`, `stream: true` requests `response_format: pcm`, then
-VoiceUI plays the HTTP response body as PCM16 chunks. The log line
-`tts> stream_first_audio_ms=... stream_chunks=... playback_latency_ms=...`
-is directly comparable with the MiMo streaming path.
+VoiceUI plays the HTTP response body as PCM16 chunks. The
+`module=tts | event=stream_completed` log includes `first_audio_ms`,
+`stream_chunks`, and `playback_latency_ms`, directly comparable with the MiMo
+streaming path.
 
 ## Notes
 

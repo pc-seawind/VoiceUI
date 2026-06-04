@@ -4,7 +4,7 @@ import json
 import urllib.error
 import urllib.request
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from voiceui.http_utils import post_json, require_api_key
 from voiceui.models import LlmConfig
@@ -13,7 +13,23 @@ from voiceui.models import LlmConfig
 @dataclass(slots=True)
 class ChatMessage:
     role: str
-    content: str
+    content: str = ""
+    tool_calls: list[dict] | None = None
+    tool_call_id: str | None = None
+
+
+@dataclass(slots=True)
+class ToolCall:
+    id: str
+    name: str
+    arguments: dict
+    raw: dict = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class ToolChatResponse:
+    content: str = ""
+    tool_calls: list[ToolCall] = field(default_factory=list)
 
 
 class ChatClient:
@@ -23,16 +39,25 @@ class ChatClient:
     def stream_complete(self, messages: list[ChatMessage]) -> Iterator[str]:
         yield self.complete(messages)
 
+    def complete_with_tools(
+        self,
+        messages: list[ChatMessage],
+        tools: list[dict],
+    ) -> ToolChatResponse:
+        return ToolChatResponse(content=self.complete(messages))
+
 
 class MockChatClient(ChatClient):
     def complete(self, messages: list[ChatMessage]) -> str:
-        last = next((message.content for message in reversed(messages) if message.role == "user"), "")
+        last = next(
+            (message.content for message in reversed(messages) if message.role == "user"),
+            "",
+        )
         return f"Mock response: {last}"
 
     def stream_complete(self, messages: list[ChatMessage]) -> Iterator[str]:
         response = self.complete(messages)
-        for part in _chunk_text(response):
-            yield part
+        yield from _chunk_text(response)
 
 
 class OllamaChatClient(ChatClient):
@@ -53,6 +78,26 @@ class OllamaChatClient(ChatClient):
         )
         message = data.get("message", {})
         return str(message.get("content", "")).strip()
+
+    def complete_with_tools(
+        self,
+        messages: list[ChatMessage],
+        tools: list[dict],
+    ) -> ToolChatResponse:
+        payload = {
+            "model": self.config.model,
+            "messages": _messages_payload(messages),
+            "stream": False,
+            "options": {"temperature": self.config.temperature},
+            "tools": tools,
+        }
+        data = _post_json(
+            f"{self.config.endpoint.rstrip('/')}/api/chat",
+            payload,
+            timeout=self.config.timeout_seconds,
+        )
+        message = data.get("message", {})
+        return _extract_message_response(message)
 
     def stream_complete(self, messages: list[ChatMessage]) -> Iterator[str]:
         payload = {
@@ -88,6 +133,22 @@ class OpenAICompatibleChatClient(ChatClient):
         )
         return _extract_chat_message_text(data)
 
+    def complete_with_tools(
+        self,
+        messages: list[ChatMessage],
+        tools: list[dict],
+    ) -> ToolChatResponse:
+        payload = _openai_chat_payload(self.config, messages, stream=False)
+        payload["tools"] = tools
+        payload.setdefault("tool_choice", "auto")
+        data = _post_json(
+            _chat_completions_url(self.config.endpoint),
+            payload,
+            headers=self._headers(),
+            timeout=self.config.timeout_seconds,
+        )
+        return _extract_chat_message_response(data)
+
     def stream_complete(self, messages: list[ChatMessage]) -> Iterator[str]:
         payload = _openai_chat_payload(self.config, messages, stream=True)
         yield from _stream_chat_completion_text(
@@ -119,6 +180,22 @@ class MimoChatClient(ChatClient):
         )
         return _extract_chat_message_text(data)
 
+    def complete_with_tools(
+        self,
+        messages: list[ChatMessage],
+        tools: list[dict],
+    ) -> ToolChatResponse:
+        payload = _openai_chat_payload(self.config, messages, stream=False)
+        payload["tools"] = tools
+        payload.setdefault("tool_choice", "auto")
+        data = _post_json(
+            _chat_completions_url(self.config.endpoint),
+            payload,
+            headers=self._headers(),
+            timeout=self.config.timeout_seconds,
+        )
+        return _extract_chat_message_response(data)
+
     def stream_complete(self, messages: list[ChatMessage]) -> Iterator[str]:
         payload = _openai_chat_payload(self.config, messages, stream=True)
         yield from _stream_chat_completion_text(
@@ -148,8 +225,16 @@ def create_chat_client(config: LlmConfig) -> ChatClient:
     raise ValueError(f"Unsupported LLM provider: {config.provider}")
 
 
-def _messages_payload(messages: list[ChatMessage]) -> list[dict[str, str]]:
-    return [{"role": message.role, "content": message.content} for message in messages]
+def _messages_payload(messages: list[ChatMessage]) -> list[dict]:
+    payload: list[dict] = []
+    for message in messages:
+        item = {"role": message.role, "content": message.content}
+        if message.tool_calls is not None:
+            item["tool_calls"] = message.tool_calls
+        if message.tool_call_id is not None:
+            item["tool_call_id"] = message.tool_call_id
+        payload.append(item)
+    return payload
 
 
 def _openai_chat_payload(config: LlmConfig, messages: list[ChatMessage], stream: bool) -> dict:
@@ -172,14 +257,83 @@ def _chat_completions_url(endpoint: str) -> str:
 
 
 def _extract_chat_message_text(data: dict) -> str:
+    return _extract_chat_message_response(data).content
+
+
+def _extract_chat_message_response(data: dict) -> ToolChatResponse:
     choices = data.get("choices", [])
     if not choices:
-        return ""
+        return ToolChatResponse()
     message = choices[0].get("message", {})
-    content = str(message.get("content") or "").strip()
+    return _extract_message_response(message)
+
+
+def _extract_message_response(message: dict) -> ToolChatResponse:
+    content = _content_to_text(message.get("content")).strip()
     if content:
-        return content
-    return str(message.get("reasoning_content") or "").strip()
+        return ToolChatResponse(content=content, tool_calls=_extract_tool_calls(message))
+    reasoning_content = _content_to_text(message.get("reasoning_content")).strip()
+    return ToolChatResponse(
+        content=reasoning_content,
+        tool_calls=_extract_tool_calls(message),
+    )
+
+
+def _extract_tool_calls(message: dict) -> list[ToolCall]:
+    raw_tool_calls = message.get("tool_calls") or []
+    if not isinstance(raw_tool_calls, list):
+        return []
+
+    tool_calls: list[ToolCall] = []
+    for index, raw_call in enumerate(raw_tool_calls):
+        if not isinstance(raw_call, dict):
+            continue
+        function = raw_call.get("function") or {}
+        if not isinstance(function, dict):
+            continue
+        name = str(function.get("name") or "").strip()
+        if not name:
+            continue
+        arguments = _parse_tool_arguments(function.get("arguments"))
+        raw = dict(raw_call)
+        call_id = str(raw.get("id") or f"call_{index}")
+        raw["id"] = call_id
+        raw.setdefault("type", "function")
+        raw["function"] = dict(function)
+        if isinstance(function.get("arguments"), str):
+            raw["function"]["arguments"] = function["arguments"]
+        else:
+            raw["function"]["arguments"] = arguments
+        tool_calls.append(
+            ToolCall(
+                id=call_id,
+                name=name,
+                arguments=arguments,
+                raw=raw,
+            )
+        )
+    return tool_calls
+
+
+def _parse_tool_arguments(raw_arguments: object) -> dict:
+    if raw_arguments is None:
+        return {}
+    if isinstance(raw_arguments, dict):
+        return raw_arguments
+    if not isinstance(raw_arguments, str):
+        return {}
+
+    parsed: object = raw_arguments
+    for _ in range(5):
+        if not isinstance(parsed, str):
+            break
+        if not parsed.strip():
+            return {}
+        try:
+            parsed = json.loads(parsed)
+        except json.JSONDecodeError:
+            return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _stream_chat_completion_text(
