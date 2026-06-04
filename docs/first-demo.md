@@ -44,14 +44,20 @@ On the first development machine, the XVF3800 appeared as:
 reSpeaker XVF3800 4-Mic Array
 ```
 
-The demo configs pin the current machine's XVF3800 devices explicitly:
-`audio.device: 24` for WASAPI capture and `playback_device: 22` for WASAPI wake
-acknowledgement and TTS playback. If Windows changes the device indexes, update
-those fields from `python -m voiceui --list-audio-devices`.
+The demo configs pin the current machine's XVF3800 devices by full WASAPI
+display string, not by numeric index. The input endpoint should look like
+`回音消除话筒 (reSpeaker XVF3800 4-Mic Array), Windows WASAPI (2 in, 0 out)`;
+the matching output endpoint should look like
+`回音消除话筒 (reSpeaker XVF3800 4-Mic Array), Windows WASAPI (0 in, 2 out)`.
+If you use the second XVF3800, select the same strings with the `2-` prefix in
+the endpoint name. VoiceUI resolves the configured names to the current
+sounddevice indexes at runtime.
 The XVF3800 WASAPI capture endpoint is two-channel on this machine. The demo
-configs therefore use `audio.channels: 2`, `audio.wake_stream_channel: 1`, and
-`audio.command_stream_channel: 0`. In wake debug logs, verify the openWakeWord
-line prints `channels=2 selected_channel=1`.
+configs therefore use `audio.channels: 2`, `audio.wake_stream_channel: 0`, and
+`audio.command_stream_channel: 0`. On the current XVF3800 firmware, channel 0
+is the denoised/AEC-oriented stream and channel 1 is the raw/noisier stream, so
+use channel 0 for wake detection and proximity scoring. In wake debug logs,
+verify the openWakeWord line prints `channels=2 selected_channel=0`.
 The XVF3800 WASAPI output endpoint accepts `16000Hz` on this machine, so demo
 TTS configs keep `tts.sample_rate: 24000` as the source/model rate and use
 `tts.playback_sample_rate: 16000` plus `tts.playback_channels: 2` for device
@@ -108,7 +114,8 @@ python -m voiceui --config config.demo.mify.yaml --transcribe-wav recordings\smo
 Expected output:
 
 ```text
-transcript> ...
+2026-06-03T19:30:01.234 | module=stt | event=completed | params=mode=transcribe_wav
+    >>> ASR TEXT: ...
 ```
 
 ## 6. Verify LLM Separately
@@ -120,15 +127,16 @@ python -m voiceui --config config.demo.mify.yaml --text "你好，介绍一下�
 Expected output:
 
 ```text
-assistant> ...
+2026-06-03T19:30:02.234 | module=tts | event=completed | params=latency_ms=...
+    >>> TTS TEXT: ...
 ```
 
 With `config.demo.mify.yaml`, MiMo TTS also speaks the answer through the
 configured output device.
 The demo configs enable `llm.stream: true`, so this step should also print
-`llm> first_token_ms=... latency_ms=... stream_chunks=...`. For a quick
-LLM-only streaming smoke test without audio playback, temporarily set
-`tts.provider` to `console` in a copied config.
+`module=llm | event=first_token` and `module=llm | event=stream_completed`.
+For a quick LLM-only streaming smoke test without audio playback, temporarily
+set `tts.provider` to `console` in a copied config.
 
 ## 7. Run the First Voice Demo
 
@@ -140,27 +148,33 @@ Flow:
 
 1. Press Enter when prompted.
 2. Speak one command.
-3. Wait for `vad>`, `stt>`, and `assistant>` logs.
+3. Wait for `module=vad | event=completed`, `module=stt | event=completed`,
+   and `module=tts | event=completed`.
 4. Listen for the TTS output.
-5. Check `debug_sessions\<timestamp>-0001\metadata.json` and `utterance.wav`.
+5. Check `debug_sessions\<run>\debug.log`,
+   `debug_sessions\<run>\metadata.json`, and
+   `debug_sessions\<run>\audio_dumps\utterance_01_<start>_<end>.wav`.
 
-If ASR seems to miss the beginning, first listen to `utterance.wav`. If the WAV
-itself starts late, it is a VAD boundary issue; inspect `vad_debug>` and raise
+If ASR seems to miss the beginning, first listen to
+`utterance_01_<start>_<end>.wav`. If the WAV itself starts late, it is a VAD
+boundary issue; inspect
+`module=vad | event=debug_start` / `module=vad | event=debug_stop` and raise
 `vad.pre_roll_ms`. If the WAV is complete but the transcript starts late, it is
-an ASR issue. In live audio turns, the Aliyun demo prints `stt> streaming_started`
-when VAD confirms speech start, sends buffered pre-roll into NLS first, then
-streams command audio while VAD continues endpointing. `--transcribe-wav` stays
-a full-WAV test path and sends `stt.leading_silence_ms: 200` before the
-utterance. Barge-in capture uses the same streaming ASR path and reuses that
-transcript when the interrupted utterance becomes the next turn.
-If logs show `barge_in> no_speech`, listen to
-`debug_sessions\<timestamp>-barge-in-*\barge_in_monitor.wav`; that file is the
-actual command-channel audio monitored during TTS playback. The same folder
-also saves `barge_in_raw.wav`, `barge_in_raw_ch0.wav`, and
-`barge_in_raw_ch1.wav` when the device exposes multiple capture channels, so
-you can compare channel routing directly.
-It also prints `audio_debug>` for stream open and first-chunk latency; if those
-numbers are large, the capture stream is not ready early enough.
+an ASR issue. In live audio turns, the Aliyun demo logs
+`module=stt | event=streaming_started` when VAD confirms speech start, sends
+buffered pre-roll into NLS first, then streams command audio while VAD continues
+endpointing. `--transcribe-wav` stays a full-WAV test path and sends
+`stt.leading_silence_ms: 200` before the utterance. Barge-in capture uses the
+same streaming ASR path and reuses that transcript when the interrupted
+utterance becomes the next turn.
+If logs show `module=barge_in | event=no_speech`, listen to
+`debug_sessions\<run>\audio_dumps\barge_in_monitor_01_<start>_<end>.wav`;
+that file is the actual command-channel audio monitored during TTS playback.
+For raw multi-channel routing, use
+`debug_sessions\<run>\audio_dumps\system_input_<start>_<end>.wav`.
+Enable `logging.events.audio.stream_opened` and `logging.events.audio.first_chunk`
+for stream open and first-chunk latency; if those numbers are large, the
+capture stream is not ready early enough.
 The local wake acknowledgement plays in the background, so VAD starts
 immediately after wake detection instead of waiting for the "我在" WAV to finish.
 If you say the wake word and command as one continuous phrase, the command can
@@ -183,8 +197,8 @@ sentence-sized segment playback.
 To re-test ASR with a saved turn:
 
 ```powershell
-python -m voiceui --config config.demo.mify.yaml --transcribe-wav debug_sessions\<turn>\utterance.wav
-python -m voiceui --config config.demo.wake.aliyun.yaml --transcribe-wav debug_sessions\<turn>\utterance.wav
+python -m voiceui --config config.demo.mify.yaml --transcribe-wav debug_sessions\<run>\audio_dumps\utterance_01_<start>_<end>.wav
+python -m voiceui --config config.demo.wake.aliyun.yaml --transcribe-wav debug_sessions\<run>\audio_dumps\utterance_01_<start>_<end>.wav
 ```
 
 For hardware-only smoke testing without Mify:
@@ -209,20 +223,23 @@ the `alexa` model. A successful detection plays the local "我在" WAV and
 prints:
 
 ```text
-wake> engine=openwakeword label=alexa confidence=... latency_ms=...
+2026-06-03T19:30:01.234 | module=wake | event=detected | params=engine=openwakeword label=alexa confidence=... latency_ms=...
 ```
 
-The wake demo configs enable `wake.debug: true`, so you should also see
-periodic lines like:
+`module=wake | event=score` is a continuous log and stays off by default to
+avoid console spam. Enable `logging.continuous.wake.score: true`, or run with
+`--wake-debug` / `--wake-monitor`, when you need periodic lines like:
 
 ```text
-wake_debug> elapsed_s=1.0 chunks=13 audio_ms=1040 rms=... peak=... dbfs=... near_zero_pct=... clipped_pct=... last=alexa:... best_window=alexa:... threshold=0.500 top=alexa:... predict_avg_ms=...
+2026-06-03T19:30:02.234 | module=wake | event=score | params=elapsed_s=1.0 chunks=13 audio_ms=1040 rms=... peak=... dbfs=... near_zero_pct=... clipped_pct=... last=alexa:... best_window=alexa:... threshold=0.500 top=alexa:... predict_avg_ms=...
 ```
 
 When `debug.enabled` and `debug.save_audio` are true, wake runs save
-`debug_sessions\<turn>\wake.wav` with the exact wake channel passed into
-openWakeWord. A full assistant turn saves both `wake.wav` and `utterance.wav`.
-`--wake-monitor` saves `wake.wav` even when the wake word is not detected:
+`debug_sessions\<run>\audio_dumps\wake_01_<start>_<end>.wav` with the exact
+wake channel passed into openWakeWord. A full assistant turn saves both
+`wake_01_<start>_<end>.wav` and `utterance_01_<start>_<end>.wav` in the same
+flat `audio_dumps\` directory.
+`--wake-monitor` saves a wake dump even when the wake word is not detected:
 
 ```powershell
 python -m voiceui --config config.demo.wake.aliyun.yaml --wake-monitor --wake-model alexa --seconds 10
@@ -275,17 +292,18 @@ python -m voiceui --config config.demo.wake.yaml
 Flow:
 
 1. Say "alexa".
-2. Wait for the `wake>` log and the local "我在" acknowledgement.
+2. Wait for `module=wake | event=detected` and the local "我在" acknowledgement.
 3. Speak one command.
-4. Wait for `vad>`, `stt>`, `llm>`, `tts>`, and the spoken answer.
+4. Wait for `module=vad | event=completed`, `module=stt | event=completed`,
+   `module=llm`, `module=tts`, and the spoken answer.
 5. You can interrupt a streaming TTS answer by speaking over it. VoiceUI prints
-   `barge_in> speech_start`, stops playback, captures your utterance, and starts
-   the next turn.
-6. When `session> listening_for_follow_up seconds=10` appears, speak the next
-   turn directly. The next turn keeps the same LLM message history.
+   `module=barge_in | event=speech_start`, stops playback, captures your
+   utterance, and starts the next turn.
+6. When `module=session | event=listening_for_follow_up` appears with
+   `seconds=10`, speak the next turn directly. The next turn keeps the same LLM
+   message history.
 7. If you stay silent for 10 seconds, VoiceUI prints
-   `session> follow_up_timeout returning_to_wake` and waits for the wake word
-   again.
+   `module=session | event=follow_up_timeout` and waits for the wake word again.
 
 To test local streaming TTS instead of cloud TTS, start a local
 OpenAI-compatible `/v1/audio/speech` server and run:

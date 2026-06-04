@@ -11,3 +11,4 @@ venv/
 models/
 device-identity.json
 debug_sessions/
+.voiceui/

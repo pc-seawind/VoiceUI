@@ -25,7 +25,11 @@ class RmsSummary:
         return json.dumps(asdict(self), indent=2, ensure_ascii=True)
 
 
-def resolve_audio_channel(config: AssistantConfig, purpose: str, override: int | None = None) -> int:
+def resolve_audio_channel(
+    config: AssistantConfig,
+    purpose: str,
+    override: int | None = None,
+) -> int:
     if override is not None:
         return override
     if purpose == "wake":

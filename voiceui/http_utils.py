@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import urllib.error
 import urllib.request
 
@@ -45,6 +46,14 @@ def require_api_key(env_name: str | None) -> str | None:
             f"Set it in .env or PowerShell with: $env:{env_name}=\"your-token\""
         )
     return value
+
+
+def optional_api_key(env_name: str | None) -> str | None:
+    if not env_name:
+        return None
+
+    load_dotenv()
+    return os.environ.get(env_name) or None
 
 
 def _read_error_body(error: urllib.error.HTTPError) -> str:

@@ -145,6 +145,53 @@ class LlmTests(unittest.TestCase):
         self.assertFalse(payload["enable_thinking"])
         self.assertFalse(payload["stream"])
 
+    def test_openai_compatible_client_sends_tools_and_extracts_tool_calls(self) -> None:
+        config = LlmConfig(
+            provider="openai_compatible",
+            endpoint="http://openai-compatible.local",
+            model="demo-model",
+        )
+        client = OpenAICompatibleChatClient(config)
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_current_time",
+                    "description": "Get time",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        ]
+
+        with patch("voiceui.llm._post_json") as post_json:
+            post_json.return_value = {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "call_1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "get_current_time",
+                                        "arguments": "{\"timezone\":\"Asia/Shanghai\"}",
+                                    },
+                                }
+                            ],
+                        }
+                    }
+                ]
+            }
+            response = client.complete_with_tools([ChatMessage(role="user", content="time")], tools)
+
+        _url, payload = post_json.call_args.args[:2]
+        self.assertEqual(payload["tools"], tools)
+        self.assertEqual(payload["tool_choice"], "auto")
+        self.assertEqual(response.tool_calls[0].id, "call_1")
+        self.assertEqual(response.tool_calls[0].name, "get_current_time")
+        self.assertEqual(response.tool_calls[0].arguments, {"timezone": "Asia/Shanghai"})
+
     def test_bailian_provider_uses_openai_compatible_bearer_auth(self) -> None:
         config = LlmConfig(
             provider="bailian",
@@ -186,6 +233,45 @@ class LlmTests(unittest.TestCase):
         self.assertEqual(chunks, ["hello", " world"])
         _url, payload = post_json_stream.call_args.args[:2]
         self.assertTrue(payload["stream"])
+
+    def test_ollama_client_sends_tools_and_extracts_dict_arguments(self) -> None:
+        config = LlmConfig(provider="ollama", endpoint="http://ollama.local", model="demo-model")
+        client = OllamaChatClient(config)
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_current_weather",
+                    "description": "Get weather",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        ]
+
+        with patch("voiceui.llm._post_json") as post_json:
+            post_json.return_value = {
+                "message": {
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "type": "function",
+                            "function": {
+                                "name": "get_current_weather",
+                                "arguments": {"location": "Shanghai"},
+                            },
+                        }
+                    ],
+                }
+            }
+            response = client.complete_with_tools(
+                [ChatMessage(role="user", content="weather")],
+                tools,
+            )
+
+        _url, payload = post_json.call_args.args[:2]
+        self.assertEqual(payload["tools"], tools)
+        self.assertEqual(response.tool_calls[0].id, "call_0")
+        self.assertEqual(response.tool_calls[0].arguments, {"location": "Shanghai"})
 
 
 if __name__ == "__main__":

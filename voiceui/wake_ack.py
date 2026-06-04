@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import wave
 from importlib import resources
 from pathlib import Path
-import wave
 
+from voiceui.audio import resolve_sounddevice_device
+from voiceui.audio_dump import current_audio_dump_manager
+from voiceui.logs import log_event
 from voiceui.models import WakeAckConfig
 
 _DEFAULT_ACK_RESOURCE = "wake_ack_wo_zai.wav"
@@ -79,9 +82,10 @@ def _play_pcm16(
             "Wake ack playback requires sounddevice. Install with: pip install -e \".[audio]\""
         ) from exc
 
+    playback_device = resolve_sounddevice_device(sd, device, kind="output")
     playback_sample_rate, playback_channels = _select_output_format(
         sd,
-        device=device,
+        device=playback_device,
         requested_sample_rate=sample_rate,
         source_channels=channels,
     )
@@ -100,18 +104,36 @@ def _play_pcm16(
             target_channels=playback_channels,
         )
     if playback_sample_rate != sample_rate or playback_channels != channels:
-        print(
-            "wake_ack> converted "
-            f"source_sample_rate={sample_rate} playback_sample_rate={playback_sample_rate} "
-            f"source_channels={channels} playback_channels={playback_channels} "
-            f"resampler={resampler}"
+        log_event(
+            "wake_ack",
+            "converted",
+            log_id="wake_ack.converted",
+            source_sample_rate=sample_rate,
+            playback_sample_rate=playback_sample_rate,
+            source_channels=channels,
+            playback_channels=playback_channels,
+            resampler=resampler,
+        )
+
+    dump_manager = current_audio_dump_manager()
+    if dump_manager is not None and dump_manager.voice_path_enabled:
+        end_ms = dump_manager.elapsed_ms()
+        duration_ms = int(len(pcm) / 2 / max(1, playback_channels) / playback_sample_rate * 1000)
+        dump_manager.write_voice_path_dump(
+            None,
+            "wake_ack_output",
+            pcm,
+            sample_rate=playback_sample_rate,
+            channels=playback_channels,
+            start_ms=max(0, end_ms - duration_ms),
+            end_ms=end_ms,
         )
 
     with sd.RawOutputStream(
         samplerate=playback_sample_rate,
         channels=playback_channels,
         dtype="int16",
-        device=device,
+        device=playback_device,
     ) as stream:
         stream.write(pcm)
 

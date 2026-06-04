@@ -5,6 +5,7 @@ from collections import deque
 from collections.abc import Callable, Iterator
 
 from voiceui.audio import AudioInput, pcm16_rms
+from voiceui.logs import log_event
 from voiceui.models import Utterance, VadConfig
 
 
@@ -436,14 +437,20 @@ def _print_vad_start(
     score: float,
     threshold: float,
 ) -> None:
-    if not config.debug:
-        return
     effective_start_ms = max(0, waited_ms - buffered_ms)
-    print(
-        "vad_debug> start "
-        f"engine={engine} waited_ms={waited_ms} buffered_ms={buffered_ms} "
-        f"effective_start_ms={effective_start_ms} pre_roll_ms={config.pre_roll_ms} "
-        f"min_speech_ms={config.min_speech_ms} score={score:.3f} threshold={threshold:.3f}"
+    log_event(
+        "vad",
+        "debug_start",
+        log_id="vad.debug_start",
+        default_enabled=config.debug,
+        engine=engine,
+        waited_ms=waited_ms,
+        buffered_ms=buffered_ms,
+        effective_start_ms=effective_start_ms,
+        pre_roll_ms=config.pre_roll_ms,
+        min_speech_ms=config.min_speech_ms,
+        score=f"{score:.3f}",
+        threshold=f"{threshold:.3f}",
     )
 
 
@@ -456,11 +463,14 @@ def _print_vad_stop(
     trailing_silence_ms: int,
     trimmed_silence_ms: int,
 ) -> None:
-    if not config.debug:
-        return
-    print(
-        "vad_debug> stop "
-        f"engine={engine} reason={reason} duration_ms={duration_ms} "
-        f"trailing_silence_ms={trailing_silence_ms} "
-        f"trimmed_silence_ms={trimmed_silence_ms}"
+    log_event(
+        "vad",
+        "debug_stop",
+        log_id="vad.debug_stop",
+        default_enabled=config.debug,
+        engine=engine,
+        reason=reason,
+        duration_ms=duration_ms,
+        trailing_silence_ms=trailing_silence_ms,
+        trimmed_silence_ms=trimmed_silence_ms,
     )

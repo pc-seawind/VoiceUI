@@ -5,16 +5,16 @@ import json
 import math
 import tempfile
 import time
-import wave
-import uuid
-from pathlib import Path
 import urllib.error
 import urllib.request
+import uuid
+import wave
+from pathlib import Path
 
 from voiceui.aliyun import get_aliyun_nls_token as _get_aliyun_nls_token
 from voiceui.http_utils import post_json, require_api_key
+from voiceui.logs import log_event
 from voiceui.models import SttConfig, Utterance
-
 
 _ALIYUN_SAMPLE_RATE = 16000
 
@@ -183,13 +183,16 @@ class AliyunNlsSpeechToText(SpeechToText):
         app_key = require_api_key(self.config.app_key_env or "ALIYUN_NLS_APPKEY")
         token = self._token_or_create()
         leading_silence_ms = max(0, self.config.leading_silence_ms)
-        if self.config.debug:
-            print(
-                "stt_debug> "
-                "provider=aliyun_nls mode=streaming "
-                f"sent_sample_rate={_ALIYUN_SAMPLE_RATE} "
-                f"leading_silence_ms={leading_silence_ms}"
-            )
+        log_event(
+            "stt",
+            "streaming_config",
+            log_id="stt.streaming_config",
+            default_enabled=self.config.debug,
+            provider="aliyun_nls",
+            mode="streaming",
+            sent_sample_rate=_ALIYUN_SAMPLE_RATE,
+            leading_silence_ms=leading_silence_ms,
+        )
         return _AliyunNlsStreamingSession(
             url=self.config.endpoint,
             token=token,
@@ -212,15 +215,20 @@ class AliyunNlsSpeechToText(SpeechToText):
                 sample_rate=sample_rate,
                 silence_ms=leading_silence_ms,
             )
-        if self.config.debug:
-            sent_audio_ms = int(len(pcm) / 2 / sample_rate * 1000)
-            print(
-                "stt_debug> "
-                f"provider=aliyun_nls utterance_duration_ms={utterance.duration_ms} "
-                f"utterance_sample_rate={utterance.sample_rate} sent_sample_rate={sample_rate} "
-                f"leading_silence_ms={leading_silence_ms} sent_audio_ms={sent_audio_ms} "
-                f"sent_bytes={len(pcm)}"
-            )
+        sent_audio_ms = int(len(pcm) / 2 / sample_rate * 1000)
+        log_event(
+            "stt",
+            "transcribe_audio",
+            log_id="stt.transcribe_audio",
+            default_enabled=self.config.debug,
+            provider="aliyun_nls",
+            utterance_duration_ms=utterance.duration_ms,
+            utterance_sample_rate=utterance.sample_rate,
+            sent_sample_rate=sample_rate,
+            leading_silence_ms=leading_silence_ms,
+            sent_audio_ms=sent_audio_ms,
+            sent_bytes=len(pcm),
+        )
         return _run_aliyun_speech_recognizer(
             url=self.config.endpoint,
             token=token,
@@ -277,21 +285,21 @@ def _post_multipart_json(
     boundary = f"----voiceui-{uuid.uuid4().hex}"
     body = bytearray()
     for name, value in fields.items():
-        body.extend(f"--{boundary}\r\n".encode("utf-8"))
-        body.extend(f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode("utf-8"))
-        body.extend(str(value).encode("utf-8"))
+        body.extend(f"--{boundary}\r\n".encode())
+        body.extend(f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode())
+        body.extend(str(value).encode())
         body.extend(b"\r\n")
 
-    body.extend(f"--{boundary}\r\n".encode("utf-8"))
+    body.extend(f"--{boundary}\r\n".encode())
     body.extend(
         (
             f'Content-Disposition: form-data; name="{file_field}"; filename="{file_name}"\r\n'
             f"Content-Type: {file_content_type}\r\n\r\n"
-        ).encode("utf-8")
+        ).encode()
     )
     body.extend(file_content)
     body.extend(b"\r\n")
-    body.extend(f"--{boundary}--\r\n".encode("utf-8"))
+    body.extend(f"--{boundary}--\r\n".encode())
 
     request = urllib.request.Request(
         url,

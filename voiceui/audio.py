@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import re
 import threading
 import time
 import wave
@@ -9,7 +10,14 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Protocol
 
+from voiceui.logs import is_log_enabled, log_event
 from voiceui.models import AudioConfig
+
+_DEFAULT_HOSTAPI = "Windows WASAPI"
+_DEVICE_DISPLAY_PATTERN = re.compile(
+    r"^(?P<name>.+),\s*(?P<hostapi>.+?)\s*"
+    r"\((?P<input>\d+)\s+in,\s*(?P<output>\d+)\s+out\)$"
+)
 
 
 class AudioInput(Protocol):
@@ -138,6 +146,7 @@ class SoundDeviceAudioInput:
                 "Audio capture requires sounddevice. Install with: pip install -e \".[audio]\""
             ) from exc
 
+        device = resolve_sounddevice_device(sd, self.config.device, kind="input")
         frames = max(1, int(self.config.sample_rate * self.config.block_ms / 1000))
         kwargs = {
             "samplerate": self.config.sample_rate,
@@ -145,31 +154,42 @@ class SoundDeviceAudioInput:
             "dtype": "int16",
             "blocksize": frames,
         }
-        if self.config.device not in (None, "default"):
-            kwargs["device"] = self.config.device
+        if device is not None:
+            kwargs["device"] = device
 
         stream_started = time.monotonic()
         with sd.RawInputStream(**kwargs) as stream:
-            if self.config.debug:
+            if is_log_enabled("audio.stream_opened", default_enabled=self.config.debug):
                 latency_ms = int((time.monotonic() - stream_started) * 1000)
-                print(
-                    "audio_debug> stream_opened "
-                    f"device={self.config.device} channels={self.config.channels} "
-                    f"selected_channel={self.selected_channel} "
-                    f"sample_rate={self.sample_rate} block_ms={self.block_ms} "
-                    f"latency_ms={latency_ms}"
+                log_event(
+                    "audio",
+                    "stream_opened",
+                    log_id="audio.stream_opened",
+                    default_enabled=self.config.debug,
+                    device=self.config.device,
+                    resolved_device=device,
+                    channels=self.config.channels,
+                    selected_channel=self.selected_channel,
+                    sample_rate=self.sample_rate,
+                    block_ms=self.block_ms,
+                    latency_ms=latency_ms,
                 )
             first_chunk = True
             while True:
                 read_started = time.monotonic()
                 data, overflowed = stream.read(frames)
-                if self.config.debug and first_chunk:
-                    read_ms = int((time.monotonic() - read_started) * 1000)
-                    print(
-                        "audio_debug> first_chunk "
-                        f"selected_channel={self.selected_channel} read_ms={read_ms} "
-                        f"overflowed={bool(overflowed)}"
-                    )
+                if first_chunk:
+                    if is_log_enabled("audio.first_chunk", default_enabled=self.config.debug):
+                        read_ms = int((time.monotonic() - read_started) * 1000)
+                        log_event(
+                            "audio",
+                            "first_chunk",
+                            log_id="audio.first_chunk",
+                            default_enabled=self.config.debug,
+                            selected_channel=self.selected_channel,
+                            read_ms=read_ms,
+                            overflowed=bool(overflowed),
+                        )
                     first_chunk = False
                 if overflowed:
                     continue
@@ -210,6 +230,143 @@ def list_audio_devices() -> str:
         ) from exc
 
     return str(sd.query_devices())
+
+
+def resolve_sounddevice_device(
+    sd,
+    device: str | int | None,
+    *,
+    kind: str,
+    preferred_hostapi: str = _DEFAULT_HOSTAPI,
+) -> int | None:
+    """Resolve a stable device name/display string to a current sounddevice index."""
+
+    if device is None or device == "default":
+        return None
+    if isinstance(device, int):
+        return device
+
+    requested = str(device).strip()
+    if not requested or requested == "default":
+        return None
+    if requested.isdigit():
+        return int(requested)
+    if kind not in {"input", "output"}:
+        raise ValueError(f"Unsupported sounddevice kind: {kind}")
+
+    requested_name, requested_hostapi = _parse_sounddevice_device_request(requested)
+    direction_candidates = [
+        candidate
+        for candidate in _sounddevice_candidates(sd)
+        if candidate[_channel_key(kind)] > 0
+    ]
+    if requested_hostapi:
+        candidates = [
+            candidate
+            for candidate in direction_candidates
+            if _same_device_text(candidate["hostapi_name"], requested_hostapi)
+        ]
+    else:
+        candidates = _prefer_hostapi(direction_candidates, preferred_hostapi)
+
+    matches = [
+        candidate
+        for candidate in candidates
+        if _same_device_text(candidate["name"], requested_name)
+        or _same_device_text(candidate["display"], requested)
+    ]
+    if not matches:
+        requested_norm = _normalize_device_text(requested_name)
+        matches = [
+            candidate
+            for candidate in candidates
+            if requested_norm and requested_norm in _normalize_device_text(candidate["name"])
+        ]
+
+    if len(matches) == 1:
+        return int(matches[0]["index"])
+
+    available = "; ".join(candidate["display"] for candidate in candidates) or "<none>"
+    if not matches:
+        raise RuntimeError(
+            f"Could not resolve {kind} audio device {device!r}. "
+            f"Available {kind} devices: {available}"
+        )
+    matched = "; ".join(candidate["display"] for candidate in matches)
+    raise RuntimeError(
+        f"Audio device {device!r} is ambiguous for {kind}. "
+        f"Matched devices: {matched}"
+    )
+
+
+def _parse_sounddevice_device_request(requested: str) -> tuple[str, str | None]:
+    match = _DEVICE_DISPLAY_PATTERN.match(requested)
+    if match is None:
+        return requested, None
+    return match.group("name").strip(), match.group("hostapi").strip()
+
+
+def _sounddevice_candidates(sd) -> list[dict[str, object]]:
+    devices = list(sd.query_devices())
+    hostapi_names = _sounddevice_hostapi_names(sd)
+    candidates: list[dict[str, object]] = []
+    for index, info in enumerate(devices):
+        name = str(info.get("name") or "").strip()
+        if not name:
+            continue
+        hostapi_index = int(info.get("hostapi", -1))
+        hostapi_name = hostapi_names.get(hostapi_index, str(hostapi_index))
+        input_channels = int(info.get("max_input_channels") or 0)
+        output_channels = int(info.get("max_output_channels") or 0)
+        candidates.append(
+            {
+                "index": index,
+                "name": name,
+                "hostapi_name": hostapi_name,
+                "max_input_channels": input_channels,
+                "max_output_channels": output_channels,
+                "display": (
+                    f"{name}, {hostapi_name} "
+                    f"({input_channels} in, {output_channels} out)"
+                ),
+            }
+        )
+    return candidates
+
+
+def _sounddevice_hostapi_names(sd) -> dict[int, str]:
+    try:
+        hostapis = list(sd.query_hostapis())
+    except Exception:
+        return {}
+    names: dict[int, str] = {}
+    for index, info in enumerate(hostapis):
+        names[index] = str(info.get("name") or index).strip()
+    return names
+
+
+def _prefer_hostapi(
+    candidates: list[dict[str, object]],
+    preferred_hostapi: str,
+) -> list[dict[str, object]]:
+    preferred = [
+        candidate
+        for candidate in candidates
+        if _same_device_text(candidate["hostapi_name"], preferred_hostapi)
+    ]
+    return preferred or candidates
+
+
+def _channel_key(kind: str) -> str:
+    return "max_input_channels" if kind == "input" else "max_output_channels"
+
+
+def _same_device_text(left: object, right: object) -> bool:
+    return _normalize_device_text(str(left)) == _normalize_device_text(str(right))
+
+
+def _normalize_device_text(text: str) -> str:
+    return re.sub(r"\s+", " ", text.strip()).casefold()
 
 
 def pcm16_rms(pcm: bytes) -> float:

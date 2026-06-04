@@ -25,7 +25,11 @@ class SttTests(unittest.TestCase):
             language="zh",
         )
         stt = MimoAudioUnderstandingSpeechToText(config)
-        utterance = Utterance(pcm=(100).to_bytes(2, "little", signed=True) * 160, sample_rate=16000, duration_ms=10)
+        utterance = Utterance(
+            pcm=(100).to_bytes(2, "little", signed=True) * 160,
+            sample_rate=16000,
+            duration_ms=10,
+        )
 
         with patch.dict("os.environ", {"MIFY_API_KEY": "test-token"}):
             with patch("voiceui.stt._post_json") as post_json:
@@ -42,7 +46,11 @@ class SttTests(unittest.TestCase):
         self.assertEqual(post_json.call_args.kwargs["headers"], {"api-key": "test-token"})
 
     def test_mimo_stt_falls_back_to_reasoning_content(self) -> None:
-        config = SttConfig(provider="mify", endpoint="https://api.xiaomimimo.com/v1", model="xiaomi/mimo-v2.5")
+        config = SttConfig(
+            provider="mify",
+            endpoint="https://api.xiaomimimo.com/v1",
+            model="xiaomi/mimo-v2.5",
+        )
         stt = MimoAudioUnderstandingSpeechToText(config)
         utterance = Utterance(pcm=b"\x00\x00" * 160, sample_rate=16000, duration_ms=10)
 

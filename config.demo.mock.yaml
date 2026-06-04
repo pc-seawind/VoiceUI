@@ -9,8 +9,8 @@ audio:
   sample_rate: 16000
   channels: 2
   block_ms: 80
-  device: 24
-  wake_stream_channel: 1
+  device: "回音消除话筒 (2- reSpeaker XVF3800 4-Mic Array), Windows WASAPI (2 in, 0 out)"
+  wake_stream_channel: 0
   command_stream_channel: 0
   input_gain_db: 0.0
 
