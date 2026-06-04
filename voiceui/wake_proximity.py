@@ -8,6 +8,7 @@ import queue
 import statistics
 import threading
 import time
+import urllib.request
 from collections import defaultdict, deque
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -56,6 +57,24 @@ DEFAULT_WAKE_WINDOW_PRE_MS = 1300
 DEFAULT_WAKE_WINDOW_POST_MS = 300
 DEFAULT_NON_TRIGGERED_OVERRIDE_RMS_RATIO = 1.5
 DEFAULT_NON_TRIGGERED_OVERRIDE_MIN_SNR_MARGIN_DB = -3.0
+DEFAULT_CLARITY_ENGINE = "auto"
+DEFAULT_CLARITY_OVERRIDE_MARGIN = 0.10
+SIGMOS_MODEL_URL = (
+    "https://github.com/microsoft/SIG-Challenge/raw/main/ICASSP2024/sigmos/"
+    "model-sigmos_1697718653_41d092e8-epo-200.onnx"
+)
+SIGMOS_MODEL_FILENAME = "model-sigmos_1697718653_41d092e8-epo-200.onnx"
+CLARITY_MODEL_METRICS = frozenset(
+    {
+        "stoi",
+        "pesq",
+        "sisdr",
+        "sigmos_sig",
+        "sigmos_noise",
+        "sigmos_reverb",
+        "sigmos_ovrl",
+    }
+)
 MIN_NOISE_WINDOW_MS = 100
 
 
@@ -122,6 +141,15 @@ class DeviceMetrics:
     band_rms: float = 0.0
     band_snr_db: float = 0.0
     speech_band_ratio: float = 0.0
+    clarity_score: float = 0.0
+    clarity_rms: float = 0.0
+    clarity_stoi: float | None = None
+    clarity_pesq: float | None = None
+    clarity_sisdr: float | None = None
+    clarity_sigmos_sig: float | None = None
+    clarity_sigmos_noise: float | None = None
+    clarity_sigmos_reverb: float | None = None
+    clarity_sigmos_ovrl: float | None = None
 
     @property
     def triggered(self) -> bool:
@@ -151,6 +179,11 @@ class TrialResult:
     assistant_transcript: str = ""
     assistant_reply: str = ""
     assistant_error: str = ""
+    clarity_selected_device: str = ""
+    clarity_margin: float = 0.0
+    clarity_applied: bool = False
+    clarity_engine: str = ""
+    clarity_error: str = ""
 
 
 @dataclass(slots=True)
@@ -187,6 +220,27 @@ class ScoreWeights:
     rms: float = 0.25
     snr: float = 0.60
     late_penalty: float = 0.0
+
+
+@dataclass(frozen=True, slots=True)
+class ClarityWeights:
+    stoi: float = 0.20
+    sisdr: float = 0.15
+    sigmos_sig: float = 0.25
+    sigmos_noise: float = 0.10
+    sigmos_reverb: float = 0.10
+    rms: float = 0.20
+
+
+@dataclass(slots=True)
+class ClarityDecision:
+    selected_device: str
+    margin: float
+    clarity_selected_device: str = ""
+    clarity_margin: float = 0.0
+    clarity_applied: bool = False
+    clarity_engine: str = ""
+    clarity_error: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -747,6 +801,7 @@ def _add_collect_parser(subparsers) -> None:
     parser.add_argument("--rms-weight", type=float, default=0.25)
     parser.add_argument("--snr-weight", type=float, default=0.60)
     parser.add_argument("--late-penalty-weight", type=float, default=0.0)
+    _add_clarity_args(parser)
 
 
 def _add_free_parser(subparsers) -> None:
@@ -881,6 +936,34 @@ def _add_common_live_parser_args(parser, *, include_listen_seconds: bool = True)
     parser.add_argument("--rms-weight", type=float, default=0.25)
     parser.add_argument("--snr-weight", type=float, default=0.60)
     parser.add_argument("--late-penalty-weight", type=float, default=0.0)
+    _add_clarity_args(parser)
+
+
+def _add_clarity_args(parser) -> None:
+    parser.add_argument(
+        "--clarity-engine",
+        choices=["disabled", "auto", "squim", "sigmos", "squim-sigmos"],
+        default=DEFAULT_CLARITY_ENGINE,
+        help=(
+            "Optional second-stage speech clarity scorer for ch1 wake windows. "
+            "auto uses available SQUIM/SIGMOS models and falls back to the base score."
+        ),
+    )
+    parser.add_argument(
+        "--clarity-override-margin",
+        type=float,
+        default=DEFAULT_CLARITY_OVERRIDE_MARGIN,
+        help="Minimum pairwise clarity margin required to override the base winner.",
+    )
+    parser.add_argument(
+        "--clarity-allow-no-wake-override",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Allow clarity scoring to convert no_wake into a device. Off by default "
+            "so clarity cannot create a wake event by itself."
+        ),
+    )
 
 
 def _add_summarize_parser(subparsers) -> None:
@@ -915,6 +998,7 @@ def _run_collect(args) -> int:
         snr=args.snr_weight,
         late_penalty=args.late_penalty_weight,
     )
+    clarity_scorer = _clarity_scorer_from_args(args)
     run_dir = _create_run_dir(Path(args.output_dir))
     audio_dir = run_dir / "audio"
     if not args.no_wav:
@@ -928,6 +1012,7 @@ def _run_collect(args) -> int:
         channels=args.channels,
     )
     _write_run_config(run_dir, args, specs, positions, weights)
+    _prewarm_clarity_scorer(clarity_scorer, sample_rate=args.sample_rate)
     _configure_wake_proximity_logging(run_dir)
     _log_run_started("collect", run_dir, args, specs)
 
@@ -946,6 +1031,7 @@ def _run_collect(args) -> int:
                     models=models,
                     sd=sd,
                     weights=weights,
+                    clarity_scorer=clarity_scorer,
                     audio_dir=audio_dir if not args.no_wav else None,
                 )
                 results.append(result)
@@ -967,6 +1053,7 @@ def _run_free(args) -> int:
     specs = _device_specs_from_args(args)
     positions = [PositionSpec(name="free", expected_device="")]
     weights = _score_weights_from_args(args)
+    clarity_scorer = _clarity_scorer_from_args(args)
     run_dir = _create_run_dir(Path(args.output_dir))
     audio_dir = run_dir / "audio"
     if not args.no_wav:
@@ -980,6 +1067,7 @@ def _run_free(args) -> int:
         channels=args.channels,
     )
     _write_run_config(run_dir, args, specs, positions, weights)
+    _prewarm_clarity_scorer(clarity_scorer, sample_rate=args.sample_rate)
     _configure_wake_proximity_logging(run_dir)
     _log_run_started("free", run_dir, args, specs)
 
@@ -999,6 +1087,7 @@ def _run_free(args) -> int:
                 models=models,
                 sd=sd,
                 weights=weights,
+                clarity_scorer=clarity_scorer,
                 audio_dir=audio_dir if not args.no_wav else None,
                 prompt=False,
             )
@@ -1021,6 +1110,7 @@ def _run_e2e(args) -> int:
     specs = _device_specs_from_args(args)
     positions = parse_positions(args.positions)
     weights = _score_weights_from_args(args)
+    clarity_scorer = _clarity_scorer_from_args(args)
     run_dir = _create_run_dir(Path(args.output_dir))
     audio_dir = run_dir / "audio"
     if not args.no_wav:
@@ -1034,6 +1124,7 @@ def _run_e2e(args) -> int:
         channels=args.channels,
     )
     _write_run_config(run_dir, args, specs, positions, weights)
+    _prewarm_clarity_scorer(clarity_scorer, sample_rate=args.sample_rate)
     output_devices = {
         args.label_a: args.output_a,
         args.label_b: args.output_b,
@@ -1056,6 +1147,7 @@ def _run_e2e(args) -> int:
                     models=models,
                     sd=sd,
                     weights=weights,
+                    clarity_scorer=clarity_scorer,
                     audio_dir=audio_dir if not args.no_wav else None,
                 )
                 _play_selected_wake_ack(result, args=args, output_devices=output_devices)
@@ -1078,6 +1170,7 @@ def _run_wake_live(args) -> int:
     specs = _device_specs_from_args(args)
     positions = [PositionSpec(name="live", expected_device="")]
     weights = _score_weights_from_args(args)
+    clarity_scorer = _clarity_scorer_from_args(args)
     output_devices = _output_devices_from_args(args)
     run_dir = _create_run_dir(Path(args.output_dir))
     audio_dir = run_dir / "audio"
@@ -1092,6 +1185,7 @@ def _run_wake_live(args) -> int:
         channels=args.channels,
     )
     _write_run_config(run_dir, args, specs, positions, weights)
+    _prewarm_clarity_scorer(clarity_scorer, sample_rate=args.sample_rate)
     _configure_wake_proximity_logging(run_dir)
     _log_run_started("wake_live", run_dir, args, specs)
 
@@ -1110,6 +1204,7 @@ def _run_wake_live(args) -> int:
                 monitors=monitors,
                 event_queue=event_queue,
                 weights=weights,
+                clarity_scorer=clarity_scorer,
                 trial_id=len(results) + 1,
                 position=positions[0],
             )
@@ -1141,6 +1236,7 @@ def _run_prod_live(args) -> int:
     specs = _device_specs_from_args(args)
     positions = [PositionSpec(name="prod_live", expected_device="")]
     weights = _score_weights_from_args(args)
+    clarity_scorer = _clarity_scorer_from_args(args)
     output_devices = _output_devices_from_args(args)
     input_devices = {spec.label: spec.device for spec in specs}
     run_dir = _create_run_dir(Path(args.output_dir))
@@ -1156,6 +1252,7 @@ def _run_prod_live(args) -> int:
         channels=args.channels,
     )
     _write_run_config(run_dir, args, specs, positions, weights)
+    _prewarm_clarity_scorer(clarity_scorer, sample_rate=args.sample_rate)
     _configure_wake_proximity_logging(run_dir)
     _log_run_started("prod_live", run_dir, args, specs)
     log_event(
@@ -1230,6 +1327,7 @@ def _run_prod_live(args) -> int:
                 monitors=current_monitors,
                 event_queue=event_queue,
                 weights=weights,
+                clarity_scorer=clarity_scorer,
                 candidate=candidate,
                 trial_id=next_trial_id,
                 position=positions[0],
@@ -1406,6 +1504,7 @@ def _wait_for_live_wake(
     monitors: dict[str, _LiveDeviceMonitor],
     event_queue: queue.Queue[_LiveWakeCandidate],
     weights: ScoreWeights,
+    clarity_scorer: Any | None,
     trial_id: int,
     position: PositionSpec,
 ) -> LiveWakeResult:
@@ -1427,6 +1526,7 @@ def _wait_for_live_wake(
         specs=specs,
         monitors=monitors,
         weights=weights,
+        clarity_scorer=clarity_scorer,
         candidate=candidate,
         trial_id=trial_id,
         position=position,
@@ -1443,6 +1543,7 @@ def _build_live_wake_from_candidate(
     monitors: dict[str, _LiveDeviceMonitor],
     event_queue: queue.Queue[_LiveWakeCandidate],
     weights: ScoreWeights,
+    clarity_scorer: Any | None,
     candidate: _LiveWakeCandidate,
     trial_id: int,
     position: PositionSpec,
@@ -1463,6 +1564,7 @@ def _build_live_wake_from_candidate(
         specs=specs,
         monitors=monitors,
         weights=weights,
+        clarity_scorer=clarity_scorer,
         candidate=candidate,
         trial_id=trial_id,
         position=position,
@@ -1477,6 +1579,7 @@ def _build_live_wake_result(
     specs: list[DeviceSpec],
     monitors: dict[str, _LiveDeviceMonitor],
     weights: ScoreWeights,
+    clarity_scorer: Any | None,
     candidate: _LiveWakeCandidate,
     trial_id: int,
     position: PositionSpec,
@@ -1485,6 +1588,7 @@ def _build_live_wake_result(
 ) -> LiveWakeResult:
     devices: dict[str, DeviceMetrics] = {}
     wake_pcm_by_label: dict[str, bytes] = {}
+    proximity_window_pcm_by_label: dict[str, bytes] = {}
     noise_start_ms = max(0, global_start_ms - int(args.baseline_seconds * 1000))
     for spec in specs:
         monitor = monitors[spec.label]
@@ -1529,6 +1633,7 @@ def _build_live_wake_result(
             speech_band_ratio=segment_features["speech_band_ratio"],
         )
         devices[spec.label] = metrics
+        proximity_window_pcm_by_label[spec.label] = segment_pcm
         wake_pcm_by_label[spec.label] = monitor.wake_pcm_between(
             best_channel.channel,
             global_start_ms,
@@ -1549,6 +1654,18 @@ def _build_live_wake_result(
             args.non_triggered_override_min_snr_margin_db
         ),
     )
+    clarity_decision = apply_clarity_override(
+        devices,
+        proximity_window_pcm_by_label,
+        sample_rate=args.sample_rate,
+        selected_device=selected_device,
+        margin=margin,
+        scorer=clarity_scorer,
+        min_margin=args.clarity_override_margin,
+        allow_no_wake_override=args.clarity_allow_no_wake_override,
+    )
+    selected_device = clarity_decision.selected_device
+    margin = clarity_decision.margin
     correct = selected_device == position.expected_device if position.expected_device else None
     return LiveWakeResult(
         trial=TrialResult(
@@ -1567,6 +1684,11 @@ def _build_live_wake_result(
             trigger_source_device=candidate.label,
             global_wake_window_start_ms=global_start_ms,
             global_wake_window_end_ms=global_end_ms,
+            clarity_selected_device=clarity_decision.clarity_selected_device,
+            clarity_margin=clarity_decision.clarity_margin,
+            clarity_applied=clarity_decision.clarity_applied,
+            clarity_engine=clarity_decision.clarity_engine,
+            clarity_error=clarity_decision.clarity_error,
         ),
         wake_pcm_by_label=wake_pcm_by_label,
     )
@@ -1905,6 +2027,345 @@ def _score_weights_from_args(args) -> ScoreWeights:
     )
 
 
+def _clarity_scorer_from_args(args):
+    if getattr(args, "clarity_engine", "disabled") == "disabled":
+        return None
+    return SpeechClarityScorer(str(args.clarity_engine))
+
+
+def _prewarm_clarity_scorer(scorer, *, sample_rate: int) -> None:
+    if scorer is None:
+        return
+    silence = b"\0\0" * max(1, sample_rate)
+    scorer.score_pcm(silence, sample_rate, label="prewarm")
+    if getattr(scorer, "active_engines", None):
+        print(f"clarity scorer: {scorer.describe()}")
+    elif getattr(scorer, "error", ""):
+        print(f"clarity scorer unavailable: {scorer.error}")
+
+
+class SpeechClarityScorer:
+    def __init__(self, engine: str = DEFAULT_CLARITY_ENGINE):
+        self.engine = engine
+        self._torch = None
+        self._torchaudio_functional = None
+        self._squim_model = None
+        self._squim_error = ""
+        self._sigmos_error = ""
+        self._sigmos_session = None
+        self._sigmos_modules: dict[str, Any] = {}
+        self._sigmos_window = None
+        self.active_engines: set[str] = set()
+
+    def describe(self) -> str:
+        if self.active_engines:
+            return "+".join(sorted(self.active_engines))
+        return self.engine
+
+    def score_pcm(self, pcm: bytes, sample_rate: int, *, label: str = "") -> dict[str, float]:
+        del label
+        if not pcm:
+            return {}
+        scores = {"rms": _float_pcm16_rms(pcm)}
+        if self.engine in {"auto", "squim", "squim-sigmos"}:
+            scores.update(self._score_squim(pcm, sample_rate))
+        if self.engine in {"auto", "sigmos", "squim-sigmos"}:
+            scores.update(self._score_sigmos(pcm, sample_rate))
+        return scores
+
+    def _score_squim(self, pcm: bytes, sample_rate: int) -> dict[str, float]:
+        if self._squim_error:
+            return {}
+        try:
+            self._ensure_squim()
+            torch = self._torch
+            if torch is None or self._squim_model is None:
+                return {}
+            waveform = _pcm16_to_torch_waveform(pcm, torch)
+            if sample_rate != 16000:
+                waveform = self._torchaudio_functional.resample(
+                    waveform,
+                    sample_rate,
+                    16000,
+                )
+            with torch.inference_mode():
+                stoi, pesq, sisdr = self._squim_model(waveform)
+            self.active_engines.add("squim")
+            return {
+                "stoi": float(stoi.flatten()[0].item()),
+                "pesq": float(pesq.flatten()[0].item()),
+                "sisdr": float(sisdr.flatten()[0].item()),
+            }
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            self._squim_error = str(exc)
+            return {}
+
+    def _ensure_squim(self) -> None:
+        if self._squim_model is not None:
+            return
+        try:
+            import torch  # type: ignore[import-untyped]
+            import torchaudio.functional as torchaudio_functional  # type: ignore[import-untyped]
+            from torchaudio.pipelines import SQUIM_OBJECTIVE  # type: ignore[import-untyped]
+        except ImportError as exc:
+            raise RuntimeError(
+                "SQUIM clarity scoring requires torch and torchaudio. "
+                "Install the optional clarity dependencies."
+            ) from exc
+        self._torch = torch
+        self._torchaudio_functional = torchaudio_functional
+        self._squim_model = SQUIM_OBJECTIVE.get_model().eval()
+
+    def _score_sigmos(self, pcm: bytes, sample_rate: int) -> dict[str, float]:
+        if self._sigmos_error:
+            return {}
+        try:
+            self._ensure_sigmos()
+            modules = self._sigmos_modules
+            np = modules["numpy"]
+            scipy_fft = modules["scipy_fft"]
+            librosa = modules["librosa"]
+            audio = _pcm16_to_numpy_float(pcm, np)
+            if sample_rate != 48000:
+                audio = librosa.resample(
+                    audio,
+                    orig_sr=sample_rate,
+                    target_sr=48000,
+                    res_type="fft",
+                )
+            features = self._sigmos_features(audio, np, scipy_fft, librosa)
+            outputs = self._sigmos_session.run(  # type: ignore[union-attr]
+                None,
+                {input_info.name: features for input_info in self._sigmos_session.get_inputs()},
+            )[0][0]
+            self.active_engines.add("sigmos")
+            return {
+                "sigmos_col": float(outputs[0]),
+                "sigmos_disc": float(outputs[1]),
+                "sigmos_loud": float(outputs[2]),
+                "sigmos_noise": float(outputs[3]),
+                "sigmos_reverb": float(outputs[4]),
+                "sigmos_sig": float(outputs[5]),
+                "sigmos_ovrl": float(outputs[6]),
+            }
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            self._sigmos_error = str(exc)
+            return {}
+
+    def _ensure_sigmos(self) -> None:
+        if self._sigmos_session is not None:
+            return
+        try:
+            import librosa  # type: ignore[import-untyped]
+            import numpy as np  # type: ignore[import-untyped]
+            import onnxruntime as ort  # type: ignore[import-untyped]
+            import scipy.fft as scipy_fft  # type: ignore[import-untyped]
+        except ImportError as exc:
+            raise RuntimeError(
+                "SIGMOS clarity scoring requires numpy, scipy, librosa, and onnxruntime. "
+                "Install the optional clarity dependencies."
+            ) from exc
+        model_path = _ensure_sigmos_model()
+        options = ort.SessionOptions()
+        options.inter_op_num_threads = 1
+        options.intra_op_num_threads = 1
+        self._sigmos_session = ort.InferenceSession(
+            str(model_path),
+            options,
+            providers=["CPUExecutionProvider"],
+        )
+        self._sigmos_modules = {
+            "numpy": np,
+            "scipy_fft": scipy_fft,
+            "librosa": librosa,
+        }
+        self._sigmos_window = np.sqrt(np.hanning(961)[:-1]).astype(np.float32)
+
+    def _sigmos_features(self, audio, np, scipy_fft, librosa):
+        frame_size = 480
+        dft_size = 960
+        window = self._sigmos_window
+        last_frame = len(audio) % frame_size
+        if last_frame == 0:
+            last_frame = frame_size
+        padded = np.pad(audio, ((dft_size - frame_size, dft_size - last_frame),))
+        frames = librosa.util.frame(
+            padded,
+            frame_length=len(window),
+            hop_length=frame_size,
+            axis=0,
+        )
+        spec = scipy_fft.rfft(frames * window, n=dft_size).astype(np.complex64)
+        complex_features = spec.view(np.float32).reshape(spec.shape + (2,)).swapaxes(-1, -2)
+        power = np.maximum((complex_features * complex_features).sum(axis=-2, keepdims=True), 1e-12)
+        compressed = np.power(power, (0.3 - 1) / 2) * complex_features
+        magnitude = np.power(power, 0.3 / 2)
+        features = np.concatenate((magnitude, compressed), axis=-2)
+        return np.expand_dims(np.transpose(features, (1, 0, 2)), 0).astype(np.float32)
+
+    @property
+    def error(self) -> str:
+        errors = [error for error in (self._squim_error, self._sigmos_error) if error]
+        return " | ".join(errors)
+
+
+def _ensure_sigmos_model() -> Path:
+    model_dir = Path.home() / ".cache" / "voiceui_models" / "sigmos"
+    model_dir.mkdir(parents=True, exist_ok=True)
+    model_path = model_dir / SIGMOS_MODEL_FILENAME
+    if not model_path.exists():
+        urllib.request.urlretrieve(SIGMOS_MODEL_URL, model_path)  # noqa: S310
+    return model_path
+
+
+def apply_clarity_override(
+    devices: dict[str, DeviceMetrics],
+    proximity_window_pcm_by_label: dict[str, bytes],
+    *,
+    sample_rate: int,
+    selected_device: str,
+    margin: float,
+    scorer,
+    min_margin: float = DEFAULT_CLARITY_OVERRIDE_MARGIN,
+    allow_no_wake_override: bool = False,
+    weights: ClarityWeights | None = None,
+) -> ClarityDecision:
+    weights = weights or ClarityWeights()
+    decision = ClarityDecision(selected_device=selected_device, margin=margin)
+    if scorer is None:
+        return decision
+    if selected_device == "no_wake" and not allow_no_wake_override:
+        return decision
+
+    score_inputs: dict[str, dict[str, float]] = {}
+    for label, device in devices.items():
+        scores = scorer.score_pcm(
+            proximity_window_pcm_by_label.get(label, b""),
+            sample_rate,
+            label=label,
+        )
+        if scores:
+            _apply_device_clarity_metrics(device, scores)
+            score_inputs[label] = scores
+    if len(score_inputs) < 2:
+        decision.clarity_engine = _describe_clarity_scorer(scorer)
+        decision.clarity_error = getattr(scorer, "error", "")
+        return decision
+    if not _has_model_clarity_metrics(score_inputs):
+        decision.clarity_engine = _describe_clarity_scorer(scorer)
+        decision.clarity_error = getattr(scorer, "error", "")
+        return decision
+
+    clarity_scores = _pairwise_clarity_scores(score_inputs, weights)
+    for label, clarity_score in clarity_scores.items():
+        devices[label].clarity_score = clarity_score
+    ordered = sorted(clarity_scores, key=clarity_scores.get, reverse=True)
+    clarity_selected = ordered[0]
+    clarity_margin = (
+        clarity_scores[ordered[0]] - clarity_scores[ordered[1]]
+        if len(ordered) > 1
+        else clarity_scores[ordered[0]]
+    )
+    decision.clarity_selected_device = clarity_selected
+    decision.clarity_margin = clarity_margin
+    decision.clarity_engine = _describe_clarity_scorer(scorer)
+    decision.clarity_error = getattr(scorer, "error", "")
+    if clarity_selected != selected_device and clarity_margin >= max(0.0, min_margin):
+        decision.selected_device = clarity_selected
+        decision.margin = clarity_margin
+        decision.clarity_applied = True
+    return decision
+
+
+def _has_model_clarity_metrics(score_inputs: dict[str, dict[str, float]]) -> bool:
+    return any(
+        CLARITY_MODEL_METRICS.intersection(scores)
+        for scores in score_inputs.values()
+    )
+
+
+def _pairwise_clarity_scores(
+    score_inputs: dict[str, dict[str, float]],
+    weights: ClarityWeights,
+) -> dict[str, float]:
+    configured_weights = asdict(weights)
+    available_weights = {
+        metric: weight
+        for metric, weight in configured_weights.items()
+        if weight > 0 and any(metric in scores for scores in score_inputs.values())
+    }
+    total_weight = sum(available_weights.values())
+    if total_weight <= 0:
+        return {label: 0.0 for label in score_inputs}
+
+    totals = {label: 0.0 for label in score_inputs}
+    for metric, weight in available_weights.items():
+        values = [
+            score_inputs[label].get(metric)
+            for label in score_inputs
+            if metric in score_inputs[label]
+        ]
+        if not values:
+            continue
+        minimum = min(values)
+        maximum = max(values)
+        for label, scores in score_inputs.items():
+            value = scores.get(metric)
+            if value is None:
+                normalized = 0.0
+            elif maximum == minimum:
+                normalized = 0.5
+            else:
+                normalized = (value - minimum) / (maximum - minimum)
+            totals[label] += (weight / total_weight) * normalized
+    return totals
+
+
+def _apply_device_clarity_metrics(device: DeviceMetrics, scores: dict[str, float]) -> None:
+    device.clarity_rms = scores.get("rms", 0.0)
+    device.clarity_stoi = scores.get("stoi")
+    device.clarity_pesq = scores.get("pesq")
+    device.clarity_sisdr = scores.get("sisdr")
+    device.clarity_sigmos_sig = scores.get("sigmos_sig")
+    device.clarity_sigmos_noise = scores.get("sigmos_noise")
+    device.clarity_sigmos_reverb = scores.get("sigmos_reverb")
+    device.clarity_sigmos_ovrl = scores.get("sigmos_ovrl")
+
+
+def _describe_clarity_scorer(scorer) -> str:
+    describe = getattr(scorer, "describe", None)
+    if callable(describe):
+        return str(describe())
+    return str(getattr(scorer, "engine", "custom"))
+
+
+def _pcm16_to_numpy_float(pcm: bytes, np):
+    if not pcm:
+        return np.zeros(0, dtype=np.float32)
+    return np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768.0
+
+
+def _pcm16_to_torch_waveform(pcm: bytes, torch):
+    import numpy as np  # type: ignore[import-untyped]
+
+    samples = _pcm16_to_numpy_float(pcm, np)
+    return torch.from_numpy(samples).unsqueeze(0)
+
+
+def _float_pcm16_rms(pcm: bytes) -> float:
+    if not pcm:
+        return 0.0
+    total = 0.0
+    count = 0
+    for index in range(0, len(pcm) - 1, 2):
+        sample = int.from_bytes(pcm[index:index + 2], "little", signed=True) / 32768.0
+        total += sample * sample
+        count += 1
+    if count == 0:
+        return 0.0
+    return math.sqrt(total / count)
+
+
 def _output_devices_from_args(args) -> dict[str, str | int | None]:
     return {
         args.label_a: args.output_a,
@@ -1975,6 +2436,7 @@ def _run_one_trial(
     models: dict[str, dict[int, Any]],
     sd,
     weights: ScoreWeights,
+    clarity_scorer: Any | None,
     audio_dir: Path | None,
     prompt: bool = True,
 ) -> TrialResult:
@@ -2068,6 +2530,18 @@ def _run_one_trial(
             args.non_triggered_override_min_snr_margin_db
         ),
     )
+    clarity_decision = apply_clarity_override(
+        typed_devices,
+        proximity_window_pcm_by_label,
+        sample_rate=args.sample_rate,
+        selected_device=selected_device,
+        margin=margin,
+        scorer=clarity_scorer,
+        min_margin=args.clarity_override_margin,
+        allow_no_wake_override=args.clarity_allow_no_wake_override,
+    )
+    selected_device = clarity_decision.selected_device
+    margin = clarity_decision.margin
     correct = (
         selected_device == position.expected_device
         if position.expected_device
@@ -2110,6 +2584,11 @@ def _run_one_trial(
         trigger_source_device=trigger_source_device,
         global_wake_window_start_ms=global_wake_window_start_ms,
         global_wake_window_end_ms=global_wake_window_end_ms,
+        clarity_selected_device=clarity_decision.clarity_selected_device,
+        clarity_margin=clarity_decision.clarity_margin,
+        clarity_applied=clarity_decision.clarity_applied,
+        clarity_engine=clarity_decision.clarity_engine,
+        clarity_error=clarity_decision.clarity_error,
     )
 
 
@@ -2469,6 +2948,15 @@ def trial_from_dict(data: dict[str, Any]) -> TrialResult:
         copied.setdefault("band_rms", copied.get("peak_rms", 0.0))
         copied.setdefault("band_snr_db", copied.get("snr_db", 0.0))
         copied.setdefault("speech_band_ratio", 0.0)
+        copied.setdefault("clarity_score", 0.0)
+        copied.setdefault("clarity_rms", 0.0)
+        copied.setdefault("clarity_stoi", None)
+        copied.setdefault("clarity_pesq", None)
+        copied.setdefault("clarity_sisdr", None)
+        copied.setdefault("clarity_sigmos_sig", None)
+        copied.setdefault("clarity_sigmos_noise", None)
+        copied.setdefault("clarity_sigmos_reverb", None)
+        copied.setdefault("clarity_sigmos_ovrl", None)
         copied["channel_metrics"] = {
             str(channel): ChannelMetrics(
                 **{
@@ -2501,6 +2989,11 @@ def trial_from_dict(data: dict[str, Any]) -> TrialResult:
         assistant_transcript=str(data.get("assistant_transcript") or ""),
         assistant_reply=str(data.get("assistant_reply") or ""),
         assistant_error=str(data.get("assistant_error") or ""),
+        clarity_selected_device=str(data.get("clarity_selected_device") or ""),
+        clarity_margin=float(data.get("clarity_margin") or 0.0),
+        clarity_applied=bool(data.get("clarity_applied") or False),
+        clarity_engine=str(data.get("clarity_engine") or ""),
+        clarity_error=str(data.get("clarity_error") or ""),
     )
 
 
@@ -2526,6 +3019,11 @@ def trial_to_csv_row(result: TrialResult, labels: list[str]) -> dict[str, Any]:
         "assistant_transcript": result.assistant_transcript,
         "assistant_reply": result.assistant_reply,
         "assistant_error": result.assistant_error,
+        "clarity_selected_device": result.clarity_selected_device,
+        "clarity_margin": f"{result.clarity_margin:.4f}",
+        "clarity_applied": int(result.clarity_applied),
+        "clarity_engine": result.clarity_engine,
+        "clarity_error": result.clarity_error,
     }
     for label in labels:
         metrics = result.devices[label]
@@ -2549,6 +3047,27 @@ def trial_to_csv_row(result: TrialResult, labels: list[str]) -> dict[str, Any]:
                 f"{label}_band_rms": f"{metrics.band_rms:.2f}",
                 f"{label}_band_snr_db": f"{metrics.band_snr_db:.2f}",
                 f"{label}_speech_band_ratio": f"{metrics.speech_band_ratio:.4f}",
+                f"{label}_clarity_score": f"{metrics.clarity_score:.4f}",
+                f"{label}_clarity_rms": f"{metrics.clarity_rms:.6f}",
+                f"{label}_clarity_stoi": _format_optional_float(metrics.clarity_stoi, 4),
+                f"{label}_clarity_pesq": _format_optional_float(metrics.clarity_pesq, 4),
+                f"{label}_clarity_sisdr": _format_optional_float(metrics.clarity_sisdr, 4),
+                f"{label}_clarity_sigmos_sig": _format_optional_float(
+                    metrics.clarity_sigmos_sig,
+                    4,
+                ),
+                f"{label}_clarity_sigmos_noise": _format_optional_float(
+                    metrics.clarity_sigmos_noise,
+                    4,
+                ),
+                f"{label}_clarity_sigmos_reverb": _format_optional_float(
+                    metrics.clarity_sigmos_reverb,
+                    4,
+                ),
+                f"{label}_clarity_sigmos_ovrl": _format_optional_float(
+                    metrics.clarity_sigmos_ovrl,
+                    4,
+                ),
                 f"{label}_wake_window_start_ms": metrics.wake_window_start_ms,
                 f"{label}_wake_window_end_ms": metrics.wake_window_end_ms,
                 f"{label}_segment_duration_ms": metrics.segment_duration_ms,
@@ -2594,6 +3113,12 @@ def _run_summarize(args) -> int:
     summary = summarize_trial_results(results)
     print_summary(summary)
     return 0
+
+
+def _format_optional_float(value: float | None, digits: int) -> str:
+    if value is None:
+        return ""
+    return f"{value:.{digits}f}"
 
 
 def _load_openwakeword_model(model: str, inference_framework: str):
@@ -2761,6 +3286,18 @@ def _print_trial_result(result: TrialResult) -> None:
             reply=result.assistant_reply or "<empty>",
             error=result.assistant_error or "none",
         )
+    if result.clarity_selected_device or result.clarity_error:
+        log_event(
+            "wake_proximity",
+            "clarity_result",
+            log_id="wake_proximity.clarity_result",
+            trial_id=result.trial_id,
+            selected_device=result.clarity_selected_device or "none",
+            margin=f"{result.clarity_margin:.3f}",
+            applied=result.clarity_applied,
+            engine=result.clarity_engine or "none",
+            error=result.clarity_error or "none",
+        )
     for label, metrics in result.devices.items():
         log_event(
             "wake_proximity",
@@ -2774,6 +3311,7 @@ def _print_trial_result(result: TrialResult) -> None:
             confidence=f"{metrics.best_confidence:.3f}",
             band_rms=f"{metrics.band_rms:.1f}",
             band_snr_db=f"{metrics.band_snr_db:.1f}",
+            clarity=f"{metrics.clarity_score:.3f}",
             wake_window_start_ms=metrics.wake_window_start_ms,
             wake_window_end_ms=metrics.wake_window_end_ms,
             trigger_ms=metrics.first_trigger_ms,
@@ -2802,6 +3340,11 @@ def _csv_fieldnames(labels: list[str]) -> list[str]:
         "assistant_transcript",
         "assistant_reply",
         "assistant_error",
+        "clarity_selected_device",
+        "clarity_margin",
+        "clarity_applied",
+        "clarity_engine",
+        "clarity_error",
     ]
     per_device = [
         "score",
@@ -2820,6 +3363,15 @@ def _csv_fieldnames(labels: list[str]) -> list[str]:
         "band_rms",
         "band_snr_db",
         "speech_band_ratio",
+        "clarity_score",
+        "clarity_rms",
+        "clarity_stoi",
+        "clarity_pesq",
+        "clarity_sisdr",
+        "clarity_sigmos_sig",
+        "clarity_sigmos_noise",
+        "clarity_sigmos_reverb",
+        "clarity_sigmos_ovrl",
         "wake_window_start_ms",
         "wake_window_end_ms",
         "segment_duration_ms",
