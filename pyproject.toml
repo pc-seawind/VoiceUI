@@ -19,6 +19,14 @@ demo = [
   "silero-vad>=5.1.0"
 ]
 wake = ["openwakeword>=0.6.0", "onnxruntime>=1.16.0", "numpy>=1.26.0"]
+clarity = [
+  "torch>=2.0.0",
+  "torchaudio>=2.0.0",
+  "onnxruntime>=1.16.0",
+  "numpy>=1.26.0",
+  "scipy>=1.11.0",
+  "librosa>=0.10.0"
+]
 stt = ["faster-whisper>=1.0.0"]
 aliyun = [
   "aliyun-python-sdk-core>=2.16.0",

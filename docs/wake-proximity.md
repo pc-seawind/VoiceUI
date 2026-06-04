@@ -56,6 +56,24 @@ XVF3800 的 WASAPI 输入是 2 通道：
 
 如果只有远端 ch0 触发，但近端 ch1 语音证据明显更强，允许近端胜出。前提是至少有一端真实触发 ch0；如果没有任何设备触发，结果是 `no_wake`。
 
+### 清晰度二级仲裁
+
+基础 RMS/SNR 仲裁之后，会再跑一层可选的语音清晰度仲裁。该层只使用同一个 wake window 内的 ch1 原始音频，默认 `--clarity-engine auto`：
+
+- SQUIM: 估计 `STOI`、`PESQ`、`SI-SDR`，用于判断可懂度和信号质量。
+- SIGMOS: 估计 `SIG`、`NOISE`、`REVERB`、`OVRL`，用于判断语音信号、噪声和混响质量。
+- ch1 RMS: 保留原始能量证据，避免模型把“很安静但没录清楚”的远端通道误判为更好。
+
+组合分数默认使用 `STOI + SI-SDR + SIGMOS(SIG/NOISE/REVERB) + RMS`。当清晰度候选和基础 winner 不一致，并且 `--clarity-override-margin` 达到默认 `0.10` 时，清晰度结果会覆盖基础 winner。
+
+清晰度层默认不会把 `no_wake` 变成某个设备，也就是说它不能凭空制造唤醒，只能在已经有设备唤醒后修正选错端的问题。需要离线实验时可以加 `--clarity-allow-no-wake-override`。
+
+如果新机器没有安装模型依赖，清晰度层会自动退回基础 RMS/SNR 仲裁。需要显式安装时使用：
+
+```powershell
+pip install -e ".[clarity]"
+```
+
 ## 纯唤醒 live 测试
 
 运行：

@@ -12,12 +12,14 @@ from voiceui.wake_proximity import (
     DEFAULT_PROXIMITY_CHANNEL,
     DEFAULT_RAW_PROXIMITY_CHANNEL,
     DEFAULT_WAKE_CHANNEL,
+    ClarityWeights,
     DeviceMetrics,
     ScoreWeights,
     TrialResult,
     _parse_channel_candidates,
     _production_config_for_selected_device,
     append_trial_jsonl,
+    apply_clarity_override,
     apply_global_wake_window,
     apply_scores,
     parse_positions,
@@ -205,6 +207,101 @@ class WakeProximityTests(unittest.TestCase):
         self.assertEqual(winner, "no_wake")
         self.assertEqual(margin, 0)
 
+    def test_clarity_override_can_replace_base_winner(self) -> None:
+        devices = {
+            "xvf1": _metrics("xvf1", confidence=0.9, peak_rms=1800, snr_db=18),
+            "xvf2": _metrics("xvf2", confidence=0.8, peak_rms=1200, snr_db=14),
+        }
+        apply_scores(devices, ScoreWeights(), threshold=0.5, listen_seconds=5)
+        selected, margin = select_winner(devices, require_trigger=False)
+
+        decision = apply_clarity_override(
+            devices,
+            {"xvf1": b"1", "xvf2": b"2"},
+            sample_rate=16000,
+            selected_device=selected,
+            margin=margin,
+            scorer=_FakeClarityScorer(
+                {
+                    "xvf1": {
+                        "stoi": 0.20,
+                        "sisdr": -12.0,
+                        "sigmos_sig": 2.2,
+                        "sigmos_noise": 2.1,
+                        "sigmos_reverb": 3.0,
+                        "rms": 0.02,
+                    },
+                    "xvf2": {
+                        "stoi": 0.80,
+                        "sisdr": 4.0,
+                        "sigmos_sig": 3.7,
+                        "sigmos_noise": 3.0,
+                        "sigmos_reverb": 4.0,
+                        "rms": 0.04,
+                    },
+                }
+            ),
+            min_margin=0.1,
+            weights=ClarityWeights(),
+        )
+
+        self.assertEqual(selected, "xvf1")
+        self.assertEqual(decision.selected_device, "xvf2")
+        self.assertEqual(decision.clarity_selected_device, "xvf2")
+        self.assertTrue(decision.clarity_applied)
+        self.assertGreater(devices["xvf2"].clarity_score, devices["xvf1"].clarity_score)
+        self.assertEqual(devices["xvf2"].clarity_stoi, 0.80)
+
+    def test_clarity_override_does_not_create_wake_by_default(self) -> None:
+        devices = {
+            "xvf1": _metrics("xvf1", confidence=0.2, peak_rms=1800, snr_db=18),
+            "xvf2": _metrics("xvf2", confidence=0.3, peak_rms=1200, snr_db=14),
+        }
+
+        decision = apply_clarity_override(
+            devices,
+            {"xvf1": b"1", "xvf2": b"2"},
+            sample_rate=16000,
+            selected_device="no_wake",
+            margin=0.0,
+            scorer=_FakeClarityScorer(
+                {
+                    "xvf1": {"stoi": 0.20, "rms": 0.02},
+                    "xvf2": {"stoi": 0.90, "rms": 0.04},
+                }
+            ),
+            min_margin=0.1,
+        )
+
+        self.assertEqual(decision.selected_device, "no_wake")
+        self.assertFalse(decision.clarity_applied)
+        self.assertEqual(devices["xvf2"].clarity_score, 0)
+
+    def test_clarity_override_requires_model_metric(self) -> None:
+        devices = {
+            "xvf1": _metrics("xvf1", confidence=0.9, peak_rms=1800, snr_db=18),
+            "xvf2": _metrics("xvf2", confidence=0.8, peak_rms=1200, snr_db=14),
+        }
+
+        decision = apply_clarity_override(
+            devices,
+            {"xvf1": b"1", "xvf2": b"2"},
+            sample_rate=16000,
+            selected_device="xvf1",
+            margin=0.2,
+            scorer=_FakeClarityScorer(
+                {
+                    "xvf1": {"rms": 0.01},
+                    "xvf2": {"rms": 0.90},
+                }
+            ),
+            min_margin=0.1,
+        )
+
+        self.assertEqual(decision.selected_device, "xvf1")
+        self.assertFalse(decision.clarity_applied)
+        self.assertEqual(devices["xvf2"].clarity_score, 0)
+
     def test_global_wake_window_recomputes_all_raw_channel_features(self) -> None:
         devices = {
             "xvf1": _metrics("xvf1", confidence=0.8, peak_rms=100, snr_db=6),
@@ -276,6 +373,8 @@ class WakeProximityTests(unittest.TestCase):
         self.assertIn("trigger_source_device", csv_text)
         self.assertIn("ack_output_device", csv_text)
         self.assertIn("assistant_transcript", csv_text)
+        self.assertIn("clarity_selected_device", csv_text)
+        self.assertIn("xvf1_clarity_score", csv_text)
         self.assertIn("near_xvf1", csv_text)
 
 
@@ -351,6 +450,21 @@ def _pcm(samples: list[int]) -> bytes:
         sample.to_bytes(2, "little", signed=True)
         for sample in samples
     )
+
+
+class _FakeClarityScorer:
+    engine = "fake"
+
+    def __init__(self, scores: dict[str, dict[str, float]]):
+        self.scores = scores
+        self.error = ""
+
+    def describe(self) -> str:
+        return "fake"
+
+    def score_pcm(self, pcm: bytes, sample_rate: int, *, label: str = "") -> dict[str, float]:
+        del pcm, sample_rate
+        return dict(self.scores[label])
 
 
 if __name__ == "__main__":
