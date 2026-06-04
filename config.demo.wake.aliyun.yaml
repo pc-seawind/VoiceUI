@@ -153,8 +153,13 @@ home_assistant:
 debug:
   enabled: true
   output_dir: debug_sessions
-  save_audio: true
+  save_audio: false
   save_metadata: true
   system_input_dump_enabled: true
   system_input_dump_segment_seconds: 30
   voice_path_dump_enabled: true
+
+logging:
+  continuous:
+    tts.limiter: true
+    music.limiter: true
