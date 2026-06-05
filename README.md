@@ -230,6 +230,18 @@ For long-running production use on this Windows host, start the service entry:
 .\voiceui_service.cmd
 ```
 
+Install the repository root into the current user's PATH once:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install_voiceui_path.ps1
+```
+
+After opening a new `cmd` window, the service can be started from anywhere with:
+
+```cmd
+VoiceUI
+```
+
 The command runs:
 
 ```powershell
