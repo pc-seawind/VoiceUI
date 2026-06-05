@@ -7,6 +7,7 @@ from collections.abc import Iterator
 
 from voiceui.audio import RecordingAudioInput, create_audio_input
 from voiceui.audio_dump import AudioDumpManager, configure_audio_dump
+from voiceui.cron import CronScheduler
 from voiceui.debug import DebugRecorder, TurnDebugData
 from voiceui.home_assistant import HomeAssistantClient
 from voiceui.llm import create_chat_client
@@ -154,10 +155,20 @@ class VoiceAssistant:
         self._pending_barge_transcript: str | None = None
         self._pending_barge_stt_ms = 0
         self._pending_barge_stt_extra_timings: dict[str, int] = {}
+        self._turn_lock = threading.RLock()
         if audio_enabled:
             self._warm_up_audio_path()
         self._print_barge_in_config()
         self._start_weather_cache_warmup()
+
+    def _create_cron_scheduler(self) -> CronScheduler | None:
+        if not self.config.cron.enabled:
+            return None
+
+        def run_job(job) -> None:
+            self.run_text_turn(job.text)
+
+        return CronScheduler(self.config.cron, run_job)
 
     def close(self) -> None:
         self.audio_dump.stop_system_input_dump()
@@ -212,16 +223,17 @@ class VoiceAssistant:
         thread.start()
 
     def run_text_turn(self, text: str) -> AssistantReply:
-        transcript = text.strip()
-        if not transcript:
-            return AssistantReply(text="I did not hear anything.", routed_to="system")
+        with self._turn_lock:
+            transcript = text.strip()
+            if not transcript:
+                return AssistantReply(text="I did not hear anything.", routed_to="system")
 
-        turn_index = self.audio_dump.begin_turn()
-        try:
-            reply, _timings = self._complete_transcript(transcript)
-            return reply
-        finally:
-            self.audio_dump.end_turn(turn_index)
+            turn_index = self.audio_dump.begin_turn()
+            try:
+                reply, _timings = self._complete_transcript(transcript)
+                return reply
+            finally:
+                self.audio_dump.end_turn(turn_index)
 
     def _complete_transcript(self, transcript: str) -> tuple[AssistantReply, dict[str, int]]:
         self.session.add_user(transcript)
@@ -1361,19 +1373,20 @@ class VoiceAssistant:
 
         try:
             wake, wake_ms = self._wait_for_wake()
-            self._duck_music("conversation")
-            try:
-                turn_index = self.audio_dump.begin_turn()
-                wake_ack_handle = self._start_wake_ack()
-                reply, _transcript = self._run_audio_turn(
-                    wake,
-                    wake_ms,
-                    wake_ack_handle=wake_ack_handle,
-                    turn_index=turn_index,
-                )
-                return reply
-            finally:
-                self._unduck_music("conversation")
+            with self._turn_lock:
+                self._duck_music("conversation")
+                try:
+                    turn_index = self.audio_dump.begin_turn()
+                    wake_ack_handle = self._start_wake_ack()
+                    reply, _transcript = self._run_audio_turn(
+                        wake,
+                        wake_ms,
+                        wake_ack_handle=wake_ack_handle,
+                        turn_index=turn_index,
+                    )
+                    return reply
+                finally:
+                    self._unduck_music("conversation")
         finally:
             self.close()
 
@@ -1388,76 +1401,80 @@ class VoiceAssistant:
 
         try:
             wake, wake_ms = self._wait_for_wake()
-            self._duck_music("conversation")
-            try:
-                turn_index = self.audio_dump.begin_turn()
-                wake_ack_handle = self._start_wake_ack()
-                self.session.reset()
-                reply, transcript = self._run_audio_turn(
-                    wake,
-                    wake_ms,
-                    wake_ack_handle=wake_ack_handle,
-                    turn_index=turn_index,
-                )
-                follow_up_seconds = self.config.conversation.follow_up_seconds
-                if (
-                    follow_up_seconds <= 0 or not transcript
-                ) and self._pending_barge_utterance is None:
-                    return reply
-
-                while True:
-                    if self._pending_barge_utterance is None:
-                        if follow_up_seconds <= 0:
-                            return reply
-                        log_event(
-                            "session",
-                            "listening_for_follow_up",
-                            log_id="session.listening_for_follow_up",
-                            seconds=follow_up_seconds,
-                        )
-                        speech_start_timeout_seconds = follow_up_seconds
-                    else:
-                        log_event(
-                            "session",
-                            "processing_barge_in",
-                            log_id="session.processing_barge_in",
-                        )
-                        speech_start_timeout_seconds = 0.0
-                    follow_up_wake = WakeEvent(
-                        engine="follow_up",
-                        confidence=1.0,
-                        label="no_wake",
+            with self._turn_lock:
+                self._duck_music("conversation")
+                try:
+                    turn_index = self.audio_dump.begin_turn()
+                    wake_ack_handle = self._start_wake_ack()
+                    self.session.reset()
+                    reply, transcript = self._run_audio_turn(
+                        wake,
+                        wake_ms,
+                        wake_ack_handle=wake_ack_handle,
+                        turn_index=turn_index,
                     )
-                    try:
-                        reply, transcript = self._run_audio_turn(
-                            follow_up_wake,
-                            wake_ms=0,
-                            speech_start_timeout_seconds=speech_start_timeout_seconds,
-                        )
-                    except SpeechStartTimeoutError:
-                        log_event(
-                            "session",
-                            "follow_up_timeout",
-                            log_id="session.follow_up_timeout",
-                            next_state="returning_to_wake",
-                        )
+                    follow_up_seconds = self.config.conversation.follow_up_seconds
+                    if (
+                        follow_up_seconds <= 0 or not transcript
+                    ) and self._pending_barge_utterance is None:
                         return reply
-                    if not transcript:
-                        log_event(
-                            "session",
-                            "empty_follow_up",
-                            log_id="session.empty_follow_up",
-                            next_state="returning_to_wake",
+
+                    while True:
+                        if self._pending_barge_utterance is None:
+                            if follow_up_seconds <= 0:
+                                return reply
+                            log_event(
+                                "session",
+                                "listening_for_follow_up",
+                                log_id="session.listening_for_follow_up",
+                                seconds=follow_up_seconds,
+                            )
+                            speech_start_timeout_seconds = follow_up_seconds
+                        else:
+                            log_event(
+                                "session",
+                                "processing_barge_in",
+                                log_id="session.processing_barge_in",
+                            )
+                            speech_start_timeout_seconds = 0.0
+                        follow_up_wake = WakeEvent(
+                            engine="follow_up",
+                            confidence=1.0,
+                            label="no_wake",
                         )
-                        return reply
-            finally:
-                self._unduck_music("conversation")
+                        try:
+                            reply, transcript = self._run_audio_turn(
+                                follow_up_wake,
+                                wake_ms=0,
+                                speech_start_timeout_seconds=speech_start_timeout_seconds,
+                            )
+                        except SpeechStartTimeoutError:
+                            log_event(
+                                "session",
+                                "follow_up_timeout",
+                                log_id="session.follow_up_timeout",
+                                next_state="returning_to_wake",
+                            )
+                            return reply
+                        if not transcript:
+                            log_event(
+                                "session",
+                                "empty_follow_up",
+                                log_id="session.empty_follow_up",
+                                next_state="returning_to_wake",
+                            )
+                            return reply
+                finally:
+                    self._unduck_music("conversation")
         finally:
             if not keep_audio_dump_running:
                 self.close()
 
     def run_forever(self) -> None:
         self._start_system_input_dump()
+        cron_scheduler = self._create_cron_scheduler()
+        if cron_scheduler is not None:
+            cron_scheduler.start()
         try:
             while True:
                 try:
@@ -1468,6 +1485,8 @@ class VoiceAssistant:
                     log_event("error", "runtime", log_id="error.runtime", error=exc)
                     time.sleep(1)
         finally:
+            if cron_scheduler is not None:
+                cron_scheduler.stop()
             self.close()
 
 

@@ -73,6 +73,18 @@ conversation:
   follow_up_seconds: 10
   max_turns: 12
 
+cron:
+  enabled: false
+  poll_seconds: 1
+  jobs:
+    # schedule uses standard 5-field cron: minute hour day-of-month month day-of-week.
+    # timezone is optional; leave empty to use the system local timezone.
+    - id: morning_weather
+      enabled: false
+      schedule: "0 7 * * *"
+      timezone: ""
+      text: "Tell me today's weather."
+
 home_assistant:
   enabled: false
   url: http://homeassistant.local:8123

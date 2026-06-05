@@ -5,6 +5,8 @@ import unittest
 from voiceui.config import load_config
 from voiceui.models import (
     AudioConfig,
+    CronConfig,
+    CronJobConfig,
     InputConfig,
     LlmConfig,
     LoggingConfig,
@@ -38,6 +40,8 @@ class ConfigTests(unittest.TestCase):
         self.assertIsInstance(config.audio, AudioConfig)
         self.assertEqual(config.input.mode, "text")
         self.assertEqual(config.wake.debug_audio_seconds, 5.0)
+        self.assertIsInstance(config.cron, CronConfig)
+        self.assertFalse(config.cron.enabled)
         self.assertIsInstance(config.logging, LoggingConfig)
         self.assertTrue(config.logging.enabled)
 
@@ -65,6 +69,13 @@ class ConfigTests(unittest.TestCase):
         self.assertFalse(config.tools.allow_music)
         self.assertFalse(config.tools.allow_miot)
         self.assertFalse(config.tools.allow_search)
+        self.assertIsInstance(config.cron, CronConfig)
+        self.assertFalse(config.cron.enabled)
+        self.assertEqual(len(config.cron.jobs), 1)
+        self.assertIsInstance(config.cron.jobs[0], CronJobConfig)
+        self.assertEqual(config.cron.jobs[0].id, "morning_weather")
+        self.assertEqual(config.cron.jobs[0].schedule, "0 7 * * *")
+        self.assertFalse(config.cron.jobs[0].enabled)
         self.assertIsInstance(config.music, MusicConfig)
         self.assertEqual(config.music.provider, "disabled")
         self.assertEqual(config.music.server, "netease")

@@ -147,6 +147,22 @@ class ConversationConfig:
 
 
 @dataclass(slots=True)
+class CronJobConfig:
+    id: str = ""
+    schedule: str = ""
+    text: str = ""
+    enabled: bool = True
+    timezone: str = ""
+
+
+@dataclass(slots=True)
+class CronConfig:
+    enabled: bool = False
+    poll_seconds: float = 1.0
+    jobs: list[CronJobConfig] = field(default_factory=list)
+
+
+@dataclass(slots=True)
 class HomeAssistantConfig:
     enabled: bool = False
     url: str = "http://homeassistant.local:8123"
@@ -255,6 +271,7 @@ class AssistantConfig:
     llm: LlmConfig = field(default_factory=LlmConfig)
     tts: TtsConfig = field(default_factory=TtsConfig)
     conversation: ConversationConfig = field(default_factory=ConversationConfig)
+    cron: CronConfig = field(default_factory=CronConfig)
     home_assistant: HomeAssistantConfig = field(default_factory=HomeAssistantConfig)
     music: MusicConfig = field(default_factory=MusicConfig)
     search: SearchConfig = field(default_factory=SearchConfig)

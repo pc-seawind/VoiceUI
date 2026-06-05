@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
+import types
 from dataclasses import asdict, fields, is_dataclass
 from pathlib import Path
-from typing import Any, TypeVar, get_args, get_origin, get_type_hints
+from typing import Any, TypeVar, Union, get_args, get_origin, get_type_hints
 
 from voiceui.models import AssistantConfig
 
@@ -67,17 +68,30 @@ def _from_mapping(cls: type[T], mapping: dict[str, Any]) -> T:
         if item.name not in mapping:
             continue
         value = mapping[item.name]
-        target_type = _resolve_type(type_hints.get(item.name, item.type))
-        if is_dataclass(target_type) and isinstance(value, dict):
-            values[item.name] = _from_mapping(target_type, value)
-        else:
-            values[item.name] = value
+        target_type = type_hints.get(item.name, item.type)
+        values[item.name] = _from_value(target_type, value)
     return cls(**values)  # type: ignore[misc]
+
+
+def _from_value(annotation: Any, value: Any) -> Any:
+    target_type = _resolve_type(annotation)
+    if is_dataclass(target_type) and isinstance(value, dict):
+        return _from_mapping(target_type, value)
+
+    origin = get_origin(target_type)
+    if origin in {list, tuple} and isinstance(value, list):
+        args = get_args(target_type)
+        if not args:
+            return value
+        item_type = args[0]
+        return [_from_value(item_type, item) for item in value]
+
+    return value
 
 
 def _resolve_type(annotation: Any) -> Any:
     origin = get_origin(annotation)
-    if origin is None:
+    if origin not in {Union, types.UnionType}:
         return annotation
     args = [arg for arg in get_args(annotation) if arg is not type(None)]
     return args[0] if len(args) == 1 else annotation
