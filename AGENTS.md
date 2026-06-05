@@ -21,6 +21,9 @@ this repository.
   records.
 - Continuous logs, such as wake scores and limiters, must default to off unless
   they are explicitly enabled by config or CLI flags.
+- Production service mode uses `stdout_mode="errors_and_voice_context"`:
+  non-error runtime logs go to `debug.log`, error logs still go to stdout, and
+  stdout also prints concise voice context lines.
 
 ## Debug And Audio Dumps
 
@@ -46,6 +49,8 @@ this repository.
 
 - When changing logging, run focused tests around `tests/test_logs.py` and any
   touched module tests.
+- When changing production service behavior, run focused tests around
+  `tests/test_service.py`.
 - When changing debug/audio dumps, run focused tests around
   `tests/test_audio_dump.py`, `tests/test_debug.py`, and relevant flow tests.
 - Before finishing substantial changes, run `python -m pytest` and

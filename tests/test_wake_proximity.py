@@ -88,7 +88,7 @@ class WakeProximityTests(unittest.TestCase):
         self.assertEqual(config.llm.provider, "bailian")
         self.assertTrue(config.llm.stream)
         self.assertTrue(config.tts.stream)
-        self.assertEqual(config.conversation.follow_up_seconds, 10)
+        self.assertEqual(config.conversation.follow_up_seconds, 8)
         self.assertTrue(config.conversation.barge_in_enabled)
         self.assertFalse(config.debug.system_input_dump_enabled)
         self.assertEqual(config.wake_ack.playback_device, "output device")

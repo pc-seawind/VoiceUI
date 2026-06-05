@@ -13,6 +13,7 @@ from voiceui.logs import (
     configure_log_files,
     configure_logging,
     format_log,
+    format_voice_context,
     is_log_enabled,
     log_continuous,
     log_event,
@@ -72,6 +73,19 @@ class LogTests(unittest.TestCase):
             "        second line",
         )
 
+    def test_voice_context_line_uses_timestamp_role_and_text(self) -> None:
+        line = format_voice_context(
+            "stt",
+            "completed",
+            {"latency_ms": 120, "text": "hello world"},
+            timestamp=datetime(2026, 6, 3, 19, 30, 1, 234567),
+        )
+
+        self.assertEqual(
+            line,
+            '2026-06-03T19:30:01.234 | context=voice | role=user | text="hello world"',
+        )
+
     def test_event_logs_default_on_and_continuous_logs_default_off(self) -> None:
         configure_logging(LoggingConfig())
 
@@ -124,6 +138,33 @@ class LogTests(unittest.TestCase):
             content = open(debug_log_path, encoding="utf-8").read()
             self.assertIn("module=vad | event=completed", content)
             self.assertIn("params=duration_ms=100", content)
+
+    def test_service_stdout_mode_routes_logs_to_file_and_context_to_stdout(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            debug_log_path = f"{temp_dir}/debug.log"
+            configure_log_files(
+                debug_log_path=debug_log_path,
+                stdout_mode="errors_and_voice_context",
+            )
+
+            output = io.StringIO()
+            with redirect_stdout(output):
+                log_event("vad", "completed", duration_ms=100)
+                log_event("stt", "completed", latency_ms=10, text="hello")
+                log_event("tts", "completed", latency_ms=20, text="hi")
+                log_event("error", "runtime", error="boom")
+
+            stdout_text = output.getvalue()
+            self.assertNotIn("module=vad | event=completed", stdout_text)
+            self.assertIn("context=voice | role=user | text=hello", stdout_text)
+            self.assertIn("context=voice | role=assistant | text=hi", stdout_text)
+            self.assertIn("module=error | event=runtime", stdout_text)
+
+            file_text = Path(debug_log_path).read_text(encoding="utf-8")
+            self.assertIn("module=vad | event=completed", file_text)
+            self.assertIn("module=stt | event=completed", file_text)
+            self.assertIn("module=tts | event=completed", file_text)
+            self.assertIn("module=error | event=runtime", file_text)
 
     def test_text_records_are_written_as_daily_jsonl(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

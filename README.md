@@ -149,6 +149,31 @@ When debug audio is enabled, the barge-in monitor stream is also saved under
 `debug_sessions/<run>/audio_dumps/barge_in_monitor_01_<start>_<end>.wav`,
 including `no_speech` cases where VAD never starts an utterance.
 
+## Scheduled Tasks
+
+VoiceUI can run assistant text turns from a built-in cron scheduler during
+continuous mode. Jobs use standard five-field cron syntax:
+`minute hour day-of-month month day-of-week`. Day and month names are accepted,
+and both `0` and `7` mean Sunday. If both day-of-month and day-of-week are
+restricted, VoiceUI follows cron behavior and runs when either field matches.
+
+```yaml
+cron:
+  enabled: true
+  poll_seconds: 1
+  jobs:
+    - id: morning_weather
+      enabled: true
+      schedule: "0 7 * * *"
+      timezone: "Asia/Shanghai"
+      text: "Tell me today's weather."
+```
+
+Cron jobs are executed as normal `run_text_turn()` requests, so they can use the
+same LLM and function tools as voice or CLI text turns. Scheduled turns are
+serialized with active conversation turns to avoid overlapping TTS, tool calls,
+and debug-turn state. Cron logging uses the `cron.*` log switches.
+
 ## Logging
 
 Runtime logs use one fixed format:
@@ -196,6 +221,39 @@ logging:
     tts.limiter: false
     music.limiter: false
 ```
+
+## Production Service
+
+For long-running production use on this Windows host, start the service entry:
+
+```powershell
+.\voiceui_service.cmd
+```
+
+The command runs:
+
+```powershell
+python -m voiceui.service --config config.demo.wake.aliyun.yaml
+```
+
+Service mode forces `input.mode: audio`, creates a timestamped service run under
+the configured `debug.output_dir`, and writes runtime logs to that run's
+`debug.log`. Non-error runtime logs are not printed to stdout. Error logs still
+go to stdout, and stdout also prints concise voice context lines such as:
+
+```text
+2026-06-05T10:12:03.456 | context=voice | role=user | text="turn on the light"
+2026-06-05T10:12:04.321 | context=voice | role=assistant | text="OK."
+```
+
+Audio dumps are off by default in service mode, even if a config enables debug.
+Use `--audio-dump` only when diagnosing audio path issues:
+
+```powershell
+.\voiceui_service.cmd --audio-dump
+```
+
+After package installation, the same entry is available as `voiceui-service`.
 
 Audio dumps are also normalized. When `debug.enabled` and `debug.save_audio`
 are true, each process creates a timestamped debug session directory containing

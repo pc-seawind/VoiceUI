@@ -45,6 +45,7 @@ all = [
 
 [project.scripts]
 voiceui = "voiceui.__main__:main"
+voiceui-service = "voiceui.service:main"
 voiceui-wake-proximity = "voiceui.wake_proximity:main"
 
 [tool.ruff]

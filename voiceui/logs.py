@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 LogKind = Literal["event", "continuous"]
+StdoutMode = Literal["all", "errors", "errors_and_voice_context", "none"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +40,11 @@ LOG_SPECS: tuple[LogSpec, ...] = (
     LogSpec("barge_in.no_speech", "event", "barge_in", "no_speech"),
     LogSpec("barge_in.speech_start", "event", "barge_in", "speech_start"),
     LogSpec("barge_in.timeout", "event", "barge_in", "timeout"),
+    LogSpec("cron.job_completed", "event", "cron", "job_completed"),
+    LogSpec("cron.job_failed", "event", "cron", "job_failed"),
+    LogSpec("cron.job_started", "event", "cron", "job_started"),
+    LogSpec("cron.started", "event", "cron", "started"),
+    LogSpec("cron.stopped", "event", "cron", "stopped"),
     LogSpec("debug.saved", "event", "debug", "saved"),
     LogSpec("error.runtime", "event", "error", "runtime"),
     LogSpec("llm.completed", "event", "llm", "completed"),
@@ -51,6 +57,9 @@ LOG_SPECS: tuple[LogSpec, ...] = (
     LogSpec("music.limiter", "continuous", "music", "limiter", False),
     LogSpec("search.baidu_ai_fallback", "event", "search", "baidu_ai_fallback"),
     LogSpec("search.completed", "event", "search", "completed"),
+    LogSpec("service.error", "event", "service", "error"),
+    LogSpec("service.started", "event", "service", "started"),
+    LogSpec("service.stopped", "event", "service", "stopped"),
     LogSpec("session.empty_follow_up", "event", "session", "empty_follow_up"),
     LogSpec("session.follow_up_timeout", "event", "session", "follow_up_timeout"),
     LogSpec("session.listening_for_follow_up", "event", "session", "listening_for_follow_up"),
@@ -129,6 +138,7 @@ _TEXT_RECORD_MODULES = {"asr", "stt", "tts", "llm"}
 _OUTPUT_LOCK = threading.Lock()
 _DEBUG_LOG_PATH: Path | None = None
 _TEXT_RECORD_DIR: Path | None = None
+_STDOUT_MODE: StdoutMode = "all"
 
 
 def configure_logging(config: object | None) -> None:
@@ -140,11 +150,14 @@ def configure_log_files(
     *,
     debug_log_path: str | Path | None = None,
     text_record_dir: str | Path | None = None,
+    stdout_mode: StdoutMode | None = None,
 ) -> None:
-    global _DEBUG_LOG_PATH, _TEXT_RECORD_DIR
+    global _DEBUG_LOG_PATH, _TEXT_RECORD_DIR, _STDOUT_MODE
     with _OUTPUT_LOCK:
         _DEBUG_LOG_PATH = Path(debug_log_path) if debug_log_path is not None else None
         _TEXT_RECORD_DIR = Path(text_record_dir) if text_record_dir is not None else None
+        if stdout_mode is not None:
+            _STDOUT_MODE = stdout_mode
         if _DEBUG_LOG_PATH is not None:
             _DEBUG_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
             _DEBUG_LOG_PATH.touch(exist_ok=True)
@@ -154,7 +167,7 @@ def configure_log_files(
 
 def reset_logging() -> None:
     configure_logging(None)
-    configure_log_files()
+    configure_log_files(stdout_mode="all")
 
 
 def is_log_enabled(
@@ -241,6 +254,24 @@ def format_log(
     return f"{line}\n{_format_highlighted_text(label, text)}"
 
 
+def format_voice_context(
+    module: str,
+    event: str,
+    params: dict[str, Any] | None = None,
+    *,
+    timestamp: datetime | None = None,
+) -> str | None:
+    del event
+    role = _voice_context_role(module)
+    if role is None:
+        return None
+    text = _extract_context_text(params or {})
+    if text is None:
+        return None
+    stamp = (timestamp or datetime.now()).isoformat(timespec="milliseconds")
+    return f"{stamp} | context=voice | role={role} | text={_format_value(text)}"
+
+
 def log_switch_rows(config: object | None = None) -> list[dict[str, object]]:
     logging_config = getattr(config, "logging", config)
     rows: list[dict[str, object]] = []
@@ -303,13 +334,44 @@ def _write_log(
     timestamp: datetime,
 ) -> None:
     line = format_log(module, event, params, timestamp=timestamp)
+    context_line = format_voice_context(module, event, params, timestamp=timestamp)
     with _OUTPUT_LOCK:
-        sys.stdout.write(line + "\n")
-        sys.stdout.flush()
+        stdout_lines = _stdout_lines_for_log(
+            module,
+            event,
+            log_line=line,
+            context_line=context_line,
+        )
+        if stdout_lines:
+            sys.stdout.write("\n".join(stdout_lines) + "\n")
+            sys.stdout.flush()
         if _DEBUG_LOG_PATH is not None:
             _DEBUG_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
             with _DEBUG_LOG_PATH.open("a", encoding="utf-8") as file:
                 file.write(line + "\n")
+
+
+def _stdout_lines_for_log(
+    module: str,
+    event: str,
+    *,
+    log_line: str,
+    context_line: str | None,
+) -> list[str]:
+    if _STDOUT_MODE == "all":
+        return [log_line]
+    if _STDOUT_MODE == "none":
+        return []
+    lines: list[str] = []
+    if _is_error_log(module, event):
+        lines.append(log_line)
+    if _STDOUT_MODE == "errors_and_voice_context" and context_line is not None:
+        lines.append(context_line)
+    return lines
+
+
+def _is_error_log(module: str, event: str) -> bool:
+    return module == "error" or event == "error" or event.endswith("_error")
 
 
 def _format_params(params: dict[str, Any]) -> str:
@@ -346,6 +408,21 @@ def _pop_highlighted_text(module: str, params: dict[str, Any]) -> tuple[str, Any
         if key in params:
             label = "ASR TEXT" if module in {"asr", "stt"} else "TTS TEXT"
             return label, params.pop(key)
+    return None
+
+
+def _voice_context_role(module: str) -> str | None:
+    if module in {"asr", "stt"}:
+        return "user"
+    if module == "tts":
+        return "assistant"
+    return None
+
+
+def _extract_context_text(params: dict[str, Any]) -> Any | None:
+    for key in _TEXT_HIGHLIGHT_KEYS:
+        if key in params:
+            return params[key]
     return None
 
 
