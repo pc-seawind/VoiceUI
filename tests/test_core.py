@@ -12,7 +12,12 @@ from pathlib import Path
 from unittest.mock import patch
 
 from voiceui.audio import RawAudioRecording
-from voiceui.core import VoiceAssistant, _extract_weather_location, _extract_weather_target_day
+from voiceui.core import (
+    VoiceAssistant,
+    _extract_weather_location,
+    _extract_weather_target_day,
+    _looks_like_time_query,
+)
 from voiceui.llm import ChatMessage, ToolCall, ToolChatResponse
 from voiceui.models import (
     AssistantConfig,
@@ -363,7 +368,11 @@ class CoreTests(unittest.TestCase):
         config = AssistantConfig(
             input=InputConfig(mode="audio"),
             wake=WakeConfig(engine="disabled"),
-            conversation=ConversationConfig(follow_up_seconds=1, max_turns=4),
+            conversation=ConversationConfig(
+                follow_up_seconds=1,
+                max_turns=4,
+                follow_up_gate_enabled=False,
+            ),
             llm=LlmConfig(system_prompt="system"),
         )
         assistant = VoiceAssistant(config)
@@ -576,6 +585,45 @@ class CoreTests(unittest.TestCase):
             [message.content for message in assistant.session.messages],
             ["system", "time", reply.text],
         )
+
+    def test_time_query_does_not_match_background_time_phrase(self) -> None:
+        self.assertTrue(_looks_like_time_query("现在几点"))
+        self.assertTrue(_looks_like_time_query("报一下时间"))
+        self.assertFalse(_looks_like_time_query("一个月的时间里持续上涨超过60%"))
+
+    def test_text_turn_does_not_route_background_time_phrase_to_time_tool(self) -> None:
+        config = AssistantConfig(
+            input=InputConfig(mode="text"),
+            llm=LlmConfig(system_prompt="system"),
+            tools=ToolsConfig(enabled=True, allow_time=True, allow_weather=False),
+        )
+        assistant = VoiceAssistant(config)
+        assistant.chat = RecordingChat()
+        assistant.tool_runner = create_tool_runner(config, assistant.chat)
+        assistant.tts = FakeTts()
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            reply = assistant.run_text_turn("一个月的时间里，持续上涨了超过60%。")
+
+        self.assertEqual(reply.text, "reply 1")
+        self.assertEqual(len(assistant.chat.calls), 1)
+
+    def test_text_turn_does_not_report_time_for_unsupported_alarm_request(self) -> None:
+        config = AssistantConfig(
+            input=InputConfig(mode="text"),
+            llm=LlmConfig(system_prompt="system"),
+            tools=ToolsConfig(enabled=True, allow_time=True, allow_weather=False),
+        )
+        assistant = VoiceAssistant(config)
+        assistant.chat = RecordingChat()
+        assistant.tool_runner = create_tool_runner(config, assistant.chat)
+        assistant.tts = FakeTts()
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            reply = assistant.run_text_turn("定一个一分钟后的闹钟。")
+
+        self.assertEqual(reply.text, "reply 1")
+        self.assertNotIn("现在是", reply.text)
 
     def test_text_turn_speaks_progress_prompt_when_tool_runner_is_slow(self) -> None:
         config = AssistantConfig(
@@ -825,6 +873,7 @@ class CoreTests(unittest.TestCase):
                 follow_up_seconds=1,
                 max_turns=4,
                 barge_in_enabled=True,
+                barge_in_gate_enabled=False,
             ),
             llm=LlmConfig(system_prompt="system"),
         )
@@ -857,6 +906,79 @@ class CoreTests(unittest.TestCase):
             ["system", "first", "reply 1", "barge"],
         )
         self.assertIn(0.0, fake_vad.start_timeouts)
+
+    def test_follow_up_background_monologue_is_rejected_without_llm(self) -> None:
+        config = AssistantConfig(
+            input=InputConfig(mode="audio"),
+            wake=WakeConfig(engine="disabled"),
+            conversation=ConversationConfig(follow_up_seconds=1),
+            llm=LlmConfig(system_prompt="system"),
+        )
+        assistant = VoiceAssistant(config)
+        background = (
+            "一个月的时间里，持续上涨了超过60%。一季度成我们欠的是一级适用率数据。"
+        )
+        assistant.wake = FakeWake()
+        assistant.wake_ack = FakeWakeAck()
+        assistant.vad = FakeVad(
+            [
+                Utterance(pcm=b"first", sample_rate=16000, duration_ms=80),
+                Utterance(pcm=background.encode(), sample_rate=16000, duration_ms=1200),
+            ]
+        )
+        assistant.stt = FakeStt()
+        assistant.chat = RecordingChat()
+        assistant.tts = FakeTts()
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            reply = assistant.run_conversation()
+
+        self.assertEqual(reply.routed_to, "input_gate")
+        self.assertEqual(reply.text, "我没听清。")
+        self.assertEqual(len(assistant.chat.calls), 1)
+        self.assertEqual(assistant.tts.spoken, ["reply 1"])
+
+    def test_barge_in_ambiguous_short_text_clarifies_without_session_pollution(self) -> None:
+        config = AssistantConfig(
+            input=InputConfig(mode="audio"),
+            wake=WakeConfig(engine="disabled"),
+            conversation=ConversationConfig(
+                follow_up_seconds=0,
+                barge_in_enabled=True,
+            ),
+            llm=LlmConfig(system_prompt="system"),
+        )
+        assistant = VoiceAssistant(config)
+        assistant.wake = FakeWake()
+        assistant.wake_ack = FakeWakeAck()
+        assistant.vad = FakeVad(
+            [
+                Utterance(pcm=b"first", sample_rate=16000, duration_ms=80),
+                Utterance(
+                    pcm="来开提供临时民工。".encode(),
+                    sample_rate=16000,
+                    duration_ms=1200,
+                ),
+            ]
+        )
+        assistant.stt = FakeStt()
+        assistant.chat = RecordingChat()
+        assistant.tts = BargeFirstTts()
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            reply = assistant.run_conversation()
+
+        self.assertEqual(reply.routed_to, "input_gate")
+        self.assertEqual(reply.text, "我没太听清，你是想找临时用工渠道吗？")
+        self.assertEqual(len(assistant.chat.calls), 1)
+        self.assertEqual(
+            [message.content for message in assistant.session.messages],
+            ["system", "first", "reply 1"],
+        )
+        self.assertEqual(
+            assistant.tts.spoken,
+            ["reply 1", "我没太听清，你是想找临时用工渠道吗？"],
+        )
 
     def test_barge_in_no_speech_saves_monitor_audio(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

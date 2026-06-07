@@ -150,6 +150,24 @@ class NoToolChat(ChatClient):
         return ToolChatResponse(content="好的，书房的灯已经关闭了。")
 
 
+class DirectChat(ChatClient):
+    def __init__(self):
+        self.complete_calls: list[list[ChatMessage]] = []
+        self.tool_calls: list[tuple[list[ChatMessage], list[dict]]] = []
+
+    def complete(self, messages: list[ChatMessage]) -> str:
+        self.complete_calls.append(list(messages))
+        return "plain reply"
+
+    def complete_with_tools(
+        self,
+        messages: list[ChatMessage],
+        tools: list[dict],
+    ) -> ToolChatResponse:
+        self.tool_calls.append((list(messages), tools))
+        return ToolChatResponse(content="tool reply")
+
+
 class ToolsTests(unittest.TestCase):
     def test_tool_runner_adds_assistant_and_tool_messages(self) -> None:
         chat = FakeToolChat()
@@ -286,6 +304,60 @@ class ToolsTests(unittest.TestCase):
             "我还没有实际执行到设备控制，不能确认已经完成。请再说一遍具体设备。",
         )
         self.assertEqual(len(chat.calls), 1)
+
+    def test_tool_runner_uses_plain_llm_when_no_tool_intent_matches(self) -> None:
+        chat = DirectChat()
+        runner = VoiceToolRunner(
+            chat=chat,
+            tools=[
+                ToolDefinition(
+                    name="get_current_time",
+                    description="Current time",
+                    parameters={"type": "object", "properties": {}},
+                    handler=lambda _arguments: {},
+                ),
+                ToolDefinition(
+                    name="web_search",
+                    description="Search web",
+                    parameters={"type": "object", "properties": {}},
+                    handler=lambda _arguments: {},
+                ),
+            ],
+        )
+
+        response = runner.complete([ChatMessage(role="user", content="讲个笑话")])
+
+        self.assertEqual(response, "plain reply")
+        self.assertEqual(len(chat.complete_calls), 1)
+        self.assertEqual(chat.tool_calls, [])
+
+    def test_tool_runner_sends_only_matching_tool_payloads(self) -> None:
+        chat = DirectChat()
+        runner = VoiceToolRunner(
+            chat=chat,
+            tools=[
+                ToolDefinition(
+                    name="get_current_time",
+                    description="Current time",
+                    parameters={"type": "object", "properties": {}},
+                    handler=lambda _arguments: {},
+                ),
+                ToolDefinition(
+                    name="web_search",
+                    description="Search web",
+                    parameters={"type": "object", "properties": {}},
+                    handler=lambda _arguments: {},
+                ),
+            ],
+        )
+
+        response = runner.complete([ChatMessage(role="user", content="现在几点")])
+
+        self.assertEqual(response, "tool reply")
+        self.assertEqual(chat.complete_calls, [])
+        self.assertEqual(len(chat.tool_calls), 1)
+        tool_names = [payload["function"]["name"] for payload in chat.tool_calls[0][1]]
+        self.assertEqual(tool_names, ["get_current_time"])
 
     def test_current_time_uses_requested_timezone(self) -> None:
         result = get_current_time({"timezone": "Asia/Shanghai"})

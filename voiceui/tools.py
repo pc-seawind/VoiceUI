@@ -87,6 +87,26 @@ _TOOL_USE_INSTRUCTIONS = (
     "say when the results do not contain a clear answer. Do not say music is playing "
     "unless play_music returned successfully."
 )
+_ROUTED_TOOL_NAMES = {
+    "get_current_time",
+    "get_current_weather",
+    "web_search",
+    "get_system_volume",
+    "set_system_volume",
+    "search_music",
+    "play_music",
+    "stop_music",
+    "xiaomi_miot_auth_url",
+    "xiaomi_miot_exchange_auth_code",
+    "xiaomi_miot_control_device",
+    "xiaomi_miot_get_area_info",
+    "xiaomi_miot_get_device_classes",
+    "xiaomi_miot_get_devices",
+    "xiaomi_miot_get_device_spec",
+    "xiaomi_miot_read_device_property",
+    "xiaomi_miot_get_property",
+    "xiaomi_miot_control",
+}
 
 
 @dataclass(slots=True)
@@ -350,8 +370,23 @@ class VoiceToolRunner:
             result = self._execute_tool_call(followup_call)
             return _direct_tool_response([result]) or _format_tool_payload_response(result)
 
-        working_messages = _with_tool_use_instructions(messages)
         selected_tool_payloads = self._select_tool_payloads(messages)
+        if not selected_tool_payloads:
+            llm_started = time.monotonic()
+            response = self.chat.complete(messages)
+            llm_ms = int((time.monotonic() - llm_started) * 1000)
+            log_event(
+                "tools",
+                "llm_round",
+                log_id="tools.llm_round",
+                round=1,
+                llm_call_ms=llm_ms,
+                tools_sent=0,
+                tool_calls=0,
+            )
+            return response.strip()
+
+        working_messages = _with_tool_use_instructions(messages)
         for iteration in range(self.max_iterations):
             llm_started = time.monotonic()
             response = self.chat.complete_with_tools(working_messages, selected_tool_payloads)
@@ -403,13 +438,15 @@ class VoiceToolRunner:
     def _select_tool_payloads(self, messages: list[ChatMessage]) -> list[dict[str, Any]]:
         selected_names = _select_tool_names_for_text(_last_user_text(messages), set(self.tools))
         if not selected_names:
-            return self.tool_payloads
+            if not any(name in _ROUTED_TOOL_NAMES for name in self.tools):
+                return self.tool_payloads
+            return []
         payloads = [
             payload
             for payload in self.tool_payloads
             if payload.get("function", {}).get("name") in selected_names
         ]
-        return payloads or self.tool_payloads
+        return payloads
 
     def _execute_tool_call(self, call: ToolCall) -> dict[str, Any]:
         tool = self.tools.get(call.name)
@@ -1490,7 +1527,18 @@ def _select_tool_names_for_text(text: str, available_names: set[str]) -> set[str
         selected.add("web_search")
     if miot_read_text:
         selected.discard("web_search")
-    if any(term in normalized for term in ("几点", "时间", "现在几点", "time")):
+    if any(
+        term in normalized
+        for term in (
+            "几点",
+            "几点了",
+            "现在时间",
+            "当前时间",
+            "报一下时间",
+            "告诉我时间",
+            "time",
+        )
+    ):
         selected.add("get_current_time")
     if any(term in normalized for term in ("音乐", "歌曲", "播放", "暂停", "歌", "music")):
         selected.update({"search_music", "play_music", "stop_music"})

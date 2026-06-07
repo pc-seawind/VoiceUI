@@ -144,6 +144,10 @@ class ConversationConfig:
     follow_up_seconds: int = 10
     max_turns: int = 12
     barge_in_enabled: bool = False
+    input_gate_enabled: bool = True
+    barge_in_gate_enabled: bool = True
+    follow_up_gate_enabled: bool = True
+    max_spoken_reply_chars: int = 80
 
 
 @dataclass(slots=True)

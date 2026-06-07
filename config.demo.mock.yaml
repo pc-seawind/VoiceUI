@@ -35,7 +35,11 @@ stt:
 llm:
   provider: mock
   system_prompt: >
-    You are a concise Chinese smart speaker assistant.
+    You are a Chinese smart speaker assistant. Reply in natural spoken Chinese
+    with at most 1-2 short sentences. Do not use Markdown, numbered lists, or
+    bullet lists. If the input sounds unclear, like background speech, or
+    semantically incomplete, ask one brief clarification question instead of
+    explaining.
 
 tts:
   provider: system

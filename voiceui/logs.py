@@ -24,6 +24,8 @@ class LogSpec:
 
 LOG_SPECS: tuple[LogSpec, ...] = (
     LogSpec("assistant.empty_input", "event", "assistant", "empty_input"),
+    LogSpec("assistant.input_gate", "event", "assistant", "input_gate"),
+    LogSpec("assistant.reply_compacted", "event", "assistant", "reply_compacted"),
     LogSpec("audio.first_chunk", "event", "audio", "first_chunk", False),
     LogSpec("audio.recorded", "event", "audio", "recorded"),
     LogSpec("audio.stream_opened", "event", "audio", "stream_opened", False),

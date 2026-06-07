@@ -29,6 +29,8 @@ from voiceui.wake import create_wake_detector
 from voiceui.wake_ack import create_wake_ack_player
 
 _TOOL_PROGRESS_PROMPT_DELAY_SECONDS = 1.2
+_EMPTY_INPUT_RESPONSE = "我没听清。"
+_INPUT_CLARIFICATION_RESPONSE = "我没太听清，请再说一遍。"
 
 
 class _WakeAckHandle:
@@ -226,7 +228,7 @@ class VoiceAssistant:
         with self._turn_lock:
             transcript = text.strip()
             if not transcript:
-                return AssistantReply(text="I did not hear anything.", routed_to="system")
+                return AssistantReply(text=_EMPTY_INPUT_RESPONSE, routed_to="system")
 
             turn_index = self.audio_dump.begin_turn()
             try:
@@ -370,6 +372,35 @@ class VoiceAssistant:
             raise error
         return str(result.get("value") or "")
 
+    def _gate_voice_transcript(self, transcript: str, source: str) -> tuple[str, str, str]:
+        if not _voice_input_gate_enabled(self.config.conversation, source):
+            return "accept", "disabled", ""
+        decision, reason = _classify_voice_input(transcript, source)
+        log_event(
+            "assistant",
+            "input_gate",
+            log_id="assistant.input_gate",
+            source=source,
+            decision=decision,
+            reason=reason,
+            text_len=len(transcript),
+        )
+        if decision == "clarify":
+            return decision, reason, _clarification_response_for_text(transcript)
+        return decision, reason, ""
+
+    def _finish_input_gate_clarification(
+        self,
+        response: str,
+        timings: dict[str, int],
+    ) -> tuple[AssistantReply, dict[str, int]]:
+        timings["llm"] = 0
+        barge_utterance = self._speak_response_safely(response, timings)
+        if barge_utterance is not None:
+            self._pending_barge_utterance = barge_utterance
+            timings["barge_in"] = barge_utterance.duration_ms
+        return AssistantReply(text=response, routed_to="input_gate"), timings
+
     def _speak_progress_prompt(
         self,
         prompt: str,
@@ -395,13 +426,36 @@ class VoiceAssistant:
         *,
         routed_to: str = "llm",
     ) -> tuple[AssistantReply, dict[str, int]]:
-        self.session.add_assistant(response)
-        record_text_event("llm", "completed", response, routed_to=routed_to)
-        barge_utterance = self._speak_response_safely(response, timings)
+        spoken_response = self._prepare_spoken_response(response, routed_to=routed_to)
+        self.session.add_assistant(spoken_response)
+        record_text_event("llm", "completed", spoken_response, routed_to=routed_to)
+        barge_utterance = self._speak_response_safely(spoken_response, timings)
         if barge_utterance is not None:
             self._pending_barge_utterance = barge_utterance
             timings["barge_in"] = barge_utterance.duration_ms
-        return AssistantReply(text=response, routed_to=routed_to), timings
+        return AssistantReply(text=spoken_response, routed_to=routed_to), timings
+
+    def _prepare_spoken_response(self, response: str, *, routed_to: str) -> str:
+        max_chars = self.config.conversation.max_spoken_reply_chars
+        if (
+            self.config.input.mode != "audio"
+            or max_chars <= 0
+            or routed_to == "error"
+            or len(response) <= max_chars
+        ):
+            return response
+        compacted = _compact_spoken_response(response, max_chars)
+        if compacted == response:
+            return response
+        log_event(
+            "assistant",
+            "reply_compacted",
+            log_id="assistant.reply_compacted",
+            original_chars=len(response),
+            compacted_chars=len(compacted),
+            routed_to=routed_to,
+        )
+        return compacted
 
     def _finish_processing_error(
         self,
@@ -1157,7 +1211,9 @@ class VoiceAssistant:
         if turn_index is None:
             turn_index = self.audio_dump.begin_turn()
         stt_extra_timings: dict[str, int] = {}
+        gate_source = "wake"
         if self._pending_barge_utterance is not None:
+            gate_source = "barge_in"
             utterance = self._pending_barge_utterance
             pending_transcript = self._pending_barge_transcript
             self._pending_barge_utterance = None
@@ -1198,6 +1254,8 @@ class VoiceAssistant:
                     text=transcript,
                 )
         elif self._should_stream_stt():
+            if wake.engine == "follow_up":
+                gate_source = "follow_up"
             (
                 utterance,
                 transcript,
@@ -1209,6 +1267,8 @@ class VoiceAssistant:
             )
             wake_ack_ms = wake_ack_handle.join() if wake_ack_handle is not None else 0
         else:
+            if wake.engine == "follow_up":
+                gate_source = "follow_up"
             vad_started = time.monotonic()
             utterance = self.vad.record(
                 self.command_audio,
@@ -1236,12 +1296,27 @@ class VoiceAssistant:
             )
 
         transcript = transcript.strip()
+        returned_transcript = transcript
         if not transcript:
-            reply = AssistantReply(text="I did not hear anything.", routed_to="system")
+            reply = AssistantReply(text=_EMPTY_INPUT_RESPONSE, routed_to="system")
             response_timings = {"llm": 0, "tts": 0}
             log_event("assistant", "empty_input", log_id="assistant.empty_input")
         else:
-            reply, response_timings = self._complete_transcript(transcript)
+            gate_decision, _gate_reason, gate_response = self._gate_voice_transcript(
+                transcript,
+                gate_source,
+            )
+            if gate_decision == "reject":
+                reply = AssistantReply(text=_EMPTY_INPUT_RESPONSE, routed_to="input_gate")
+                response_timings = {"llm": 0, "tts": 0}
+                returned_transcript = ""
+            elif gate_decision == "clarify":
+                reply, response_timings = self._finish_input_gate_clarification(
+                    gate_response,
+                    {},
+                )
+            else:
+                reply, response_timings = self._complete_transcript(transcript)
         timings = {
             "wake": wake_ms,
             "wake_ack": wake_ack_ms,
@@ -1271,7 +1346,7 @@ class VoiceAssistant:
         debug_dir = self.debug.save_turn(debug_data, utterance, wake_audio=wake)
         if debug_dir:
             log_event("debug", "saved", log_id="debug.saved", path=debug_dir)
-        return reply, transcript
+        return reply, returned_transcript
 
     def _should_stream_stt(self) -> bool:
         supports_streaming = getattr(self.stt, "supports_streaming", None)
@@ -1495,7 +1570,182 @@ def _looks_like_weather_query(normalized: str) -> bool:
 
 
 def _looks_like_time_query(normalized: str) -> bool:
-    return any(term in normalized for term in ("几点", "时间", "现在几点"))
+    return any(
+        term in normalized
+        for term in (
+            "几点",
+            "几点了",
+            "现在时间",
+            "当前时间",
+            "报一下时间",
+            "告诉我时间",
+        )
+    )
+
+
+def _voice_input_gate_enabled(conversation_config: object, source: str) -> bool:
+    if not bool(getattr(conversation_config, "input_gate_enabled", True)):
+        return False
+    if source == "barge_in":
+        return bool(getattr(conversation_config, "barge_in_gate_enabled", True))
+    if source == "follow_up":
+        return bool(getattr(conversation_config, "follow_up_gate_enabled", True))
+    return True
+
+
+def _classify_voice_input(transcript: str, source: str) -> tuple[str, str]:
+    text = transcript.strip()
+    if _is_unusable_transcript(text):
+        return "reject", "unusable_text"
+    if _looks_like_direct_voice_intent(text):
+        return "accept", "direct_intent"
+    if source == "wake":
+        if len(text) >= 45 and _looks_like_background_monologue(text):
+            return "clarify", "wake_background_like"
+        return "accept", "wake_light_gate"
+    if len(text) >= 32 and _looks_like_background_monologue(text):
+        return "reject", "background_monologue"
+    if len(text) <= 24:
+        return "clarify", "ambiguous_short"
+    return "clarify", "ambiguous_follow_up"
+
+
+def _is_unusable_transcript(text: str) -> bool:
+    if not text:
+        return True
+    meaningful = [
+        char
+        for char in text
+        if char.isalnum() or "\u4e00" <= char <= "\u9fff"
+    ]
+    if not meaningful:
+        return True
+    return len(set(meaningful)) <= 1 and len(meaningful) >= 4
+
+
+def _looks_like_direct_voice_intent(text: str) -> bool:
+    normalized = text.lower().replace(" ", "")
+    if _looks_like_weather_query(normalized) or _looks_like_time_query(normalized):
+        return True
+    if any(mark in text for mark in ("?", "？")):
+        return True
+    question_terms = (
+        "吗",
+        "呢",
+        "什么",
+        "怎么",
+        "为什么",
+        "多少",
+        "哪个",
+        "哪一个",
+        "谁",
+        "能不能",
+        "可不可以",
+        "是不是",
+    )
+    if any(term in normalized for term in question_terms):
+        return True
+    intent_terms = (
+        "帮我",
+        "请",
+        "麻烦",
+        "你能",
+        "你可以",
+        "告诉我",
+        "说一下",
+        "讲一下",
+        "讲个",
+        "介绍一下",
+        "查一下",
+        "查查",
+        "查询",
+        "搜索",
+        "搜一下",
+        "百度",
+        "打开",
+        "关闭",
+        "开灯",
+        "关灯",
+        "开空调",
+        "关空调",
+        "播放",
+        "停止播放",
+        "暂停",
+        "继续",
+        "取消",
+        "不用了",
+        "不要了",
+        "算了",
+        "闹钟",
+        "提醒",
+        "定时",
+        "音量",
+        "静音",
+        "加油",
+        "你好",
+    )
+    if any(term in normalized for term in intent_terms):
+        return True
+    if normalized in {"好的", "好", "可以", "不要", "不用", "停", "停止"}:
+        return True
+    return False
+
+
+def _looks_like_background_monologue(text: str) -> bool:
+    punctuation_count = sum(text.count(mark) for mark in ("，", "。", ",", ".", "；", ";"))
+    digit_count = sum(1 for char in text if char.isdigit())
+    filler_terms = ("然后", "所以", "我们", "这个", "那个", "其实", "因为", "如果")
+    filler_count = sum(text.count(term) for term in filler_terms)
+    return punctuation_count >= 1 or digit_count >= 2 or filler_count >= 2
+
+
+def _clarification_response_for_text(transcript: str) -> str:
+    normalized = transcript.replace(" ", "")
+    if "临时" in normalized and any(term in normalized for term in ("工", "用工", "民工")):
+        return "我没太听清，你是想找临时用工渠道吗？"
+    if "闹钟" in normalized or "提醒" in normalized:
+        return "我还不能设置闹钟，可以帮你看时间。"
+    return _INPUT_CLARIFICATION_RESPONSE
+
+
+def _compact_spoken_response(response: str, max_chars: int) -> str:
+    cleaned = _clean_spoken_response(response)
+    if len(cleaned) <= max_chars:
+        return cleaned
+    if any(term in cleaned for term in ("输入似乎", "表述似乎", "有些混乱", "让人困惑")):
+        return _INPUT_CLARIFICATION_RESPONSE
+    first_sentence = _first_spoken_sentence(cleaned)
+    if first_sentence and len(first_sentence) <= max_chars:
+        return first_sentence
+    if max_chars <= 1:
+        return cleaned[:max_chars]
+    return cleaned[: max_chars - 1].rstrip("，,；;：:、 ") + "。"
+
+
+def _clean_spoken_response(response: str) -> str:
+    lines: list[str] = []
+    for raw_line in response.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        line = raw_line.strip().replace("**", "")
+        if not line:
+            continue
+        line = line.lstrip("-* ")
+        while line and line[0].isdigit():
+            line = line[1:].lstrip(".、)） ")
+        if line:
+            lines.append(line)
+    return " ".join(lines).strip()
+
+
+def _first_spoken_sentence(text: str) -> str:
+    end_positions = [
+        text.find(mark)
+        for mark in ("。", "！", "？", "!", "?")
+        if text.find(mark) >= 0
+    ]
+    if not end_positions:
+        return ""
+    end = min(end_positions) + 1
+    return text[:end].strip()
 
 
 def _extract_weather_location(transcript: str, default_location: str = "") -> str:

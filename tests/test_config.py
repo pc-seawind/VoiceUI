@@ -44,6 +44,10 @@ class ConfigTests(unittest.TestCase):
         self.assertFalse(config.cron.enabled)
         self.assertIsInstance(config.logging, LoggingConfig)
         self.assertTrue(config.logging.enabled)
+        self.assertTrue(config.conversation.input_gate_enabled)
+        self.assertTrue(config.conversation.follow_up_gate_enabled)
+        self.assertTrue(config.conversation.barge_in_gate_enabled)
+        self.assertEqual(config.conversation.max_spoken_reply_chars, 80)
 
     def test_example_config_loads_nested_values(self) -> None:
         config = load_config("config.example.yaml")
