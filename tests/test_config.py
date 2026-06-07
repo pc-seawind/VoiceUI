@@ -48,6 +48,8 @@ class ConfigTests(unittest.TestCase):
         self.assertTrue(config.conversation.follow_up_gate_enabled)
         self.assertTrue(config.conversation.barge_in_gate_enabled)
         self.assertEqual(config.conversation.max_spoken_reply_chars, 80)
+        self.assertTrue(config.conversation.reminders_enabled)
+        self.assertEqual(config.conversation.max_reminder_delay_seconds, 30 * 24 * 60 * 60)
 
     def test_example_config_loads_nested_values(self) -> None:
         config = load_config("config.example.yaml")

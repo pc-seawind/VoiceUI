@@ -608,7 +608,7 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(reply.text, "reply 1")
         self.assertEqual(len(assistant.chat.calls), 1)
 
-    def test_text_turn_does_not_report_time_for_unsupported_alarm_request(self) -> None:
+    def test_text_turn_schedules_alarm_without_llm(self) -> None:
         config = AssistantConfig(
             input=InputConfig(mode="text"),
             llm=LlmConfig(system_prompt="system"),
@@ -622,8 +622,49 @@ class CoreTests(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()):
             reply = assistant.run_text_turn("定一个一分钟后的闹钟。")
 
-        self.assertEqual(reply.text, "reply 1")
+        self.assertEqual(reply.routed_to, "reminder")
+        self.assertEqual(reply.text, "好的，1分钟后提醒你。")
+        self.assertEqual(assistant.chat.calls, [])
+        self.assertEqual(len(assistant.reminders.pending()), 1)
         self.assertNotIn("现在是", reply.text)
+        with contextlib.redirect_stdout(io.StringIO()):
+            assistant.reminders.cancel_all()
+
+    def test_text_turn_clarifies_alarm_without_time(self) -> None:
+        config = AssistantConfig(
+            input=InputConfig(mode="text"),
+            llm=LlmConfig(system_prompt="system"),
+        )
+        assistant = VoiceAssistant(config)
+        assistant.chat = RecordingChat()
+        assistant.tts = FakeTts()
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            reply = assistant.run_text_turn("帮我设置一个闹钟。")
+
+        self.assertEqual(reply.routed_to, "reminder")
+        self.assertEqual(reply.text, "你想让我什么时候提醒？")
+        self.assertEqual(assistant.chat.calls, [])
+
+    def test_due_reminder_speaks_without_barge_in(self) -> None:
+        config = AssistantConfig(
+            input=InputConfig(mode="text"),
+            llm=LlmConfig(system_prompt="system"),
+        )
+        assistant = VoiceAssistant(config)
+        tts = FakeTts()
+        assistant.tts = tts
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            reminder = assistant.reminders.schedule_after(
+                1,
+                "闹钟时间到了。",
+                kind="alarm",
+            )
+            fired = assistant.reminders.run_due(reminder.due_at)
+
+        self.assertEqual(fired, [reminder.id])
+        self.assertEqual(tts.spoken, ["闹钟时间到了。"])
 
     def test_text_turn_speaks_progress_prompt_when_tool_runner_is_slow(self) -> None:
         config = AssistantConfig(

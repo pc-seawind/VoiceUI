@@ -174,6 +174,11 @@ same LLM and function tools as voice or CLI text turns. Scheduled turns are
 serialized with active conversation turns to avoid overlapping TTS, tool calls,
 and debug-turn state. Cron logging uses the `cron.*` log switches.
 
+Voice commands such as "一分钟后提醒我" or "定一个一分钟后的闹钟" use a
+separate runtime reminder scheduler. Reminders are one-shot tasks created from
+the active conversation, and they speak the reminder text directly when due.
+Runtime reminder logging uses the `reminder.*` log switches.
+
 ## Logging
 
 Runtime logs use one fixed format:

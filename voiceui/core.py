@@ -13,6 +13,17 @@ from voiceui.home_assistant import HomeAssistantClient
 from voiceui.llm import create_chat_client
 from voiceui.logs import configure_log_files, log_event, record_text_event
 from voiceui.models import AssistantConfig, AssistantReply, Utterance, WakeEvent
+from voiceui.reminders import (
+    Reminder,
+    ReminderScheduler,
+    format_pending_reminders,
+    format_reminder_confirmation,
+    looks_like_reminder_cancel_text,
+    looks_like_reminder_create_text,
+    looks_like_reminder_status_text,
+    looks_like_reminder_text,
+    parse_reminder_request,
+)
 from voiceui.session import ConversationSession
 from voiceui.stt import create_stt
 from voiceui.tools import (
@@ -153,6 +164,7 @@ class VoiceAssistant:
             text_record_dir=self.audio_dump.text_record_dir(),
         )
         self.debug = DebugRecorder(config.debug, audio_dump=self.audio_dump)
+        self.reminders = ReminderScheduler(self._handle_reminder_due)
         self._pending_barge_utterance: Utterance | None = None
         self._pending_barge_transcript: str | None = None
         self._pending_barge_stt_ms = 0
@@ -173,6 +185,7 @@ class VoiceAssistant:
         return CronScheduler(self.config.cron, run_job)
 
     def close(self) -> None:
+        self.reminders.stop()
         self.audio_dump.stop_system_input_dump()
         configure_audio_dump(None)
         configure_log_files()
@@ -240,6 +253,21 @@ class VoiceAssistant:
     def _complete_transcript(self, transcript: str) -> tuple[AssistantReply, dict[str, int]]:
         self.session.add_user(transcript)
         timings: dict[str, int] = {}
+
+        try:
+            local_response = self._try_handle_local_reminder_command(transcript)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            return self._finish_processing_error(exc, timings, mode="local_reminder")
+        if local_response is not None:
+            timings["llm"] = 0
+            log_event(
+                "llm",
+                "completed",
+                log_id="llm.completed",
+                latency_ms=0,
+                mode="local_reminder",
+            )
+            return self._finish_generated_response(local_response, timings, routed_to="reminder")
 
         try:
             local_response = self._try_handle_local_music_command(transcript)
@@ -589,6 +617,75 @@ class VoiceAssistant:
         unduck = getattr(self.music_controller, "unduck", None)
         if callable(unduck):
             unduck(reason)
+
+    def _handle_reminder_due(self, reminder: Reminder) -> None:
+        with self._turn_lock:
+            tts_started = time.monotonic()
+            try:
+                self._speak_plain(reminder.text)
+            except Exception as exc:
+                latency_ms = int((time.monotonic() - tts_started) * 1000)
+                log_event(
+                    "tts",
+                    "completed",
+                    log_id="tts.completed",
+                    latency_ms=latency_ms,
+                    ok=False,
+                    error=str(exc),
+                    text=reminder.text,
+                )
+                log_event(
+                    "error",
+                    "runtime",
+                    log_id="error.runtime",
+                    stage="reminder_tts",
+                    error=str(exc),
+                )
+                raise
+            latency_ms = int((time.monotonic() - tts_started) * 1000)
+            log_event(
+                "tts",
+                "completed",
+                log_id="tts.completed",
+                latency_ms=latency_ms,
+                ok=True,
+                text=reminder.text,
+            )
+
+    def _try_handle_local_reminder_command(self, transcript: str) -> str | None:
+        if not looks_like_reminder_text(transcript):
+            return None
+        if not self.config.conversation.reminders_enabled:
+            return "我现在不能设置闹钟或提醒。"
+
+        normalized = transcript.lower().replace(" ", "")
+        if looks_like_reminder_cancel_text(transcript):
+            count = self.reminders.cancel_all()
+            if count:
+                return "已取消待提醒的闹钟。"
+            return "当前没有待提醒的闹钟。"
+
+        if any(term in normalized for term in ("什么反应", "怎么响", "响了以后")):
+            return "到点后我会直接播报提醒。"
+
+        if any(term in normalized for term in ("为什么", "没响", "没提醒", "没有提醒", "还没有")):
+            return format_pending_reminders(self.reminders.pending())
+
+        parsed = parse_reminder_request(
+            transcript,
+            max_delay_seconds=self.config.conversation.max_reminder_delay_seconds,
+        )
+        if parsed is not None:
+            self.reminders.schedule_at(parsed.due_at, parsed.text, kind=parsed.kind)
+            return format_reminder_confirmation(parsed)
+
+        if looks_like_reminder_status_text(transcript):
+            return format_pending_reminders(self.reminders.pending())
+
+        if looks_like_reminder_create_text(transcript):
+            return "你想让我什么时候提醒？"
+
+        return None
 
     def _try_handle_local_music_command(self, transcript: str) -> str | None:
         music = self.music_controller
@@ -1704,7 +1801,7 @@ def _clarification_response_for_text(transcript: str) -> str:
     if "临时" in normalized and any(term in normalized for term in ("工", "用工", "民工")):
         return "我没太听清，你是想找临时用工渠道吗？"
     if "闹钟" in normalized or "提醒" in normalized:
-        return "我还不能设置闹钟，可以帮你看时间。"
+        return "你想让我什么时候提醒？"
     return _INPUT_CLARIFICATION_RESPONSE
 
 

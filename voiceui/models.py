@@ -148,6 +148,8 @@ class ConversationConfig:
     barge_in_gate_enabled: bool = True
     follow_up_gate_enabled: bool = True
     max_spoken_reply_chars: int = 80
+    reminders_enabled: bool = True
+    max_reminder_delay_seconds: int = 30 * 24 * 60 * 60
 
 
 @dataclass(slots=True)
