@@ -15,6 +15,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from voiceui.logs import log_event
 from voiceui.models import XiaomiMiotConfig
 
 PROJECT_CODE = "mico"
@@ -259,16 +260,24 @@ class XiaomiMiotClient:
             action=action,
             value=value,
         )
+        unsupported_operation = _unsupported_miot_operation_response(command)
+        if unsupported_operation is not None:
+            return unsupported_operation
         matches = _resolve_device_matches(devices, command)
         if not matches and command.get("device_class") and command.get("device"):
             relaxed_command = {**command, "device_class": ""}
             matches = _resolve_device_matches(devices, relaxed_command)
         if not matches:
+            _log_miot_resolver(command, "not_found", 0, reason="no_matches")
             return {
                 "status": "not_found",
+                "decision": "not_found",
                 "message": "没有找到匹配的米家设备。",
                 "query": command,
             }
+
+        if _is_group_control_command(command):
+            return self._execute_group_control(matches, command, dry_run=dry_run)
 
         best_score = matches[0][0]
         best_matches = [match for match in matches if best_score - match[0] <= 4]
@@ -278,24 +287,45 @@ class XiaomiMiotClient:
                 if len(state_matches) == 1:
                     best_matches = state_matches
                 elif state_matches:
+                    _log_miot_resolver(
+                        command,
+                        "ambiguous",
+                        len(state_matches),
+                        reason="multiple_state_matches",
+                    )
                     return {
                         "status": "ambiguous",
+                        "decision": "ambiguous",
                         "message": "当前有多个符合状态的匹配设备，需要用户指定其中一个。",
                         "candidates": [_public_device(match[1]) for match in state_matches[:5]],
                         "query": command,
                     }
                 else:
                     state_text = _target_power_state_description(command)
+                    _log_miot_resolver(
+                        command,
+                        "not_found",
+                        len(best_matches),
+                        reason="no_state_matches",
+                    )
                     return {
                         "status": "not_found",
+                        "decision": "not_found",
                         "message": f"没有发现当前{state_text}的匹配设备。",
                         "query": command,
                     }
             if len(best_matches) == 1:
                 target_device = dict(best_matches[0][1])
             else:
+                _log_miot_resolver(
+                    command,
+                    "ambiguous",
+                    len(best_matches),
+                    reason="multiple_matches",
+                )
                 return {
                     "status": "ambiguous",
+                    "decision": "ambiguous",
                     "message": "找到多个匹配的米家设备，需要用户指定其中一个。",
                     "candidates": [_public_device(match[1]) for match in best_matches[:5]],
                     "query": command,
@@ -304,8 +334,10 @@ class XiaomiMiotClient:
             target_device = dict(best_matches[0][1])
 
         if not target_device.get("online", True):
+            _log_miot_resolver(command, "offline", 1, reason="target_offline")
             return {
                 "status": "offline",
+                "decision": "unsupported",
                 "message": f"{target_device.get('name') or '设备'} 当前离线，无法控制。",
                 "device": _public_device(target_device),
             }
@@ -313,15 +345,19 @@ class XiaomiMiotClient:
         spec = self.get_device_spec(str(target_device["did"]))
         control = _select_control_item(spec, command)
         if control is None:
+            _log_miot_resolver(command, "unsupported", 1, reason="no_control_item")
             return {
                 "status": "unsupported",
+                "decision": "unsupported",
                 "message": "匹配到了设备，但没有找到适合该指令的可写 MIoT 属性或动作。",
                 "device": _public_device(target_device),
                 "query": command,
             }
         if dry_run:
+            _log_miot_resolver(command, "resolved", 1, reason="dry_run")
             return {
                 "status": "resolved",
+                "decision": "resolved",
                 "device": _public_device(target_device),
                 "iid": control["iid"],
                 "target_value": control["value"],
@@ -335,12 +371,120 @@ class XiaomiMiotClient:
             control["value"],
             verify=True,
         )
+        _log_miot_resolver(command, "executed", 1, reason="single_match")
         return {
             **result,
+            "decision": "executed",
             "device": _public_device(target_device),
             "target_value": control["value"],
             "action": command.get("action"),
             "item": control["item"],
+        }
+
+    def _execute_group_control(
+        self,
+        matches: list[tuple[int, dict[str, Any]]],
+        command: dict[str, Any],
+        *,
+        dry_run: bool,
+    ) -> dict[str, Any]:
+        state_filter = _state_filter_for_group_control(command)
+        successes: list[dict[str, Any]] = []
+        failures: list[dict[str, Any]] = []
+        skipped: list[dict[str, Any]] = []
+
+        for _score, raw_device in matches:
+            device = dict(raw_device)
+            public_device = _public_device(device)
+            if not device.get("online", True):
+                failures.append({"device": public_device, "reason": "offline"})
+                continue
+
+            if state_filter is not None:
+                state = self._read_device_power_state(device)
+                if state is None:
+                    failures.append({"device": public_device, "reason": "state_unreadable"})
+                    continue
+                if state is not state_filter:
+                    skipped.append({"device": public_device, "reason": "state_mismatch"})
+                    continue
+
+            try:
+                spec = self.get_device_spec(str(device["did"]))
+                control = _select_control_item(spec, command)
+                if control is None:
+                    failures.append({"device": public_device, "reason": "unsupported"})
+                    continue
+                if dry_run:
+                    successes.append(
+                        {
+                            "device": public_device,
+                            "iid": control["iid"],
+                            "target_value": control["value"],
+                            "item": control["item"],
+                        }
+                    )
+                    continue
+                result = self.send_ctrl_rpc(
+                    str(device["did"]),
+                    str(control["iid"]),
+                    control["value"],
+                    verify=True,
+                )
+                successes.append(
+                    {
+                        **result,
+                        "device": public_device,
+                        "target_value": control["value"],
+                        "item": control["item"],
+                    }
+                )
+            except RuntimeError as exc:
+                failures.append({"device": public_device, "reason": str(exc)})
+
+        if not successes and not failures:
+            state_text = _target_power_state_description(command)
+            _log_miot_resolver(
+                command,
+                "not_found",
+                len(matches),
+                reason="group_state_no_matches",
+            )
+            return {
+                "status": "not_found",
+                "decision": "not_found",
+                "message": f"没有发现当前{state_text}的匹配设备。",
+                "query": command,
+                "skipped": skipped,
+            }
+
+        decision = "resolved" if dry_run else "executed"
+        _log_miot_resolver(
+            command,
+            decision,
+            len(matches),
+            reason="group_control",
+            success_count=len(successes),
+            failure_count=len(failures),
+        )
+        return {
+            "status": "group_resolved" if dry_run else "group_executed",
+            "decision": decision,
+            "action": command.get("action"),
+            "target_value": command.get("value"),
+            "success_count": len(successes),
+            "failure_count": len(failures),
+            "skipped_count": len(skipped),
+            "devices": [entry["device"] for entry in successes],
+            "failures": failures,
+            "skipped": skipped,
+            "query": command,
+            "direct_response": _format_group_control_response(
+                command,
+                successes,
+                failures,
+                dry_run=dry_run,
+            ),
         }
 
     def _resolve_power_state_control_matches(
@@ -412,8 +556,10 @@ class XiaomiMiotClient:
             relaxed_command = {**command, "device_class": ""}
             matches = _resolve_device_matches(devices, relaxed_command)
         if not matches:
+            _log_miot_resolver(command, "not_found", 0, reason="read_no_matches")
             return {
                 "status": "not_found",
+                "decision": "not_found",
                 "message": "没有找到匹配的米家设备。",
                 "query": command,
             }
@@ -421,8 +567,18 @@ class XiaomiMiotClient:
         best_score = matches[0][0]
         best_matches = [match for match in matches if best_score - match[0] <= 4]
         if len(best_matches) > 1:
+            group_read = self._read_group_power_property(best_matches, command)
+            if group_read is not None:
+                return group_read
+            _log_miot_resolver(
+                command,
+                "ambiguous",
+                len(best_matches),
+                reason="read_multiple_matches",
+            )
             return {
                 "status": "ambiguous",
+                "decision": "ambiguous",
                 "message": "找到多个匹配的米家设备，需要用户指定其中一个。",
                 "candidates": [_public_device(match[1]) for match in best_matches[:5]],
                 "query": command,
@@ -430,8 +586,10 @@ class XiaomiMiotClient:
 
         target_device = dict(best_matches[0][1])
         if not target_device.get("online", True):
+            _log_miot_resolver(command, "offline", 1, reason="read_target_offline")
             return {
                 "status": "offline",
+                "decision": "unsupported",
                 "message": f"{target_device.get('name') or '设备'} 当前离线，无法读取。",
                 "device": _public_device(target_device),
             }
@@ -439,8 +597,10 @@ class XiaomiMiotClient:
         spec = self.get_device_spec(str(target_device["did"]))
         item = _select_read_property(spec, command)
         if item is None:
+            _log_miot_resolver(command, "unsupported", 1, reason="read_no_item")
             return {
                 "status": "unsupported",
+                "decision": "unsupported",
                 "message": "匹配到了设备，但没有找到适合读取的 MIoT 属性。",
                 "device": _public_device(target_device),
                 "query": command,
@@ -448,8 +608,10 @@ class XiaomiMiotClient:
 
         readback = self.send_get_rpc(str(target_device["did"]), str(item["iid"]))
         value = readback.get("value")
+        _log_miot_resolver(command, "resolved", 1, reason="property_read")
         return {
             "status": "property_read",
+            "decision": "resolved",
             "device": _public_device(target_device),
             "iid": item["iid"],
             "property": item,
@@ -457,6 +619,62 @@ class XiaomiMiotClient:
             "unit": item.get("unit"),
             "readback": readback,
             "direct_response": _format_property_read_response(target_device, item, value),
+        }
+
+    def _read_group_power_property(
+        self,
+        matches: list[tuple[int, dict[str, Any]]],
+        command: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        if not _looks_like_power_property_query(command):
+            return None
+
+        readings: list[dict[str, Any]] = []
+        failures: list[dict[str, Any]] = []
+        for _score, raw_device in matches:
+            device = dict(raw_device)
+            public_device = _public_device(device)
+            if not device.get("online", True):
+                failures.append({"device": public_device, "reason": "offline"})
+                continue
+            try:
+                spec = self.get_device_spec(str(device["did"]))
+                item = _select_power_state_property(spec)
+                if item is None:
+                    failures.append({"device": public_device, "reason": "unsupported"})
+                    continue
+                readback = self.send_get_rpc(str(device["did"]), str(item["iid"]))
+                readings.append(
+                    {
+                        "device": public_device,
+                        "iid": item["iid"],
+                        "property": item,
+                        "value": readback.get("value"),
+                        "readback": readback,
+                    }
+                )
+            except RuntimeError as exc:
+                failures.append({"device": public_device, "reason": str(exc)})
+
+        if not readings:
+            return None
+
+        _log_miot_resolver(
+            command,
+            "resolved",
+            len(matches),
+            reason="group_power_read",
+            success_count=len(readings),
+            failure_count=len(failures),
+        )
+        return {
+            "status": "property_read_group",
+            "decision": "resolved",
+            "property": "power",
+            "readings": readings,
+            "failures": failures,
+            "query": command,
+            "direct_response": _format_group_power_read_response(command, readings, failures),
         }
 
     def send_get_rpc(self, did: str, iid: str) -> dict[str, Any]:
@@ -1136,10 +1354,23 @@ def miot_values_equal(expected: Any, actual: Any) -> bool:
 
 
 _DEVICE_CLASS_ALIASES: dict[str, tuple[str, ...]] = {
-    "light": ("light", "灯", "灯光", "照明", "吸顶灯", "筒灯", "台灯", "灯带"),
-    "switch": ("switch", "开关", "墙壁开关", "插座"),
+    "light": (
+        "light",
+        "灯",
+        "灯光",
+        "照明",
+        "吸顶灯",
+        "筒灯",
+        "台灯",
+        "灯带",
+        "主灯",
+        "大灯",
+        "床头灯",
+        "射灯",
+    ),
+    "switch": ("switch", "开关", "墙壁开关", "插座", "插排", "排插"),
     "curtain": ("curtain", "窗帘", "帘"),
-    "aircondition": ("aircondition", "air-conditioner", "空调"),
+    "aircondition": ("aircondition", "air-conditioner", "空调", "空调机", "冷气"),
     "airfresh": ("airfresh", "新风"),
     "airpurifier": (
         "airpurifier",
@@ -1149,15 +1380,57 @@ _DEVICE_CLASS_ALIASES: dict[str, tuple[str, ...]] = {
         "\u51c0\u5316\u5668",
     ),
     "humidifier": ("humidifier", "加湿器"),
-    "fan": ("fan", "风扇"),
+    "fan": ("fan", "风扇", "电扇", "吊扇"),
     "wifispeaker": ("wifispeaker", "音箱", "小爱", "speaker"),
     "motion": ("motion", "传感器", "人体", "感应器"),
     "camera": ("camera", "摄像头", "相机"),
     "lock": ("lock", "门锁", "锁"),
 }
 
-_TURN_ON_WORDS = ("turn_on", "on", "open", "打开", "开启", "开灯", "开一下", "亮")
-_TURN_OFF_WORDS = ("turn_off", "off", "close", "关闭", "关掉", "关上", "关灯", "熄灭")
+_AREA_ALIAS_GROUPS: tuple[tuple[str, ...], ...] = (
+    ("客厅", "大厅", "起居室"),
+    ("餐厅", "饭厅"),
+    ("厨房", "厨", "厨间"),
+    ("书房", "办公室", "工作室"),
+    ("主卧", "主卧室", "主人房", "卧室"),
+    ("次卧", "次卧室", "客卧", "小卧室", "卧室"),
+    ("儿童房", "小孩房", "孩子房", "卧室"),
+    ("卫生间", "洗手间", "厕所", "浴室"),
+    ("阳台", "露台"),
+)
+
+_TURN_ON_WORDS = (
+    "turn_on",
+    "on",
+    "open",
+    "打开",
+    "开启",
+    "开灯",
+    "开一下",
+    "拉开",
+    "拉起来",
+    "开了",
+    "没有开",
+    "没开",
+    "还没开",
+    "亮",
+)
+_TURN_OFF_WORDS = (
+    "turn_off",
+    "off",
+    "close",
+    "关闭",
+    "关掉",
+    "关上",
+    "关灯",
+    "拉上",
+    "合上",
+    "熄灭",
+    "关了",
+    "没有关",
+    "没关",
+    "还没关",
+)
 _SENSITIVE_CLASSES = {"lock", "cooker", "microwave", "fryer"}
 
 
@@ -1172,13 +1445,17 @@ def _miot_command_from_arguments(
     value: Any,
 ) -> dict[str, Any]:
     request_text = str(request or "")
+    inferred_value = value if value is not None else _infer_control_value(request_text)
+    inferred_action = _infer_action(action, request_text, inferred_value)
     command = {
         "request": request_text,
+        "operation": _infer_miot_operation(request_text, inferred_action),
         "area": str(area or "").strip(),
         "device": str(device or "").strip(),
         "device_class": _infer_device_class(device_class, device, request_text),
-        "action": _infer_action(action, request_text, value),
-        "value": value,
+        "action": inferred_action,
+        "property": _infer_control_property_query(request_text, inferred_value, inferred_action),
+        "value": inferred_value,
     }
     if not command["area"] and request_text:
         command["area"] = _infer_area(devices, request_text)
@@ -1199,6 +1476,7 @@ def _miot_read_command_from_arguments(
     request_text = str(request or "")
     command = {
         "request": request_text,
+        "operation": "query",
         "area": str(area or "").strip(),
         "device": str(device or "").strip(),
         "device_class": _infer_device_class(device_class, device, request_text),
@@ -1225,8 +1503,8 @@ def _resolve_device_matches(
         score = 0
         if area_query:
             area_score = max(
-                _text_match_score(area_query, str(device.get("room_name") or "")),
-                _text_match_score(area_query, str(device.get("home_name") or "")),
+                _area_match_score(area_query, str(device.get("room_name") or "")),
+                _area_match_score(area_query, str(device.get("home_name") or "")),
             )
             if area_score <= 0:
                 continue
@@ -1277,6 +1555,10 @@ def _select_control_item(
         selected = _select_bool_property(items)
         if selected is not None:
             return {"iid": selected["iid"], "value": value, "item": selected}
+
+    selected_set_value = _select_set_value_property(items, command)
+    if selected_set_value is not None:
+        return selected_set_value
 
     selected_with_value = _select_value_list_property(items, action)
     if selected_with_value is not None:
@@ -1408,6 +1690,151 @@ def _select_power_state_property(spec: dict[str, Any]) -> dict[str, Any] | None:
     return sorted(candidates, key=lambda candidate: candidate[0], reverse=True)[0][1]
 
 
+def _select_set_value_property(
+    items: dict[str, Any],
+    command: dict[str, Any],
+) -> dict[str, Any] | None:
+    action = str(command.get("action") or "")
+    value = command.get("value")
+    if action != "set_value" and (value is None or isinstance(value, bool)):
+        return None
+
+    if isinstance(value, str):
+        selected_value_list = _select_value_list_property_for_text(items, command, value)
+        if selected_value_list is not None:
+            return selected_value_list
+        return None
+
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return None
+
+    property_query = _normalize_text(str(command.get("property") or command.get("request") or ""))
+    aliases = _control_property_aliases_for_query(property_query)
+    candidates: list[tuple[int, dict[str, Any], Any]] = []
+    for item in items.values():
+        if not isinstance(item, dict):
+            continue
+        if item.get("kind") != "property" or not item.get("writeable"):
+            continue
+        value_range = item.get("value_range") if isinstance(item.get("value_range"), dict) else None
+        if value_range is None:
+            continue
+        coerced_value = _coerce_numeric_control_value(value, item)
+        if coerced_value is None:
+            continue
+        minimum = value_range.get("min")
+        maximum = value_range.get("max")
+        if isinstance(minimum, (int, float)) and coerced_value < minimum:
+            continue
+        if isinstance(maximum, (int, float)) and coerced_value > maximum:
+            continue
+
+        item_text = _normalize_text(
+            " ".join(
+                str(item.get(key) or "")
+                for key in ("name", "description", "service", "unit")
+            )
+        )
+        score = max(
+            _text_match_score(property_query, str(item.get("name") or "")),
+            _text_match_score(property_query, str(item.get("description") or "")),
+            _text_match_score(property_query, str(item.get("service") or "")),
+        )
+        for alias in aliases:
+            alias_norm = _normalize_text(alias)
+            if alias_norm and alias_norm in item_text:
+                score += 100
+        if score <= 0:
+            continue
+        candidates.append((score, item, coerced_value))
+
+    if not candidates:
+        return None
+    _score, item, coerced_value = sorted(
+        candidates,
+        key=lambda candidate: candidate[0],
+        reverse=True,
+    )[0]
+    return {"iid": item["iid"], "value": coerced_value, "item": item}
+
+
+def _select_value_list_property_for_text(
+    items: dict[str, Any],
+    command: dict[str, Any],
+    value_text: str,
+) -> dict[str, Any] | None:
+    property_query = _normalize_text(str(command.get("property") or command.get("request") or ""))
+    value_query = _normalize_text(value_text)
+    aliases = _control_property_aliases_for_query(property_query)
+    candidates: list[tuple[int, dict[str, Any], Any]] = []
+    for item in items.values():
+        if not isinstance(item, dict):
+            continue
+        if item.get("kind") != "property" or not item.get("writeable"):
+            continue
+        value_list = item.get("value_list") if isinstance(item.get("value_list"), list) else []
+        if not value_list:
+            continue
+
+        item_text = _normalize_text(
+            " ".join(str(item.get(key) or "") for key in ("name", "description", "service"))
+        )
+        item_score = 0
+        for alias in aliases:
+            alias_norm = _normalize_text(alias)
+            if alias_norm and alias_norm in item_text:
+                item_score += 100
+
+        for option in value_list:
+            if not isinstance(option, dict):
+                continue
+            option_text = _normalize_text(str(option.get("description") or ""))
+            option_score = _value_list_option_score(value_query, option_text)
+            if option_score <= 0:
+                continue
+            candidates.append((item_score + option_score, item, option.get("value")))
+
+    if not candidates:
+        return None
+    _score, item, option_value = sorted(
+        candidates,
+        key=lambda candidate: candidate[0],
+        reverse=True,
+    )[0]
+    return {"iid": item["iid"], "value": option_value, "item": item}
+
+
+def _value_list_option_score(value_query: str, option_text: str) -> int:
+    if not value_query or not option_text:
+        return 0
+    mode_aliases = {
+        "cool": ("cool", "cooling", "制冷", "冷风", "冷气"),
+        "heat": ("heat", "heating", "制热", "暖风", "热风"),
+        "dry": ("dry", "dehumidify", "除湿", "抽湿"),
+        "fan": ("fan", "ventilate", "送风", "通风"),
+        "auto": ("auto", "自动"),
+        "sleep": ("sleep", "睡眠"),
+        "high": ("high", "strong", "强", "高"),
+        "medium": ("medium", "normal", "中", "标准"),
+        "low": ("low", "weak", "低", "弱"),
+    }
+    aliases = mode_aliases.get(value_query, (value_query,))
+    for alias in aliases:
+        alias_norm = _normalize_text(alias)
+        if alias_norm and alias_norm in option_text:
+            return 120
+    return _text_match_score(value_query, option_text)
+
+
+def _coerce_numeric_control_value(value: int | float, item: dict[str, Any]) -> int | float | None:
+    value_format = str(item.get("format") or "")
+    if value_format.startswith(("int", "uint")):
+        return int(round(float(value)))
+    if value_format in ("float", "double"):
+        return float(value)
+    return None
+
+
 def _select_value_list_property(items: dict[str, Any], action: str) -> dict[str, Any] | None:
     if action not in ("turn_on", "turn_off"):
         return None
@@ -1449,16 +1876,57 @@ def _select_action_item(items: dict[str, Any], action: str) -> dict[str, Any] | 
 
 def _infer_area(devices: list[dict[str, Any]], request: str) -> str:
     request_norm = _normalize_text(request)
-    best: tuple[int, str] = (0, "")
+    best_score = 0
+    best_areas: set[str] = set()
     for device in devices:
         for key in ("room_name", "home_name"):
             name = str(device.get(key) or "")
             if not name:
                 continue
-            score = _text_match_score(name, request_norm)
-            if score > best[0]:
-                best = (score, name)
-    return best[1] if best[0] >= 70 else ""
+            score = _area_reference_score(name, request_norm)
+            if score > best_score:
+                best_score = score
+                best_areas = {name}
+            elif score == best_score and score > 0:
+                best_areas.add(name)
+    return next(iter(best_areas)) if best_score >= 70 and len(best_areas) == 1 else ""
+
+
+def _area_match_score(query: str, target: str) -> int:
+    query_norm = _normalize_text(query)
+    target_norm = _normalize_text(target)
+    if not query_norm or not target_norm:
+        return 0
+    score = _text_match_score(query_norm, target_norm)
+    query_aliases = _area_alias_terms(query_norm)
+    target_aliases = _area_alias_terms(target_norm)
+    if query_norm in target_aliases or target_norm in query_aliases:
+        score = max(score, 95)
+    if query_aliases & target_aliases:
+        score = max(score, 90)
+    return score
+
+
+def _area_reference_score(area: str, request_norm: str) -> int:
+    area_norm = _normalize_text(area)
+    if not area_norm or not request_norm:
+        return 0
+    if area_norm in request_norm:
+        return 100
+    aliases = _area_alias_terms(area_norm)
+    if any(alias and alias in request_norm for alias in aliases):
+        return 92
+    return _text_match_score(area_norm, request_norm)
+
+
+def _area_alias_terms(value: str) -> set[str]:
+    normalized = _normalize_text(value)
+    aliases = {normalized} if normalized else set()
+    for group in _AREA_ALIAS_GROUPS:
+        normalized_group = {_normalize_text(item) for item in group if item}
+        if normalized in normalized_group:
+            aliases.update(normalized_group)
+    return aliases
 
 
 def _infer_device_query(request: str, area: str, action: str) -> str:
@@ -1487,6 +1955,20 @@ def _infer_device_query(request: str, area: str, action: str) -> str:
         "显示的",
         "显示",
         "状态",
+        "全部",
+        "所有",
+        "全都",
+        "每个",
+        "亮度",
+        "温度",
+        "模式",
+        "调到",
+        "调成",
+        "设置",
+        "设为",
+        "开到",
+        "百分比",
+        "百分之",
         "空气质量",
         "空气",
         "质量",
@@ -1551,6 +2033,143 @@ def _looks_like_air_quality_query(query_norm: str) -> bool:
     )
 
 
+def _unsupported_miot_operation_response(command: dict[str, Any]) -> dict[str, Any] | None:
+    operation = str(command.get("operation") or "")
+    if operation == "schedule":
+        message = (
+            "\u6211\u73b0\u5728\u8fd8\u4e0d\u80fd"
+            "\u5b9a\u65f6\u63a7\u5236\u7c73\u5bb6\u8bbe\u5907\u3002"
+        )
+        _log_miot_resolver(command, "unsupported", 0, reason="schedule_unsupported")
+        return {
+            "status": "unsupported",
+            "decision": "unsupported",
+            "operation": operation,
+            "message": message,
+            "direct_response": message,
+            "query": command,
+        }
+    if operation == "scene":
+        message = "\u6211\u73b0\u5728\u8fd8\u4e0d\u80fd\u6267\u884c\u7c73\u5bb6\u573a\u666f\u3002"
+        _log_miot_resolver(command, "unsupported", 0, reason="scene_unsupported")
+        return {
+            "status": "unsupported",
+            "decision": "unsupported",
+            "operation": operation,
+            "message": message,
+            "direct_response": message,
+            "query": command,
+        }
+    return None
+
+
+def _infer_miot_operation(request: str, action: str) -> str:
+    normalized = _normalize_text(request)
+    if action and _looks_like_scheduled_miot_request(normalized):
+        return "schedule"
+    if _looks_like_scene_miot_request(normalized):
+        return "scene"
+    if action:
+        return "control"
+    return ""
+
+
+def _looks_like_scheduled_miot_request(normalized: str) -> bool:
+    if any(
+        term in normalized
+        for term in (
+            "\u5b9a\u65f6",
+            "\u9884\u7ea6",
+            "\u7a0d\u540e",
+            "\u4e00\u4f1a\u513f",
+            "\u5f85\u4f1a\u513f",
+            "\u8fc7\u4f1a\u513f",
+            "\u5230\u70b9",
+        )
+    ):
+        return True
+    relative_pattern = (
+        r"(?:\d+|[\u4e00\u4e8c\u4e24\u4e09\u56db\u4e94\u516d"
+        r"\u4e03\u516b\u4e5d\u5341\u534a]+)"
+        r"(?:\u79d2|\u5206\u949f|\u5206|\u4e2a\u5c0f\u65f6|\u5c0f\u65f6|\u5929)"
+        r"\u540e"
+    )
+    if re.search(relative_pattern, normalized):
+        return True
+    clock_pattern = (
+        r"(?:\u4eca\u5929|\u660e\u5929|\u540e\u5929|\u4eca\u665a|\u660e\u65e9|"
+        r"\u65e9\u4e0a|\u4e0a\u5348|\u4e2d\u5348|\u4e0b\u5348|\u665a\u4e0a)?"
+        r"(?:\d+|[\u4e00\u4e8c\u4e24\u4e09\u56db\u4e94\u516d\u4e03"
+        r"\u516b\u4e5d\u5341]+)\u70b9"
+    )
+    return re.search(clock_pattern, normalized) is not None
+
+
+def _looks_like_scene_miot_request(normalized: str) -> bool:
+    return any(term in normalized for term in ("\u573a\u666f", "\u81ea\u52a8\u5316", "scene"))
+
+
+def _is_group_control_command(command: dict[str, Any]) -> bool:
+    text = _normalize_text(
+        " ".join(str(command.get(key) or "") for key in ("request", "device"))
+    )
+    return _has_miot_group_quantifier(text)
+
+
+def _has_miot_group_quantifier(text: str) -> bool:
+    if any(
+        term in text
+        for term in (
+            "\u5168\u90e8",
+            "\u6240\u6709",
+            "\u5168\u90fd",
+            "\u6bcf\u4e2a",
+            "all",
+        )
+    ):
+        return True
+    if "\u90fd" not in text:
+        return False
+    action_terms = {
+        _normalize_text(word)
+        for word in (
+            *_TURN_ON_WORDS,
+            *_TURN_OFF_WORDS,
+            "\u8bbe\u7f6e",
+            "\u8bbe\u4e3a",
+            "\u8c03\u5230",
+            "\u8c03\u6210",
+        )
+        if _normalize_text(word)
+    }
+    if any(f"\u90fd{term}" in text for term in action_terms):
+        return True
+    device_terms: set[str] = {
+        "\u8bbe\u5907",
+        "\u5bb6\u91cc",
+        "\u7c73\u5bb6",
+    }
+    for aliases in _DEVICE_CLASS_ALIASES.values():
+        device_terms.update(_normalize_text(alias) for alias in aliases if alias)
+    return any(term and f"{term}\u90fd" in text for term in device_terms)
+
+
+def _state_filter_for_group_control(command: dict[str, Any]) -> bool | None:
+    text = _normalize_text(
+        " ".join(str(command.get(key) or "") for key in ("request", "device"))
+    )
+    action = str(command.get("action") or "")
+    if action == "turn_off" and any(
+        term in text for term in ("开着", "亮着", "没关", "没有关", "还开", "未关")
+    ):
+        return True
+    if action == "turn_on" and any(
+        term in text for term in ("关着", "没开", "没有开", "还关", "未开")
+    ):
+        return False
+    return None
+
+
 def _target_power_state_for_control(command: dict[str, Any]) -> bool | None:
     action = str(command.get("action") or "")
     command_text = _normalize_text(
@@ -1574,6 +2193,124 @@ def _target_power_state_description(command: dict[str, Any]) -> str:
     return "符合状态"
 
 
+def _looks_like_power_property_query(command: dict[str, Any]) -> bool:
+    text = _normalize_text(
+        " ".join(str(command.get(key) or "") for key in ("request", "property"))
+    )
+    return any(
+        term in text
+        for term in (
+            "开关",
+            "开着",
+            "关着",
+            "开没开",
+            "关没关",
+            "亮着",
+            "哪个",
+            "power",
+            "switch",
+            "on",
+        )
+    )
+
+
+def _format_group_control_response(
+    command: dict[str, Any],
+    successes: list[dict[str, Any]],
+    failures: list[dict[str, Any]],
+    *,
+    dry_run: bool,
+) -> str:
+    action_text = _group_action_done_text(str(command.get("action") or ""))
+    if dry_run:
+        action_text = "可处理"
+    success_count = len(successes)
+    failure_count = len(failures)
+    if success_count and not failure_count:
+        return f"好的，已{action_text}{success_count}个设备。"
+    if success_count and failure_count:
+        failed_names = [
+            str((failure.get("device") or {}).get("name") or "设备")
+            for failure in failures
+            if isinstance(failure, dict)
+        ]
+        return (
+            f"已{action_text}{success_count}个设备，"
+            f"{failure_count}个失败：{'、'.join(failed_names[:3])}。"
+        )
+    if failure_count:
+        return f"没有成功控制设备，{failure_count}个失败。"
+    return "没有需要处理的设备。"
+
+
+def _group_action_done_text(action: str) -> str:
+    if action == "turn_on":
+        return "打开"
+    if action == "turn_off":
+        return "关闭"
+    if action == "set_value":
+        return "设置"
+    return "处理"
+
+
+def _format_group_power_read_response(
+    command: dict[str, Any],
+    readings: list[dict[str, Any]],
+    failures: list[dict[str, Any]],
+) -> str:
+    del failures
+    text = _normalize_text(str(command.get("request") or ""))
+    on_names = [
+        str((reading.get("device") or {}).get("name") or "设备")
+        for reading in readings
+        if miot_values_equal(True, reading.get("value"))
+    ]
+    off_names = [
+        str((reading.get("device") or {}).get("name") or "设备")
+        for reading in readings
+        if miot_values_equal(False, reading.get("value"))
+    ]
+    if "哪个" in text or "开着" in text or "亮着" in text:
+        if on_names:
+            return "开着的是" + "、".join(on_names[:5]) + "。"
+        return "没有发现开着的设备。"
+    if "关着" in text:
+        if off_names:
+            return "关着的是" + "、".join(off_names[:5]) + "。"
+        return "没有发现关着的设备。"
+    parts = []
+    if on_names:
+        parts.append("开：" + "、".join(on_names[:5]))
+    if off_names:
+        parts.append("关：" + "、".join(off_names[:5]))
+    return "；".join(parts) + "。" if parts else "没有读到设备开关状态。"
+
+
+def _log_miot_resolver(
+    command: dict[str, Any],
+    decision: str,
+    candidate_count: int,
+    *,
+    reason: str,
+    success_count: int | None = None,
+    failure_count: int | None = None,
+) -> None:
+    params: dict[str, Any] = {
+        "decision": decision,
+        "reason": reason,
+        "candidate_count": candidate_count,
+        "action": str(command.get("action") or ""),
+        "area": str(command.get("area") or ""),
+        "device": str(command.get("device") or ""),
+        "device_class": str(command.get("device_class") or ""),
+    }
+    if success_count is not None:
+        params["success_count"] = success_count
+    if failure_count is not None:
+        params["failure_count"] = failure_count
+    log_event("miot", "resolver", log_id="miot.resolver", **params)
+
+
 def _format_property_read_response(
     device: dict[str, Any],
     item: dict[str, Any],
@@ -1594,11 +2331,99 @@ def _format_property_value(value: Any) -> str:
     return str(value)
 
 
+def _infer_control_value(request: str) -> Any:
+    text = _normalize_text(request)
+    if any(term in text for term in ("一半", "半开", "开半", "开到半")):
+        return 50
+
+    percent_match = re.search(r"(?:百分之|百分比)?(\d+(?:\.\d+)?)%", str(request or ""))
+    if percent_match:
+        return float(percent_match.group(1))
+    percent_text_match = re.search(r"百分之\s*(\d+(?:\.\d+)?)", str(request or ""))
+    if percent_text_match:
+        return float(percent_text_match.group(1))
+
+    number_match = re.search(r"(\d+(?:\.\d+)?)\s*(?:度|℃|%|百分比)?", str(request or ""))
+    if number_match and any(
+        term in text
+        for term in (
+            "温度",
+            "空调",
+            "冷气",
+            "度",
+            "℃",
+            "亮度",
+            "调亮",
+            "调暗",
+            "窗帘",
+            "开到",
+            "调到",
+            "百分",
+        )
+    ):
+        value = float(number_match.group(1))
+        return int(value) if value.is_integer() else value
+
+    mode_terms = (
+        ("cool", ("制冷", "冷风", "冷气模式")),
+        ("heat", ("制热", "暖风", "热风")),
+        ("dry", ("除湿", "抽湿")),
+        ("fan", ("送风", "通风")),
+        ("auto", ("自动",)),
+        ("sleep", ("睡眠",)),
+        ("high", ("高风", "强风", "大风")),
+        ("medium", ("中风", "标准风")),
+        ("low", ("低风", "弱风", "小风")),
+    )
+    for value, terms in mode_terms:
+        if any(term in text for term in terms):
+            return value
+    return None
+
+
+def _infer_control_property_query(request: str, value: Any, action: str) -> str:
+    text = _normalize_text(request)
+    if isinstance(value, str):
+        if value in {"cool", "heat", "dry", "fan", "auto", "sleep"}:
+            return "mode"
+        if value in {"high", "medium", "low"}:
+            return "fan level speed"
+    if any(term in text for term in ("亮度", "调亮", "调暗", "暗一点", "亮一点")):
+        return "brightness"
+    if "温度" in text or "度" in text or "℃" in text:
+        return "temperature"
+    if any(term in text for term in ("窗帘", "帘", "开到", "开一半", "一半", "百分")):
+        return "curtain position percentage"
+    if "模式" in text:
+        return "mode"
+    if action == "set_value":
+        return request
+    return ""
+
+
+def _control_property_aliases_for_query(query_norm: str) -> tuple[str, ...]:
+    if "temperature" in query_norm or "温度" in query_norm or "度" in query_norm:
+        return ("target temperature", "temperature", "温度")
+    if "brightness" in query_norm or "亮度" in query_norm or "调亮" in query_norm:
+        return ("brightness", "bright", "亮度")
+    if any(term in query_norm for term in ("curtain", "position", "percentage", "窗帘", "百分")):
+        return ("current position", "target position", "position", "percentage", "curtain", "位置")
+    if "mode" in query_norm or "模式" in query_norm:
+        return ("mode", "模式")
+    if "fan" in query_norm or "speed" in query_norm or "风" in query_norm:
+        return ("fan level", "fan speed", "speed", "风速", "风量")
+    return (query_norm,) if query_norm else ()
+
+
 def _infer_action(action: str, request: str, value: Any) -> str:
     action_text = _normalize_text(action)
     request_text = _normalize_text(request)
+    if value is not None and not isinstance(value, bool):
+        return "set_value"
     if isinstance(value, bool):
         return "turn_on" if value else "turn_off"
+    if any(term in request_text for term in ("调到", "设置", "设为", "调成", "开到")):
+        return "set_value"
     if any(_normalize_text(word) in action_text for word in _TURN_ON_WORDS):
         return "turn_on"
     if any(_normalize_text(word) in action_text for word in _TURN_OFF_WORDS):

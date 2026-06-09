@@ -360,6 +360,7 @@ class VoiceToolRunner:
         self.music_controller = music_controller
         self._last_miot_control: dict[str, Any] | None = None
         self._last_miot_ambiguity: dict[str, Any] | None = None
+        self._previous_miot_ambiguity: dict[str, Any] | None = None
 
     @property
     def enabled(self) -> bool:
@@ -501,12 +502,15 @@ class VoiceToolRunner:
         if "xiaomi_miot_control_device" not in self.tools:
             return None
         request = _last_user_text(messages)
+        correction_call = self._build_miot_correction_call(request)
+        if correction_call is not None:
+            return correction_call
         action = _infer_miot_action_from_text(request)
-        if not action or not _is_miot_followup_reference(request):
-            return None
         ambiguity_call = self._build_miot_ambiguity_followup_call(request, action)
         if ambiguity_call is not None:
             return ambiguity_call
+        if not action or not _is_miot_followup_reference(request):
+            return None
         if self._last_miot_ambiguity is not None or not self._last_miot_control:
             return None
         device = self._last_miot_control.get("device")
@@ -545,14 +549,36 @@ class VoiceToolRunner:
             if isinstance(ambiguity.get("candidates"), list)
             else []
         )
+        selected_candidate = _select_miot_ambiguity_candidate(request, candidates)
+        effective_action = action or str(query.get("action") or "")
+        if not effective_action:
+            return None
+        if not action and selected_candidate is None:
+            return None
+        if (
+            action
+            and selected_candidate is None
+            and not _is_miot_followup_reference(request)
+            and not _is_miot_group_followup_reference(request)
+        ):
+            return None
+
         arguments: dict[str, Any] = {
             "request": request,
-            "action": action,
+            "action": effective_action,
         }
-        for key in ("area", "device", "device_class"):
-            value = str(query.get(key) or "").strip()
-            if value:
-                arguments[key] = value
+        if selected_candidate is not None:
+            if selected_candidate.get("name"):
+                arguments["device"] = str(selected_candidate["name"])
+            if selected_candidate.get("room_name"):
+                arguments["area"] = str(selected_candidate["room_name"])
+            if selected_candidate.get("device_class"):
+                arguments["device_class"] = str(selected_candidate["device_class"])
+        else:
+            for key in ("area", "device", "device_class"):
+                value = str(query.get(key) or "").strip()
+                if value:
+                    arguments[key] = value
 
         if not arguments.get("device_class"):
             device_class = _common_candidate_value(candidates, "device_class")
@@ -570,11 +596,74 @@ class VoiceToolRunner:
             "tools",
             "miot_followup",
             log_id="tools.miot_followup",
-            action=action,
+            action=effective_action,
             device=target,
         )
         return ToolCall(
             id="local_miot_ambiguity_followup",
+            name="xiaomi_miot_control_device",
+            arguments=arguments,
+        )
+
+    def _build_miot_correction_call(self, request: str) -> ToolCall | None:
+        if not _looks_like_miot_correction(request):
+            return None
+        ambiguity = self._previous_miot_ambiguity
+        if not ambiguity or not self._last_miot_control:
+            return None
+
+        last_device = (
+            self._last_miot_control.get("device")
+            if isinstance(self._last_miot_control.get("device"), dict)
+            else {}
+        )
+        candidates = (
+            ambiguity.get("candidates")
+            if isinstance(ambiguity.get("candidates"), list)
+            else []
+        )
+        remaining: list[dict[str, Any]] = []
+        last_name = str(last_device.get("name") or "")
+        last_did = str(last_device.get("did") or "")
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            candidate_name = str(candidate.get("name") or "")
+            candidate_did = str(candidate.get("did") or "")
+            if last_did and candidate_did and candidate_did == last_did:
+                continue
+            if last_name and candidate_name and candidate_name == last_name:
+                continue
+            remaining.append(candidate)
+        if len(remaining) != 1:
+            return None
+
+        query = ambiguity.get("query") if isinstance(ambiguity.get("query"), dict) else {}
+        action = str(query.get("action") or self._last_miot_control.get("action") or "")
+        if not action:
+            return None
+
+        candidate = remaining[0]
+        arguments: dict[str, Any] = {
+            "request": request,
+            "action": action,
+        }
+        if candidate.get("name"):
+            arguments["device"] = str(candidate["name"])
+        if candidate.get("room_name"):
+            arguments["area"] = str(candidate["room_name"])
+        if candidate.get("device_class"):
+            arguments["device_class"] = str(candidate["device_class"])
+        target = str(arguments.get("device") or arguments.get("device_class") or "correction")
+        log_event(
+            "tools",
+            "miot_followup",
+            log_id="tools.miot_followup",
+            action=action,
+            device=target,
+        )
+        return ToolCall(
+            id="local_miot_correction_followup",
             name="xiaomi_miot_control_device",
             arguments=arguments,
         )
@@ -600,6 +689,7 @@ class VoiceToolRunner:
         if status == "ambiguous":
             self._last_miot_control = None
             self._last_miot_ambiguity = None
+            self._previous_miot_ambiguity = None
             candidates = (
                 payload.get("candidates")
                 if isinstance(payload.get("candidates"), list)
@@ -619,7 +709,10 @@ class VoiceToolRunner:
         if status not in {"verified", "ok"}:
             self._last_miot_control = None
             self._last_miot_ambiguity = None
+            self._previous_miot_ambiguity = None
             return
+        if self._last_miot_ambiguity is not None:
+            self._previous_miot_ambiguity = dict(self._last_miot_ambiguity)
         self._last_miot_ambiguity = None
         device = payload.get("device") if isinstance(payload.get("device"), dict) else None
         if not device or not device.get("name"):
@@ -1628,9 +1721,17 @@ def _select_tool_names_for_text(text: str, available_names: set[str]) -> set[str
             "开关",
             "窗帘",
             "空调",
+            "冷气",
+            "空调机",
             "传感器",
             "摄像",
             "门锁",
+            "插座",
+            "插排",
+            "排插",
+            "风扇",
+            "电扇",
+            "吊扇",
             "家里",
             "设备",
             "状态",
@@ -1639,6 +1740,16 @@ def _select_tool_names_for_text(text: str, available_names: set[str]) -> set[str
             "pm2.5",
             "pm25",
             "净化器",
+            "加湿器",
+            "亮度",
+            "模式",
+            "制冷",
+            "制热",
+            "除湿",
+            "睡眠",
+            "调到",
+            "设置",
+            "设为",
             "打开",
             "关闭",
             "开了",
@@ -1699,6 +1810,8 @@ def _looks_like_miot_read_text(text: str) -> bool:
             "关着",
             "开没开",
             "关没关",
+            "亮度",
+            "模式",
         )
     )
 
@@ -1728,6 +1841,8 @@ def _infer_miot_action_from_text(text: str) -> str:
             "关掉",
             "关上",
             "关灯",
+            "拉上",
+            "合上",
             "熄灭",
             "关了",
             "没有关",
@@ -1746,6 +1861,8 @@ def _infer_miot_action_from_text(text: str) -> str:
             "开启",
             "开灯",
             "开一下",
+            "拉开",
+            "拉起来",
             "开了",
             "亮",
             "没有开",
@@ -1754,6 +1871,27 @@ def _infer_miot_action_from_text(text: str) -> str:
         )
     ):
         return "turn_on"
+    if any(
+        term in normalized
+        for term in (
+            "调到",
+            "调成",
+            "设置",
+            "设为",
+            "调亮",
+            "调暗",
+            "亮度",
+            "温度",
+            "模式",
+            "制冷",
+            "制热",
+            "除湿",
+            "睡眠",
+            "一半",
+            "百分",
+        )
+    ):
+        return "set_value"
     return ""
 
 
@@ -1770,6 +1908,66 @@ def _is_miot_followup_reference(text: str) -> bool:
     return False
 
 
+def _is_miot_group_followup_reference(text: str) -> bool:
+    normalized = re.sub(r"[\W_]+", "", str(text or "").lower())
+    if not _infer_miot_action_from_text(text):
+        return False
+    if any(
+        term in normalized
+        for term in (
+            "\u5168\u90e8",
+            "\u6240\u6709",
+            "\u5168\u90fd",
+            "\u6bcf\u4e2a",
+        )
+    ):
+        return True
+    if "\u90fd" not in normalized:
+        return False
+    return any(
+        term in normalized
+        for term in (
+            "\u90fd\u5173",
+            "\u90fd\u5173\u95ed",
+            "\u90fd\u6253\u5f00",
+            "\u90fd\u5f00",
+            "\u706f\u90fd",
+            "\u7a7a\u8c03\u90fd",
+            "\u51b7\u6c14\u90fd",
+            "\u7a97\u5e18\u90fd",
+            "\u8bbe\u5907\u90fd",
+        )
+    )
+
+
+def _looks_like_miot_correction(text: str) -> bool:
+    normalized = re.sub(r"[\W_]+", "", str(text or "").lower())
+    if any(
+        term in normalized
+        for term in (
+            "\u4e0d\u662f\u8fd9\u4e2a",
+            "\u4e0d\u662f\u90a3\u4e2a",
+            "\u4e0d\u662f\u5b83",
+            "\u4e0d\u662f\u4ed6",
+            "\u4e0d\u5bf9",
+            "\u9519\u4e86",
+        )
+    ):
+        return True
+    if "\u9519" in normalized:
+        return True
+    return "\u4e0d" in normalized and any(
+        term in normalized
+        for term in (
+            "\u8fd9\u4e2a",
+            "\u90a3\u4e2a",
+            "\u5b83",
+            "\u4ed6",
+            "\u5bf9",
+        )
+    )
+
+
 def _common_candidate_value(candidates: list[Any], key: str) -> str:
     values = {
         str(candidate.get(key) or "").strip()
@@ -1777,6 +1975,87 @@ def _common_candidate_value(candidates: list[Any], key: str) -> str:
         if isinstance(candidate, dict) and str(candidate.get(key) or "").strip()
     }
     return next(iter(values)) if len(values) == 1 else ""
+
+
+def _select_miot_ambiguity_candidate(text: str, candidates: list[Any]) -> dict[str, Any] | None:
+    candidate_dicts = [candidate for candidate in candidates if isinstance(candidate, dict)]
+    if not candidate_dicts:
+        return None
+
+    ordinal = _miot_ordinal_index(text)
+    if ordinal is not None:
+        if 0 <= ordinal < len(candidate_dicts):
+            return dict(candidate_dicts[ordinal])
+        return None
+
+    reference = _normalize_miot_reference(text)
+    if not reference:
+        return None
+
+    scored: list[tuple[int, dict[str, Any]]] = []
+    for candidate in candidate_dicts:
+        score = _score_miot_candidate_reference(reference, candidate)
+        if score > 0:
+            scored.append((score, candidate))
+    if not scored:
+        return None
+    scored.sort(key=lambda item: item[0], reverse=True)
+    if len(scored) > 1 and scored[0][0] == scored[1][0]:
+        return None
+    return dict(scored[0][1])
+
+
+def _score_miot_candidate_reference(reference: str, candidate: dict[str, Any]) -> int:
+    score = 0
+    for key, weight in (("name", 160), ("room_name", 120), ("home_name", 80)):
+        value = _normalize_miot_reference(str(candidate.get(key) or ""))
+        if value and value in reference:
+            score = max(score, weight)
+        elif value and reference in value and len(reference) >= 2:
+            score = max(score, weight - 20)
+    device_class = _normalize_miot_reference(str(candidate.get("device_class") or ""))
+    if device_class and device_class in reference:
+        score = max(score, 40)
+    return score
+
+
+def _miot_ordinal_index(text: str) -> int | None:
+    normalized = _normalize_miot_reference(text)
+    ordinal_terms = (
+        (0, ("第一个", "第1个", "第一", "第1", "一号", "1号", "选一", "选1")),
+        (1, ("第二个", "第2个", "第二", "第2", "二号", "2号", "选二", "选2")),
+        (2, ("第三个", "第3个", "第三", "第3", "三号", "3号", "选三", "选3")),
+        (3, ("第四个", "第4个", "第四", "第4", "四号", "4号", "选四", "选4")),
+        (4, ("第五个", "第5个", "第五", "第5", "五号", "5号", "选五", "选5")),
+    )
+    for index, terms in ordinal_terms:
+        if any(term in normalized for term in terms):
+            return index
+    return None
+
+
+def _normalize_miot_reference(text: str) -> str:
+    normalized = re.sub(
+        r"[\s,，。.!！?？:：;；'\"“”‘’（）()\\[\\]{}<>《》、_-]+",
+        "",
+        str(text or "").lower(),
+    )
+    for filler in (
+        "就",
+        "把",
+        "给我",
+        "帮我",
+        "请",
+        "一下",
+        "那个",
+        "这个",
+        "它",
+        "他",
+        "的",
+        "设备",
+    ):
+        normalized = normalized.replace(filler, "")
+    return normalized
 
 
 def _has_explicit_miot_device_text(normalized: str) -> bool:
@@ -1787,12 +2066,19 @@ def _has_explicit_miot_device_text(normalized: str) -> bool:
             "灯",
             "开关",
             "窗帘",
+            "帘",
             "空调",
+            "冷气",
+            "空调机",
             "传感器",
             "摄像",
             "门锁",
             "插座",
+            "插排",
+            "排插",
             "风扇",
+            "电扇",
+            "吊扇",
             "净化器",
             "加湿器",
             "空气净化器",
@@ -1863,6 +2149,30 @@ def _format_tool_payload_response(payload: dict[str, Any]) -> str:
         value = payload.get("value")
         unit = str(payload.get("unit") or "")
         return f"{name}的{prop}是{value}{unit}。"
+    if status == "property_read_group":
+        direct_response = str(payload.get("direct_response") or "").strip()
+        if direct_response:
+            return direct_response
+        readings = payload.get("readings") if isinstance(payload.get("readings"), list) else []
+        names = [
+            str((reading.get("device") or {}).get("name") or "")
+            for reading in readings
+            if isinstance(reading, dict)
+        ]
+        if names:
+            return "已读取：" + "、".join(name for name in names if name) + "。"
+        return "没有读到设备状态。"
+    if status in ("group_executed", "group_resolved"):
+        direct_response = str(payload.get("direct_response") or "").strip()
+        if direct_response:
+            return direct_response
+        success_count = int(payload.get("success_count") or 0)
+        failure_count = int(payload.get("failure_count") or 0)
+        if success_count and not failure_count:
+            return f"好的，已处理{success_count}个设备。"
+        if success_count:
+            return f"已处理{success_count}个设备，{failure_count}个失败。"
+        return "没有成功控制设备。"
     if status in ("verified", "ok", "resolved"):
         device = payload.get("device") if isinstance(payload.get("device"), dict) else {}
         name = str(device.get("name") or "")
@@ -1884,6 +2194,8 @@ def _action_done_text(action: str) -> str:
         return "打开"
     if normalized in ("turn_off", "off", "close", "关闭", "关掉"):
         return "关闭"
+    if normalized in ("set_value", "set", "设置", "调到", "调成"):
+        return "设置"
     return ""
 
 

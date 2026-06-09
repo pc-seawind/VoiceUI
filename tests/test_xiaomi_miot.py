@@ -267,6 +267,119 @@ class XiaomiMiotTests(unittest.TestCase):
         self.assertIn("Living Room Air Purifier", result["direct_response"])
         send_get.assert_called_once_with("did-purifier", "prop.0.2.1")
 
+    def test_read_device_property_summarizes_group_power_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            client = XiaomiMiotClient(
+                XiaomiMiotConfig(
+                    token_file=str(Path(temp_dir) / "token.json"),
+                    uuid_file=str(Path(temp_dir) / "uuid"),
+                    cache_dir=str(Path(temp_dir) / "cache"),
+                ),
+                token=XiaomiMiotToken(access_token="access-secret"),
+            )
+        devices = {
+            "did-study": {
+                "did": "did-study",
+                "name": "书房空调",
+                "room_name": "书房",
+                "device_class": "aircondition",
+                "online": True,
+                "urn": "urn:test",
+            },
+            "did-living": {
+                "did": "did-living",
+                "name": "客厅空调",
+                "room_name": "客厅",
+                "device_class": "aircondition",
+                "online": True,
+                "urn": "urn:test",
+            },
+        }
+        spec = {
+            "items": {
+                "prop.0.2.1": {
+                    "iid": "prop.0.2.1",
+                    "kind": "property",
+                    "name": "on",
+                    "description": "Air Conditioner - Power",
+                    "service": "Air Conditioner",
+                    "format": "bool",
+                    "readable": True,
+                    "writeable": True,
+                }
+            }
+        }
+
+        with patch.object(client, "get_devices", return_value=devices):
+            with patch.object(client, "get_device_spec", return_value=spec):
+                with patch.object(client, "send_get_rpc") as send_get:
+                    send_get.side_effect = [
+                        {"did": "did-study", "iid": "prop.0.2.1", "value": True},
+                        {"did": "did-living", "iid": "prop.0.2.1", "value": False},
+                    ]
+                    result = client.read_device_property(request="哪个空调开着")
+
+        self.assertEqual(result["status"], "property_read_group")
+        self.assertEqual(len(result["readings"]), 2)
+        self.assertIn("书房空调", result["direct_response"])
+
+    def test_control_device_rejects_scheduled_iot_without_executing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            client = XiaomiMiotClient(
+                XiaomiMiotConfig(
+                    token_file=str(Path(temp_dir) / "token.json"),
+                    uuid_file=str(Path(temp_dir) / "uuid"),
+                    cache_dir=str(Path(temp_dir) / "cache"),
+                    control_verify_delay_seconds=0,
+                ),
+                token=XiaomiMiotToken(access_token="access-secret"),
+            )
+        devices = {
+            "did-ac": {
+                "did": "did-ac",
+                "name": "客厅空调",
+                "room_name": "客厅",
+                "home_name": "家",
+                "device_class": "aircondition",
+                "online": True,
+                "model": "xiaomi.aircondition.test",
+                "urn": "urn:test",
+            }
+        }
+
+        with patch.object(client, "get_devices", return_value=devices):
+            with patch.object(client, "get_device_spec") as get_spec:
+                with patch.object(client, "send_ctrl_rpc") as send_ctrl:
+                    result = client.control_device(request="十分钟后关闭空调")
+
+        self.assertEqual(result["status"], "unsupported")
+        self.assertEqual(result["decision"], "unsupported")
+        self.assertEqual(result["operation"], "schedule")
+        self.assertIn("不能定时控制", result["direct_response"])
+        get_spec.assert_not_called()
+        send_ctrl.assert_not_called()
+
+    def test_control_device_rejects_scene_without_executing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            client = XiaomiMiotClient(
+                XiaomiMiotConfig(
+                    token_file=str(Path(temp_dir) / "token.json"),
+                    uuid_file=str(Path(temp_dir) / "uuid"),
+                    cache_dir=str(Path(temp_dir) / "cache"),
+                ),
+                token=XiaomiMiotToken(access_token="access-secret"),
+            )
+
+        with patch.object(client, "get_devices", return_value={}):
+            with patch.object(client, "send_ctrl_rpc") as send_ctrl:
+                result = client.control_device(request="执行离家场景")
+
+        self.assertEqual(result["status"], "unsupported")
+        self.assertEqual(result["decision"], "unsupported")
+        self.assertEqual(result["operation"], "scene")
+        self.assertIn("不能执行米家场景", result["direct_response"])
+        send_ctrl.assert_not_called()
+
     def test_control_device_returns_ambiguous_for_multiple_room_lights(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             client = XiaomiMiotClient(
@@ -299,6 +412,220 @@ class XiaomiMiotTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "ambiguous")
         self.assertEqual(len(result["candidates"]), 2)
+
+    def test_control_device_sets_temperature_value(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            client = XiaomiMiotClient(
+                XiaomiMiotConfig(
+                    token_file=str(Path(temp_dir) / "token.json"),
+                    uuid_file=str(Path(temp_dir) / "uuid"),
+                    cache_dir=str(Path(temp_dir) / "cache"),
+                    control_verify_delay_seconds=0,
+                ),
+                token=XiaomiMiotToken(access_token="access-secret"),
+            )
+        devices = {
+            "did-ac": {
+                "did": "did-ac",
+                "name": "客厅空调",
+                "room_name": "客厅",
+                "device_class": "aircondition",
+                "online": True,
+                "urn": "urn:test",
+            }
+        }
+        spec = {
+            "items": {
+                "prop.0.2.2": {
+                    "iid": "prop.0.2.2",
+                    "kind": "property",
+                    "name": "target-temperature",
+                    "description": "Air Conditioner - Target Temperature",
+                    "service": "Air Conditioner",
+                    "format": "uint8",
+                    "readable": True,
+                    "writeable": True,
+                    "unit": "celsius",
+                    "value_range": {"min": 16, "max": 30, "step": 1},
+                }
+            }
+        }
+
+        with patch.object(client, "get_devices", return_value=devices):
+            with patch.object(client, "get_device_spec", return_value=spec):
+                with patch.object(client, "send_ctrl_rpc") as send_ctrl:
+                    send_ctrl.return_value = {
+                        "status": "verified",
+                        "did": "did-ac",
+                        "iid": "prop.0.2.2",
+                        "readback_value": 26,
+                    }
+                    result = client.control_device(request="把客厅空调调到26度")
+
+        self.assertEqual(result["status"], "verified")
+        self.assertEqual(result["action"], "set_value")
+        self.assertEqual(result["target_value"], 26)
+        send_ctrl.assert_called_once_with("did-ac", "prop.0.2.2", 26, verify=True)
+
+    def test_control_device_sets_brightness_value(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            client = XiaomiMiotClient(
+                XiaomiMiotConfig(
+                    token_file=str(Path(temp_dir) / "token.json"),
+                    uuid_file=str(Path(temp_dir) / "uuid"),
+                    cache_dir=str(Path(temp_dir) / "cache"),
+                    control_verify_delay_seconds=0,
+                ),
+                token=XiaomiMiotToken(access_token="access-secret"),
+            )
+        devices = {
+            "did-light": {
+                "did": "did-light",
+                "name": "客厅吸顶灯",
+                "room_name": "客厅",
+                "device_class": "light",
+                "online": True,
+                "urn": "urn:test",
+            }
+        }
+        spec = {
+            "items": {
+                "prop.0.2.3": {
+                    "iid": "prop.0.2.3",
+                    "kind": "property",
+                    "name": "brightness",
+                    "description": "Light - Brightness",
+                    "service": "Light",
+                    "format": "uint8",
+                    "readable": True,
+                    "writeable": True,
+                    "value_range": {"min": 1, "max": 100, "step": 1},
+                }
+            }
+        }
+
+        with patch.object(client, "get_devices", return_value=devices):
+            with patch.object(client, "get_device_spec", return_value=spec):
+                with patch.object(client, "send_ctrl_rpc") as send_ctrl:
+                    send_ctrl.return_value = {
+                        "status": "verified",
+                        "did": "did-light",
+                        "iid": "prop.0.2.3",
+                        "readback_value": 60,
+                    }
+                    result = client.control_device(request="把客厅灯亮度调到60%")
+
+        self.assertEqual(result["status"], "verified")
+        self.assertEqual(result["target_value"], 60)
+        send_ctrl.assert_called_once_with("did-light", "prop.0.2.3", 60, verify=True)
+
+    def test_control_device_sets_curtain_position_value(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            client = XiaomiMiotClient(
+                XiaomiMiotConfig(
+                    token_file=str(Path(temp_dir) / "token.json"),
+                    uuid_file=str(Path(temp_dir) / "uuid"),
+                    cache_dir=str(Path(temp_dir) / "cache"),
+                    control_verify_delay_seconds=0,
+                ),
+                token=XiaomiMiotToken(access_token="access-secret"),
+            )
+        devices = {
+            "did-curtain": {
+                "did": "did-curtain",
+                "name": "客厅窗帘",
+                "room_name": "客厅",
+                "device_class": "curtain",
+                "online": True,
+                "urn": "urn:test",
+            }
+        }
+        spec = {
+            "items": {
+                "prop.0.2.4": {
+                    "iid": "prop.0.2.4",
+                    "kind": "property",
+                    "name": "target-position",
+                    "description": "Curtain - Target Position",
+                    "service": "Curtain",
+                    "format": "uint8",
+                    "readable": True,
+                    "writeable": True,
+                    "value_range": {"min": 0, "max": 100, "step": 1},
+                }
+            }
+        }
+
+        with patch.object(client, "get_devices", return_value=devices):
+            with patch.object(client, "get_device_spec", return_value=spec):
+                with patch.object(client, "send_ctrl_rpc") as send_ctrl:
+                    send_ctrl.return_value = {
+                        "status": "verified",
+                        "did": "did-curtain",
+                        "iid": "prop.0.2.4",
+                        "readback_value": 50,
+                    }
+                    result = client.control_device(request="客厅窗帘开一半")
+
+        self.assertEqual(result["status"], "verified")
+        self.assertEqual(result["target_value"], 50)
+        send_ctrl.assert_called_once_with("did-curtain", "prop.0.2.4", 50, verify=True)
+
+    def test_control_device_sets_mode_value_list(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            client = XiaomiMiotClient(
+                XiaomiMiotConfig(
+                    token_file=str(Path(temp_dir) / "token.json"),
+                    uuid_file=str(Path(temp_dir) / "uuid"),
+                    cache_dir=str(Path(temp_dir) / "cache"),
+                    control_verify_delay_seconds=0,
+                ),
+                token=XiaomiMiotToken(access_token="access-secret"),
+            )
+        devices = {
+            "did-ac": {
+                "did": "did-ac",
+                "name": "客厅空调",
+                "room_name": "客厅",
+                "device_class": "aircondition",
+                "online": True,
+                "urn": "urn:test",
+            }
+        }
+        spec = {
+            "items": {
+                "prop.0.2.5": {
+                    "iid": "prop.0.2.5",
+                    "kind": "property",
+                    "name": "mode",
+                    "description": "Air Conditioner - Mode",
+                    "service": "Air Conditioner",
+                    "format": "uint8",
+                    "readable": True,
+                    "writeable": True,
+                    "value_list": [
+                        {"value": 1, "description": "Auto"},
+                        {"value": 2, "description": "Cool"},
+                        {"value": 3, "description": "Heat"},
+                    ],
+                }
+            }
+        }
+
+        with patch.object(client, "get_devices", return_value=devices):
+            with patch.object(client, "get_device_spec", return_value=spec):
+                with patch.object(client, "send_ctrl_rpc") as send_ctrl:
+                    send_ctrl.return_value = {
+                        "status": "verified",
+                        "did": "did-ac",
+                        "iid": "prop.0.2.5",
+                        "readback_value": 2,
+                    }
+                    result = client.control_device(request="客厅空调开制冷模式")
+
+        self.assertEqual(result["status"], "verified")
+        self.assertEqual(result["target_value"], 2)
+        send_ctrl.assert_called_once_with("did-ac", "prop.0.2.5", 2, verify=True)
 
     def test_control_device_closes_only_currently_on_candidate_without_state_words(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -449,6 +776,128 @@ class XiaomiMiotTests(unittest.TestCase):
         )
         send_ctrl.assert_called_once_with("did-desk", "prop.0.2.1", False, verify=True)
 
+    def test_control_device_matches_room_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            client = XiaomiMiotClient(
+                XiaomiMiotConfig(
+                    token_file=str(Path(temp_dir) / "token.json"),
+                    uuid_file=str(Path(temp_dir) / "uuid"),
+                    cache_dir=str(Path(temp_dir) / "cache"),
+                    control_verify_delay_seconds=0,
+                ),
+                token=XiaomiMiotToken(access_token="access-secret"),
+            )
+        devices = {
+            "did-living": {
+                "did": "did-living",
+                "name": "客厅空调",
+                "room_name": "客厅",
+                "home_name": "家",
+                "device_class": "aircondition",
+                "online": True,
+                "urn": "urn:test",
+            },
+            "did-study": {
+                "did": "did-study",
+                "name": "书房空调",
+                "room_name": "书房",
+                "home_name": "家",
+                "device_class": "aircondition",
+                "online": True,
+                "urn": "urn:test",
+            },
+        }
+        spec = {
+            "items": {
+                "prop.0.2.1": {
+                    "iid": "prop.0.2.1",
+                    "kind": "property",
+                    "name": "on",
+                    "description": "Air Conditioner - Power",
+                    "service": "Air Conditioner",
+                    "format": "bool",
+                    "readable": True,
+                    "writeable": True,
+                }
+            }
+        }
+
+        with patch.object(client, "get_devices", return_value=devices):
+            with patch.object(client, "get_device_spec", return_value=spec):
+                with patch.object(client, "send_ctrl_rpc") as send_ctrl:
+                    send_ctrl.return_value = {
+                        "status": "verified",
+                        "did": "did-living",
+                        "iid": "prop.0.2.1",
+                        "readback_value": False,
+                    }
+                    result = client.control_device(request="关闭大厅的空调")
+
+        self.assertEqual(result["status"], "verified")
+        self.assertEqual(result["device"]["name"], "客厅空调")
+        send_ctrl.assert_called_once_with("did-living", "prop.0.2.1", False, verify=True)
+
+    def test_control_device_matches_generic_bedroom_when_unique(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            client = XiaomiMiotClient(
+                XiaomiMiotConfig(
+                    token_file=str(Path(temp_dir) / "token.json"),
+                    uuid_file=str(Path(temp_dir) / "uuid"),
+                    cache_dir=str(Path(temp_dir) / "cache"),
+                    control_verify_delay_seconds=0,
+                ),
+                token=XiaomiMiotToken(access_token="access-secret"),
+            )
+        devices = {
+            "did-bedroom": {
+                "did": "did-bedroom",
+                "name": "主卧吸顶灯",
+                "room_name": "主卧",
+                "home_name": "家",
+                "device_class": "light",
+                "online": True,
+                "urn": "urn:test",
+            },
+            "did-living": {
+                "did": "did-living",
+                "name": "客厅吸顶灯",
+                "room_name": "客厅",
+                "home_name": "家",
+                "device_class": "light",
+                "online": True,
+                "urn": "urn:test",
+            },
+        }
+        spec = {
+            "items": {
+                "prop.0.2.1": {
+                    "iid": "prop.0.2.1",
+                    "kind": "property",
+                    "name": "on",
+                    "description": "Light - Power",
+                    "service": "Light",
+                    "format": "bool",
+                    "readable": True,
+                    "writeable": True,
+                }
+            }
+        }
+
+        with patch.object(client, "get_devices", return_value=devices):
+            with patch.object(client, "get_device_spec", return_value=spec):
+                with patch.object(client, "send_ctrl_rpc") as send_ctrl:
+                    send_ctrl.return_value = {
+                        "status": "verified",
+                        "did": "did-bedroom",
+                        "iid": "prop.0.2.1",
+                        "readback_value": False,
+                    }
+                    result = client.control_device(request="关闭卧室的灯")
+
+        self.assertEqual(result["status"], "verified")
+        self.assertEqual(result["device"]["name"], "主卧吸顶灯")
+        send_ctrl.assert_called_once_with("did-bedroom", "prop.0.2.1", False, verify=True)
+
     def test_control_device_opens_only_currently_off_candidate(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             client = XiaomiMiotClient(
@@ -513,13 +962,14 @@ class XiaomiMiotTests(unittest.TestCase):
         self.assertEqual(result["device"]["name"], "书房台灯")
         send_ctrl.assert_called_once_with("did-desk", "prop.0.2.1", True, verify=True)
 
-    def test_control_device_does_not_single_target_group_commands(self) -> None:
+    def test_control_device_group_command_controls_all_matches_without_confirmation(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             client = XiaomiMiotClient(
                 XiaomiMiotConfig(
                     token_file=str(Path(temp_dir) / "token.json"),
                     uuid_file=str(Path(temp_dir) / "uuid"),
                     cache_dir=str(Path(temp_dir) / "cache"),
+                    control_verify_delay_seconds=0,
                 ),
                 token=XiaomiMiotToken(access_token="access-secret"),
             )
@@ -541,15 +991,164 @@ class XiaomiMiotTests(unittest.TestCase):
                 "urn": "urn:test",
             },
         }
+        spec = {
+            "items": {
+                "prop.0.2.1": {
+                    "iid": "prop.0.2.1",
+                    "kind": "property",
+                    "name": "on",
+                    "description": "Air Conditioner - Power",
+                    "service": "Air Conditioner",
+                    "format": "bool",
+                    "readable": True,
+                    "writeable": True,
+                }
+            }
+        }
 
         with patch.object(client, "get_devices", return_value=devices):
-            with patch.object(client, "send_get_rpc") as send_get:
+            with patch.object(client, "get_device_spec", return_value=spec):
                 with patch.object(client, "send_ctrl_rpc") as send_ctrl:
+                    send_ctrl.side_effect = [
+                        {"status": "verified", "did": "did-study", "iid": "prop.0.2.1"},
+                        {"status": "verified", "did": "did-living", "iid": "prop.0.2.1"},
+                    ]
                     result = client.control_device(request="关闭所有空调")
 
-        self.assertEqual(result["status"], "ambiguous")
-        send_get.assert_not_called()
-        send_ctrl.assert_not_called()
+        self.assertEqual(result["status"], "group_executed")
+        self.assertEqual(result["success_count"], 2)
+        self.assertEqual(result["failure_count"], 0)
+        self.assertEqual(
+            [call_args.args for call_args in send_ctrl.call_args_list],
+            [
+                ("did-study", "prop.0.2.1", False),
+                ("did-living", "prop.0.2.1", False),
+            ],
+        )
+
+    def test_control_device_group_command_filters_by_current_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            client = XiaomiMiotClient(
+                XiaomiMiotConfig(
+                    token_file=str(Path(temp_dir) / "token.json"),
+                    uuid_file=str(Path(temp_dir) / "uuid"),
+                    cache_dir=str(Path(temp_dir) / "cache"),
+                    control_verify_delay_seconds=0,
+                ),
+                token=XiaomiMiotToken(access_token="access-secret"),
+            )
+        devices = {
+            "did-study": {
+                "did": "did-study",
+                "name": "书房空调",
+                "room_name": "书房",
+                "device_class": "aircondition",
+                "online": True,
+                "urn": "urn:test",
+            },
+            "did-living": {
+                "did": "did-living",
+                "name": "客厅空调",
+                "room_name": "客厅",
+                "device_class": "aircondition",
+                "online": True,
+                "urn": "urn:test",
+            },
+        }
+        spec = {
+            "items": {
+                "prop.0.2.1": {
+                    "iid": "prop.0.2.1",
+                    "kind": "property",
+                    "name": "on",
+                    "description": "Air Conditioner - Power",
+                    "service": "Air Conditioner",
+                    "format": "bool",
+                    "readable": True,
+                    "writeable": True,
+                }
+            }
+        }
+
+        with patch.object(client, "get_devices", return_value=devices):
+            with patch.object(client, "get_device_spec", return_value=spec):
+                with patch.object(client, "send_get_rpc") as send_get:
+                    with patch.object(client, "send_ctrl_rpc") as send_ctrl:
+                        send_get.side_effect = [
+                            {"did": "did-study", "iid": "prop.0.2.1", "value": True},
+                            {"did": "did-living", "iid": "prop.0.2.1", "value": False},
+                        ]
+                        send_ctrl.return_value = {
+                            "status": "verified",
+                            "did": "did-study",
+                            "iid": "prop.0.2.1",
+                        }
+                        result = client.control_device(request="把家里开着的空调都关了")
+
+        self.assertEqual(result["status"], "group_executed")
+        self.assertEqual(result["success_count"], 1)
+        self.assertEqual(result["skipped_count"], 1)
+        send_ctrl.assert_called_once_with("did-study", "prop.0.2.1", False, verify=True)
+
+    def test_control_device_does_not_treat_chengdu_as_group_quantifier(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            client = XiaomiMiotClient(
+                XiaomiMiotConfig(
+                    token_file=str(Path(temp_dir) / "token.json"),
+                    uuid_file=str(Path(temp_dir) / "uuid"),
+                    cache_dir=str(Path(temp_dir) / "cache"),
+                    control_verify_delay_seconds=0,
+                ),
+                token=XiaomiMiotToken(access_token="access-secret"),
+            )
+        devices = {
+            "did-chengdu": {
+                "did": "did-chengdu",
+                "name": "成都空调",
+                "room_name": "客厅",
+                "device_class": "aircondition",
+                "online": True,
+                "urn": "urn:test",
+            },
+            "did-beijing": {
+                "did": "did-beijing",
+                "name": "北京空调",
+                "room_name": "客厅",
+                "device_class": "aircondition",
+                "online": True,
+                "urn": "urn:test",
+            },
+        }
+        spec = {
+            "items": {
+                "prop.0.2.1": {
+                    "iid": "prop.0.2.1",
+                    "kind": "property",
+                    "name": "on",
+                    "description": "Air Conditioner - Power",
+                    "service": "Air Conditioner",
+                    "format": "bool",
+                    "readable": True,
+                    "writeable": True,
+                }
+            }
+        }
+
+        with patch.object(client, "get_devices", return_value=devices):
+            with patch.object(client, "get_device_spec", return_value=spec):
+                with patch.object(client, "send_ctrl_rpc") as send_ctrl:
+                    send_ctrl.return_value = {
+                        "status": "verified",
+                        "did": "did-chengdu",
+                        "iid": "prop.0.2.1",
+                        "readback_value": False,
+                    }
+                    result = client.control_device(request="关闭成都空调")
+
+        self.assertEqual(result["status"], "verified")
+        self.assertEqual(result["device"]["name"], "成都空调")
+        self.assertNotIn("success_count", result)
+        send_ctrl.assert_called_once_with("did-chengdu", "prop.0.2.1", False, verify=True)
 
     def test_control_device_stays_ambiguous_when_multiple_candidates_are_on(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
