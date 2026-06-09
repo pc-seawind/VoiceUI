@@ -149,6 +149,14 @@ When debug audio is enabled, the barge-in monitor stream is also saved under
 `debug_sessions/<run>/audio_dumps/barge_in_monitor_01_<start>_<end>.wav`,
 including `no_speech` cases where VAD never starts an utterance.
 
+Voice ASR, follow-up, and barge-in turns also recognize explicit termination
+phrases from `conversation.voice_termination_phrases`, such as "停止", "结束",
+"闭嘴", and "stop". When one matches, VoiceUI does not call the LLM or tools,
+does not listen for another follow-up, clears any pending barge-in state, and
+returns to wake-word listening. `conversation.voice_termination_reply` defaults
+to an empty string so this path stays silent; set it if you want a spoken
+acknowledgement.
+
 ## Scheduled Tasks
 
 VoiceUI can run assistant text turns from a built-in cron scheduler during

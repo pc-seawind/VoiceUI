@@ -17,6 +17,7 @@ from voiceui.core import (
     _extract_weather_location,
     _extract_weather_target_day,
     _looks_like_time_query,
+    _matches_termination_command,
 )
 from voiceui.llm import ChatMessage, ToolCall, ToolChatResponse
 from voiceui.models import (
@@ -488,10 +489,42 @@ class CoreTests(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()):
             reply = assistant.run_conversation()
 
-        self.assertEqual(reply.routed_to, "system")
-        self.assertEqual(reply.text, "好的。")
-        self.assertEqual(tts.spoken, ["reply 1", "好的。"])
+        self.assertEqual(reply.routed_to, "voice_termination")
+        self.assertEqual(reply.text, "")
+        self.assertEqual(tts.spoken, ["reply 1"])
         self.assertEqual(len(chat.calls), 1)
+        self.assertEqual(fake_vad.items, [SpeechStartTimeoutError])
+
+    def test_wake_asr_termination_returns_to_wake_without_llm_or_tts(self) -> None:
+        config = AssistantConfig(
+            input=InputConfig(mode="audio"),
+            wake=WakeConfig(engine="disabled"),
+            conversation=ConversationConfig(follow_up_seconds=1),
+            llm=LlmConfig(system_prompt="system"),
+        )
+        assistant = VoiceAssistant(config)
+        fake_vad = FakeVad(
+            [
+                Utterance(pcm="停止".encode(), sample_rate=16000, duration_ms=80),
+                SpeechStartTimeoutError,
+            ]
+        )
+        chat = RecordingChat()
+        tts = FakeTts()
+        assistant.wake = FakeWake()
+        assistant.wake_ack = FakeWakeAck()
+        assistant.vad = fake_vad
+        assistant.stt = FakeStt()
+        assistant.chat = chat
+        assistant.tts = tts
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            reply = assistant.run_conversation()
+
+        self.assertEqual(reply.routed_to, "voice_termination")
+        self.assertEqual(reply.text, "")
+        self.assertEqual(chat.calls, [])
+        self.assertEqual(tts.spoken, [])
         self.assertEqual(fake_vad.items, [SpeechStartTimeoutError])
 
     def test_run_conversation_ducks_music_after_wake_until_exit(self) -> None:
@@ -678,6 +711,15 @@ class CoreTests(unittest.TestCase):
         self.assertTrue(_looks_like_time_query("现在几点"))
         self.assertTrue(_looks_like_time_query("报一下时间"))
         self.assertFalse(_looks_like_time_query("一个月的时间里持续上涨超过60%"))
+
+    def test_voice_termination_matching_uses_short_explicit_commands(self) -> None:
+        phrases = ["停止", "结束", "闭嘴", "stop"]
+
+        self.assertTrue(_matches_termination_command("停止。", phrases))
+        self.assertTrue(_matches_termination_command("闭嘴", phrases))
+        self.assertTrue(_matches_termination_command("stop", phrases))
+        self.assertFalse(_matches_termination_command("停止播放", phrases))
+        self.assertFalse(_matches_termination_command("结束后提醒我", phrases))
 
     def test_text_turn_does_not_route_background_time_phrase_to_time_tool(self) -> None:
         config = AssistantConfig(
@@ -1116,6 +1158,45 @@ class CoreTests(unittest.TestCase):
             ["system", "first", "reply 1", "barge"],
         )
         self.assertIn(0.0, fake_vad.start_timeouts)
+
+    def test_barge_in_termination_returns_to_wake_without_second_llm_turn(self) -> None:
+        config = AssistantConfig(
+            input=InputConfig(mode="audio"),
+            wake=WakeConfig(engine="disabled"),
+            conversation=ConversationConfig(
+                follow_up_seconds=1,
+                max_turns=4,
+                barge_in_enabled=True,
+            ),
+            llm=LlmConfig(system_prompt="system"),
+        )
+        assistant = VoiceAssistant(config)
+        fake_vad = FakeVad(
+            [
+                Utterance(pcm=b"first", sample_rate=16000, duration_ms=80),
+                Utterance(pcm="闭嘴".encode(), sample_rate=16000, duration_ms=80),
+                SpeechStartTimeoutError,
+            ]
+        )
+        chat = RecordingChat()
+        tts = BargeFirstTts()
+        assistant.wake = FakeWake()
+        assistant.wake_ack = FakeWakeAck()
+        assistant.vad = fake_vad
+        assistant.stt = FakeStt()
+        assistant.chat = chat
+        assistant.tts = tts
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            reply = assistant.run_conversation()
+
+        self.assertEqual(reply.routed_to, "voice_termination")
+        self.assertEqual(reply.text, "")
+        self.assertEqual(tts.spoken, ["reply 1"])
+        self.assertEqual(len(chat.calls), 1)
+        self.assertEqual([message.content for message in chat.calls[0]], ["system", "first"])
+        self.assertIsNone(assistant._pending_barge_utterance)
+        self.assertEqual(fake_vad.items, [SpeechStartTimeoutError])
 
     def test_follow_up_background_monologue_is_rejected_without_llm(self) -> None:
         config = AssistantConfig(

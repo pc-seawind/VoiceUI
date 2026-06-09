@@ -3,6 +3,46 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
+DEFAULT_VOICE_TERMINATION_PHRASES: tuple[str, ...] = (
+    "\u505c",
+    "\u505c\u4e00\u4e0b",
+    "\u505c\u5427",
+    "\u505c\u6b62",
+    "\u505c\u6b62\u5427",
+    "\u505c\u6b62\u8bc6\u522b",
+    "\u505c\u6b62\u8bed\u97f3\u8bc6\u522b",
+    "\u505c\u6b62\u542c",
+    "\u522b\u542c\u4e86",
+    "\u4e0d\u8981\u542c\u4e86",
+    "\u7ed3\u675f",
+    "\u7ed3\u675f\u5427",
+    "\u7ed3\u675f\u5bf9\u8bdd",
+    "\u9000\u51fa",
+    "\u9000\u51fa\u5427",
+    "\u95ed\u5634",
+    "\u4f60\u95ed\u5634",
+    "\u522b\u8bf4\u4e86",
+    "\u4e0d\u8981\u8bf4\u4e86",
+    "\u5b89\u9759",
+    "\u4e0d\u804a\u4e86",
+    "\u4e0d\u7528\u4e86",
+    "\u6ca1\u4e8b\u4e86",
+    "\u7b97\u4e86",
+    "\u5148\u8fd9\u6837",
+    "\u5148\u8fd9\u6837\u5427",
+    "\u5c31\u8fd9\u6837",
+    "\u5c31\u8fd9\u6837\u5427",
+    "stop",
+    "exit",
+    "quit",
+    "shut up",
+    "be quiet",
+)
+
+
+def _default_voice_termination_phrases() -> list[str]:
+    return list(DEFAULT_VOICE_TERMINATION_PHRASES)
+
 
 @dataclass(slots=True)
 class NodeConfig:
@@ -144,6 +184,11 @@ class ConversationConfig:
     follow_up_seconds: int = 10
     max_turns: int = 12
     barge_in_enabled: bool = False
+    voice_termination_enabled: bool = True
+    voice_termination_phrases: list[str] = field(
+        default_factory=_default_voice_termination_phrases
+    )
+    voice_termination_reply: str = ""
     input_gate_enabled: bool = True
     barge_in_gate_enabled: bool = True
     follow_up_gate_enabled: bool = True

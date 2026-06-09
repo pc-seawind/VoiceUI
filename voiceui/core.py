@@ -14,7 +14,13 @@ from voiceui.debug import DebugRecorder, TurnDebugData
 from voiceui.home_assistant import HomeAssistantClient
 from voiceui.llm import create_chat_client
 from voiceui.logs import configure_log_files, log_event, record_text_event
-from voiceui.models import AssistantConfig, AssistantReply, Utterance, WakeEvent
+from voiceui.models import (
+    DEFAULT_VOICE_TERMINATION_PHRASES,
+    AssistantConfig,
+    AssistantReply,
+    Utterance,
+    WakeEvent,
+)
 from voiceui.reminders import (
     Reminder,
     ReminderScheduler,
@@ -448,6 +454,82 @@ class VoiceAssistant:
         if _looks_like_end_conversation_command(transcript):
             return "好的。"
         return None
+
+    def _is_voice_termination_command(self, transcript: str) -> bool:
+        if not bool(getattr(self.config.conversation, "voice_termination_enabled", True)):
+            return False
+        phrases = getattr(
+            self.config.conversation,
+            "voice_termination_phrases",
+            DEFAULT_VOICE_TERMINATION_PHRASES,
+        )
+        return _matches_termination_command(transcript, phrases)
+
+    def _clear_pending_barge_in(self) -> None:
+        self._pending_barge_utterance = None
+        self._pending_barge_transcript = None
+        self._pending_barge_stt_ms = 0
+        self._pending_barge_stt_extra_timings = {}
+
+    def _finish_voice_termination_response(
+        self,
+        transcript: str,
+        timings: dict[str, int],
+        *,
+        source: str,
+    ) -> tuple[AssistantReply, dict[str, int]]:
+        self._clear_pending_barge_in()
+        self.session.reset()
+        timings["llm"] = 0
+        reply_text = str(
+            getattr(self.config.conversation, "voice_termination_reply", "") or ""
+        ).strip()
+        log_event(
+            "assistant",
+            "voice_terminated",
+            log_id="assistant.voice_terminated",
+            source=source,
+            text_len=len(transcript),
+            reply=bool(reply_text),
+        )
+        if not reply_text:
+            timings["tts"] = 0
+            return AssistantReply(text="", routed_to="voice_termination"), timings
+
+        tts_started = time.monotonic()
+        try:
+            self._speak_plain(reply_text)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            timings["tts"] = int((time.monotonic() - tts_started) * 1000)
+            log_event(
+                "tts",
+                "completed",
+                log_id="tts.completed",
+                latency_ms=timings["tts"],
+                ok=False,
+                error=str(exc),
+                text=reply_text,
+            )
+            log_event(
+                "error",
+                "runtime",
+                log_id="error.runtime",
+                stage="voice_termination_tts",
+                error=str(exc),
+            )
+            return AssistantReply(text=reply_text, routed_to="voice_termination"), timings
+
+        timings["tts"] = int((time.monotonic() - tts_started) * 1000)
+        self._remember_spoken_response(reply_text)
+        log_event(
+            "tts",
+            "completed",
+            log_id="tts.completed",
+            latency_ms=timings["tts"],
+            ok=True,
+            text=reply_text,
+        )
+        return AssistantReply(text=reply_text, routed_to="voice_termination"), timings
 
     def _finish_local_system_response(
         self,
@@ -1604,11 +1686,11 @@ class VoiceAssistant:
             reply = AssistantReply(text=_EMPTY_INPUT_RESPONSE, routed_to="system")
             response_timings = {"llm": 0, "tts": 0}
             log_event("assistant", "empty_input", log_id="assistant.empty_input")
-        elif _looks_like_end_conversation_command(transcript):
-            reply, response_timings = self._finish_local_system_response(
-                "好的。",
+        elif self._is_voice_termination_command(transcript):
+            reply, response_timings = self._finish_voice_termination_response(
+                transcript,
                 {},
-                mode="local_conversation",
+                source=gate_source,
             )
             returned_transcript = ""
         else:
@@ -2012,7 +2094,31 @@ def _common_prefix_chars(left: str, right: str) -> int:
     return count
 
 
+def _normalize_termination_text(text: str) -> str:
+    return "".join(
+        char
+        for char in text.lower()
+        if char.isalnum() or "\u4e00" <= char <= "\u9fff"
+    )
+
+
+def _matches_termination_command(text: str, phrases: object) -> bool:
+    normalized = _normalize_termination_text(text)
+    if not normalized:
+        return False
+    if not isinstance(phrases, list | tuple | set):
+        phrases = DEFAULT_VOICE_TERMINATION_PHRASES
+    normalized_phrases = {
+        phrase_normalized
+        for phrase in phrases
+        if (phrase_normalized := _normalize_termination_text(str(phrase)))
+    }
+    return normalized in normalized_phrases
+
+
 def _looks_like_end_conversation_command(text: str) -> bool:
+    if _matches_termination_command(text, DEFAULT_VOICE_TERMINATION_PHRASES):
+        return True
     normalized = text.lower().strip(" \t\r\n，。！？,.!?;；：:")
     normalized = normalized.replace(" ", "")
     if normalized in {

@@ -77,6 +77,29 @@ tts:
 conversation:
   follow_up_seconds: 10
   max_turns: 12
+  voice_termination_enabled: true
+  # Empty means do not speak an acknowledgement before returning to wake listening.
+  voice_termination_reply: ""
+  voice_termination_phrases:
+    - 停
+    - 停一下
+    - 停止
+    - 停止识别
+    - 停止语音识别
+    - 结束
+    - 结束对话
+    - 退出
+    - 闭嘴
+    - 别说了
+    - 不要说了
+    - 安静
+    - 不聊了
+    - 不用了
+    - 没事了
+    - 算了
+    - stop
+    - exit
+    - quit
 
 cron:
   enabled: false
