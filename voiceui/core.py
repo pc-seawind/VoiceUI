@@ -565,6 +565,18 @@ class VoiceAssistant:
             return "reject", "self_echo", ""
         if not _voice_input_gate_enabled(self.config.conversation, source):
             return "accept", "disabled", ""
+        miot_reason = self._miot_voice_gate_accept_reason(transcript, source)
+        if miot_reason:
+            log_event(
+                "assistant",
+                "input_gate",
+                log_id="assistant.input_gate",
+                source=source,
+                decision="accept",
+                reason=miot_reason,
+                text_len=len(transcript),
+            )
+            return "accept", miot_reason, ""
         decision, reason = _classify_voice_input(transcript, source)
         log_event(
             "assistant",
@@ -578,6 +590,17 @@ class VoiceAssistant:
         if decision == "clarify":
             return decision, reason, _clarification_response_for_text(transcript)
         return decision, reason, ""
+
+    def _miot_voice_gate_accept_reason(self, transcript: str, source: str) -> str:
+        if source not in {"barge_in", "follow_up"}:
+            return ""
+        runner = self.tool_runner
+        if runner is None or not getattr(runner, "enabled", False):
+            return ""
+        can_handle_followup = getattr(runner, "can_handle_miot_followup_text", None)
+        if callable(can_handle_followup) and can_handle_followup(transcript):
+            return "miot_followup_context"
+        return ""
 
     def _match_self_echo(self, transcript: str, source: str) -> _SelfEchoMatch | None:
         if source not in {"barge_in", "follow_up"}:
@@ -1014,6 +1037,8 @@ class VoiceAssistant:
         if not self.config.tools.enabled:
             return None
         normalized = transcript.lower().replace(" ", "")
+        if self._should_defer_local_info_to_miot(transcript):
+            return None
         if self.config.tools.allow_weather and _looks_like_weather_query(normalized):
             location = _extract_weather_location(
                 transcript,
@@ -1100,6 +1125,13 @@ class VoiceAssistant:
             )
             return str(result.get("direct_response") or format_current_time_response(result))
         return None
+
+    def _should_defer_local_info_to_miot(self, transcript: str) -> bool:
+        runner = self.tool_runner
+        if runner is None or not getattr(runner, "enabled", False):
+            return False
+        can_handle = getattr(runner, "can_handle_miot_text", None)
+        return callable(can_handle) and bool(can_handle(transcript))
 
     def _start_tracked_llm_stream(
         self,
@@ -1958,7 +1990,30 @@ class VoiceAssistant:
 
 
 def _looks_like_weather_query(normalized: str) -> bool:
+    if _looks_like_iot_temperature_text(normalized):
+        return False
     return any(term in normalized for term in ("天气", "气温", "温度", "下雨", "降雨", "有雨"))
+
+
+def _looks_like_iot_temperature_text(normalized: str) -> bool:
+    if "温度" not in normalized and "度" not in normalized:
+        return False
+    device_terms = (
+        "空调",
+        "冷气",
+        "空调机",
+        "加湿器",
+        "净化器",
+        "空气净化器",
+        "传感器",
+        "设备",
+    )
+    if any(term in normalized for term in device_terms):
+        return True
+    return any(
+        term in normalized
+        for term in ("调成", "调到", "调高", "调低", "设置", "设为")
+    )
 
 
 def _scheduled_miot_arguments_from_preview(
@@ -2147,6 +2202,8 @@ def _looks_like_end_conversation_command(text: str) -> bool:
 
 def _looks_like_direct_voice_intent(text: str) -> bool:
     normalized = text.lower().replace(" ", "")
+    if _looks_like_iot_voice_intent(normalized):
+        return True
     if _looks_like_weather_query(normalized) or _looks_like_time_query(normalized):
         return True
     if any(mark in text for mark in ("?", "？")):
@@ -2211,6 +2268,53 @@ def _looks_like_direct_voice_intent(text: str) -> bool:
     if normalized in {"好的", "好", "可以", "不要", "不用", "停", "停止"}:
         return True
     return False
+
+
+def _looks_like_iot_voice_intent(normalized: str) -> bool:
+    device_terms = (
+        "米家",
+        "灯",
+        "开关",
+        "窗帘",
+        "帘",
+        "空调",
+        "冷气",
+        "空调机",
+        "净化器",
+        "加湿器",
+        "插座",
+        "插排",
+        "排插",
+        "风扇",
+        "电扇",
+        "吊扇",
+        "设备",
+    )
+    if not any(term in normalized for term in device_terms):
+        return False
+    if any(
+        term in normalized
+        for term in (
+            "打开",
+            "开启",
+            "关闭",
+            "关掉",
+            "关上",
+            "调成",
+            "调到",
+            "设置",
+            "设为",
+            "亮度",
+            "温度",
+            "模式",
+            "制冷",
+            "制热",
+            "除湿",
+            "睡眠",
+        )
+    ):
+        return True
+    return normalized.startswith(("开", "关"))
 
 
 def _looks_like_background_monologue(text: str) -> bool:

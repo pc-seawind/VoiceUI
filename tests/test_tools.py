@@ -174,6 +174,45 @@ class MiotAmbiguousToolChat(ChatClient):
         )
 
 
+class MiotReadAmbiguousToolChat(ChatClient):
+    def __init__(self):
+        self.calls: list[tuple[list[ChatMessage], list[dict]]] = []
+
+    def complete(self, messages: list[ChatMessage]) -> str:
+        return "unused"
+
+    def complete_with_tools(
+        self,
+        messages: list[ChatMessage],
+        tools: list[dict],
+    ) -> ToolChatResponse:
+        self.calls.append((list(messages), tools))
+        return ToolChatResponse(
+            tool_calls=[
+                ToolCall(
+                    id="call_1",
+                    name="xiaomi_miot_read_device_property",
+                    arguments={
+                        "request": "看一下空调状态",
+                        "device": "空调",
+                        "property_query": "power",
+                    },
+                    raw={
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "xiaomi_miot_read_device_property",
+                            "arguments": (
+                                '{"request":"看一下空调状态","device":"空调",'
+                                '"property_query":"power"}'
+                            ),
+                        },
+                    },
+                )
+            ]
+        )
+
+
 class NoToolChat(ChatClient):
     def __init__(self):
         self.calls: list[tuple[list[ChatMessage], list[dict]]] = []
@@ -570,6 +609,116 @@ class ToolsTests(unittest.TestCase):
         self.assertEqual(tool_calls[1]["device"], "客厅空调")
         self.assertEqual(tool_calls[1]["device_class"], "aircondition")
         self.assertEqual(tool_calls[1]["action"], "turn_off")
+
+    def test_tool_runner_uses_ambiguous_read_context_for_room_selection(self) -> None:
+        chat = MiotReadAmbiguousToolChat()
+        tool_calls: list[dict] = []
+
+        def read_device(arguments: dict) -> dict:
+            tool_calls.append(dict(arguments))
+            if len(tool_calls) == 1:
+                return {
+                    "status": "ambiguous",
+                    "candidates": [
+                        {
+                            "name": "书房空调",
+                            "room_name": "书房",
+                            "device_class": "aircondition",
+                        },
+                        {
+                            "name": "客厅空调",
+                            "room_name": "客厅",
+                            "device_class": "aircondition",
+                        },
+                    ],
+                    "query": {
+                        "device": "空调",
+                        "device_class": "aircondition",
+                        "property": "power",
+                    },
+                }
+            return {
+                "status": "property_read",
+                "device": {"name": arguments["device"]},
+                "property": {"name": "power", "description": "开关"},
+                "value": True,
+                "direct_response": "书房空调现在开着。",
+            }
+
+        runner = VoiceToolRunner(
+            chat=chat,
+            tools=[
+                ToolDefinition(
+                    name="xiaomi_miot_read_device_property",
+                    description="Read Xiaomi device property",
+                    parameters={"type": "object", "properties": {}},
+                    handler=read_device,
+                )
+            ],
+        )
+
+        first = runner.complete([ChatMessage(role="user", content="看一下空调状态")])
+        second = runner.complete(
+            [
+                ChatMessage(role="user", content="看一下空调状态"),
+                ChatMessage(role="assistant", content=first),
+                ChatMessage(role="user", content="书房的空调。"),
+            ]
+        )
+
+        self.assertIn("书房空调", first)
+        self.assertEqual(second, "书房空调现在开着。")
+        self.assertEqual(len(chat.calls), 1)
+        self.assertEqual(tool_calls[1]["request"], "书房的空调。")
+        self.assertEqual(tool_calls[1]["area"], "书房")
+        self.assertEqual(tool_calls[1]["device"], "书房空调")
+        self.assertEqual(tool_calls[1]["device_class"], "aircondition")
+        self.assertEqual(tool_calls[1]["property_query"], "power")
+
+    def test_tool_runner_reuses_last_miot_device_for_temperature_followup(self) -> None:
+        tool_calls: list[dict] = []
+
+        def control_device(arguments: dict) -> dict:
+            tool_calls.append(dict(arguments))
+            return {
+                "status": "verified",
+                "action": arguments["action"],
+                "device": {
+                    "name": "书房空调",
+                    "room_name": "书房",
+                    "device_class": "aircondition",
+                },
+                "target_value": 27,
+            }
+
+        runner = VoiceToolRunner(
+            chat=NoToolChat(),
+            tools=[
+                ToolDefinition(
+                    name="xiaomi_miot_control_device",
+                    description="Control Xiaomi device",
+                    parameters={"type": "object", "properties": {}},
+                    handler=control_device,
+                )
+            ],
+        )
+        runner._last_miot_control = {  # pylint: disable=protected-access
+            "device": {
+                "name": "书房空调",
+                "room_name": "书房",
+                "device_class": "aircondition",
+            },
+            "action": "turn_on",
+        }
+
+        response = runner.complete([ChatMessage(role="user", content="温度调成27度。")])
+
+        self.assertEqual(response, "好的，书房空调已设置。")
+        self.assertEqual(tool_calls[0]["request"], "温度调成27度。")
+        self.assertEqual(tool_calls[0]["area"], "书房")
+        self.assertEqual(tool_calls[0]["device"], "书房空调")
+        self.assertEqual(tool_calls[0]["device_class"], "aircondition")
+        self.assertEqual(tool_calls[0]["action"], "set_value")
 
     def test_tool_runner_uses_ambiguous_miot_context_for_group_followup(self) -> None:
         chat = MiotAmbiguousToolChat()
@@ -1056,6 +1205,35 @@ class ToolsTests(unittest.TestCase):
 
         self.assertIn("xiaomi_miot_control_device", selected)
         self.assertIn("xiaomi_miot_get_devices", selected)
+
+    def test_tool_selection_routes_air_conditioner_temperature_to_miot_not_weather(
+        self,
+    ) -> None:
+        available_names = {
+            "get_current_weather",
+            "xiaomi_miot_control_device",
+            "xiaomi_miot_get_devices",
+            "xiaomi_miot_get_device_spec",
+            "xiaomi_miot_read_device_property",
+            "xiaomi_miot_get_property",
+            "xiaomi_miot_control",
+        }
+
+        selected = tools_module._select_tool_names_for_text(
+            "把空调的温度调成27度",
+            available_names,
+        )
+
+        self.assertNotIn("get_current_weather", selected)
+        self.assertIn("xiaomi_miot_control_device", selected)
+
+    def test_tool_selection_keeps_plain_temperature_weather_query(self) -> None:
+        selected = tools_module._select_tool_names_for_text(
+            "今天温度多少",
+            {"get_current_weather"},
+        )
+
+        self.assertEqual(selected, {"get_current_weather"})
 
     def test_tool_runner_registers_web_search_when_enabled(self) -> None:
         config = AssistantConfig(

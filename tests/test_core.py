@@ -294,6 +294,27 @@ class SlowToolRunner:
         return "tool reply"
 
 
+class MiotTextToolRunner:
+    enabled = True
+
+    def __init__(self):
+        self.calls: list[list[ChatMessage]] = []
+        self.can_handle_calls: list[str] = []
+        self.followup_calls: list[str] = []
+
+    def complete(self, messages: list[ChatMessage]) -> str:
+        self.calls.append(list(messages))
+        return "好的，书房空调已设置。"
+
+    def can_handle_miot_text(self, text: str) -> bool:
+        self.can_handle_calls.append(text)
+        return "温度调成" in text
+
+    def can_handle_miot_followup_text(self, text: str) -> bool:
+        self.followup_calls.append(text)
+        return text == "书房的空调。"
+
+
 class MiotScheduleToolRunner:
     enabled = True
 
@@ -1003,6 +1024,33 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(tts.spoken, [weather_result["direct_response"]])
         self.assertIn("mode=local_tools", output.getvalue())
 
+    def test_text_turn_defers_temperature_adjustment_to_miot_runner(self) -> None:
+        config = AssistantConfig(
+            input=InputConfig(mode="text"),
+            llm=LlmConfig(system_prompt="system"),
+            tools=ToolsConfig(
+                enabled=True,
+                allow_weather=True,
+                default_weather_location="北京昌平",
+            ),
+        )
+        with patch("voiceui.core.warm_weather_cache"):
+            assistant = VoiceAssistant(config)
+        runner = MiotTextToolRunner()
+        assistant.tool_runner = runner
+        assistant.chat = RecordingChat()
+        assistant.tts = FakeTts()
+
+        with patch("voiceui.core.get_current_weather") as weather:
+            with contextlib.redirect_stdout(io.StringIO()):
+                reply = assistant.run_text_turn("温度调成27度。")
+
+        weather.assert_not_called()
+        self.assertEqual(reply.text, "好的，书房空调已设置。")
+        self.assertEqual(runner.can_handle_calls, ["温度调成27度。"])
+        self.assertEqual(len(runner.calls), 1)
+        self.assertEqual(assistant.tts.spoken, ["好的，书房空调已设置。"])
+
     def test_weather_location_extraction_ignores_tomorrow_prompt_without_city(self) -> None:
         self.assertEqual(_extract_weather_target_day("你知道明天的天气吗？"), "tomorrow")
         self.assertEqual(
@@ -1270,6 +1318,26 @@ class CoreTests(unittest.TestCase):
             assistant.tts.spoken,
             ["reply 1", "我没太听清，你是想找临时用工渠道吗？"],
         )
+
+    def test_follow_up_miot_pending_reference_bypasses_short_clarification(self) -> None:
+        config = AssistantConfig(
+            input=InputConfig(mode="audio"),
+            wake=WakeConfig(engine="disabled"),
+            conversation=ConversationConfig(follow_up_seconds=1),
+            llm=LlmConfig(system_prompt="system"),
+        )
+        assistant = VoiceAssistant(config)
+        runner = MiotTextToolRunner()
+        assistant.tool_runner = runner
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            decision, reason, response = assistant._gate_voice_transcript(  # pylint: disable=protected-access
+                "书房的空调。",
+                "follow_up",
+            )
+
+        self.assertEqual((decision, reason, response), ("accept", "miot_followup_context", ""))
+        self.assertEqual(runner.followup_calls, ["书房的空调。"])
 
     def test_input_gate_clarification_rejects_self_echo_barge_in(self) -> None:
         config = AssistantConfig(

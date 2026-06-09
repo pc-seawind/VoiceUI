@@ -383,6 +383,55 @@ class VoiceToolRunner:
         self._previous_miot_ambiguity = None
         return None
 
+    def _can_resolve_active_miot_ambiguity(self, text: str) -> bool:
+        ambiguity = self._active_miot_ambiguity()
+        if not ambiguity:
+            return False
+        candidates = (
+            ambiguity.get("candidates")
+            if isinstance(ambiguity.get("candidates"), list)
+            else []
+        )
+        if _select_miot_ambiguity_candidate(text, candidates) is not None:
+            return True
+        action = _infer_miot_action_from_text(text)
+        return bool(
+            action
+            and (
+                _is_miot_followup_reference(text)
+                or _is_miot_group_followup_reference(text)
+            )
+        )
+
+    def _looks_like_last_miot_property_followup(self, text: str) -> bool:
+        if not self._last_miot_control or self._active_miot_ambiguity() is not None:
+            return False
+        if _infer_miot_action_from_text(text) != "set_value":
+            return False
+        normalized = text.lower().replace(" ", "")
+        if _has_explicit_miot_device_text(normalized):
+            return False
+        if any(term in normalized for term in ("音乐", "歌曲", "播放", "music", "音量")):
+            return False
+        return any(
+            term in normalized
+            for term in (
+                "调成",
+                "调到",
+                "设置",
+                "设为",
+                "调高",
+                "调低",
+                "亮度",
+                "模式",
+                "制冷",
+                "制热",
+                "除湿",
+                "睡眠",
+                "百分",
+            )
+        ) or ("度" in normalized and any(char.isdigit() for char in normalized))
+
     def complete(self, messages: list[ChatMessage]) -> str:
         followup_call = self._build_miot_followup_call(messages)
         if followup_call is not None:
@@ -473,6 +522,23 @@ class VoiceToolRunner:
             and _looks_like_miot_control_text(text)
         )
 
+    def can_handle_miot_text(self, text: str) -> bool:
+        if "xiaomi_miot_control_device" in self.tools and (
+            _looks_like_miot_control_text(text)
+            or self._looks_like_last_miot_property_followup(text)
+            or self._can_resolve_active_miot_ambiguity(text)
+        ):
+            return True
+        return "xiaomi_miot_read_device_property" in self.tools and (
+            _looks_like_miot_read_text(text)
+            or self._can_resolve_active_miot_ambiguity(text)
+        )
+
+    def can_handle_miot_followup_text(self, text: str) -> bool:
+        return self._looks_like_last_miot_property_followup(
+            text
+        ) or self._can_resolve_active_miot_ambiguity(text)
+
     def run_miot_control(
         self,
         arguments: dict[str, Any],
@@ -546,8 +612,6 @@ class VoiceToolRunner:
             return {"ok": False, "error": str(exc)}
 
     def _build_miot_followup_call(self, messages: list[ChatMessage]) -> ToolCall | None:
-        if "xiaomi_miot_control_device" not in self.tools:
-            return None
         request = _last_user_text(messages)
         correction_call = self._build_miot_correction_call(request)
         if correction_call is not None:
@@ -556,7 +620,12 @@ class VoiceToolRunner:
         ambiguity_call = self._build_miot_ambiguity_followup_call(request, action)
         if ambiguity_call is not None:
             return ambiguity_call
-        if not action or not _is_miot_followup_reference(request):
+        if "xiaomi_miot_control_device" not in self.tools:
+            return None
+        if not action or not (
+            _is_miot_followup_reference(request)
+            or self._looks_like_last_miot_property_followup(request)
+        ):
             return None
         if self._active_miot_ambiguity() is not None or not self._last_miot_control:
             return None
@@ -590,6 +659,14 @@ class VoiceToolRunner:
         if not ambiguity:
             return None
 
+        remembered_tool = str(ambiguity.get("tool_name") or "xiaomi_miot_control_device")
+        tool_name = (
+            "xiaomi_miot_control_device"
+            if action and "xiaomi_miot_control_device" in self.tools
+            else remembered_tool
+        )
+        if tool_name not in self.tools:
+            return None
         query = ambiguity.get("query") if isinstance(ambiguity.get("query"), dict) else {}
         candidates = (
             ambiguity.get("candidates")
@@ -598,7 +675,7 @@ class VoiceToolRunner:
         )
         selected_candidate = _select_miot_ambiguity_candidate(request, candidates)
         effective_action = action or str(query.get("action") or "")
-        if not effective_action:
+        if tool_name == "xiaomi_miot_control_device" and not effective_action:
             return None
         if not action and selected_candidate is None:
             return None
@@ -612,8 +689,9 @@ class VoiceToolRunner:
 
         arguments: dict[str, Any] = {
             "request": request,
-            "action": effective_action,
         }
+        if tool_name == "xiaomi_miot_control_device":
+            arguments["action"] = effective_action
         if selected_candidate is not None:
             if selected_candidate.get("name"):
                 arguments["device"] = str(selected_candidate["name"])
@@ -637,18 +715,22 @@ class VoiceToolRunner:
                 arguments["area"] = area
         if not arguments.get("device") and arguments.get("device_class"):
             arguments["device"] = str(arguments["device_class"])
+        if tool_name == "xiaomi_miot_read_device_property":
+            property_query = str(query.get("property") or query.get("property_query") or "").strip()
+            if property_query:
+                arguments["property_query"] = property_query
 
         target = str(arguments.get("device") or arguments.get("device_class") or "ambiguous")
         log_event(
             "tools",
             "miot_followup",
             log_id="tools.miot_followup",
-            action=effective_action,
+            action=effective_action or "read",
             device=target,
         )
         return ToolCall(
             id="local_miot_ambiguity_followup",
-            name="xiaomi_miot_control_device",
+            name=tool_name,
             arguments=arguments,
         )
 
@@ -720,7 +802,11 @@ class VoiceToolRunner:
         tool_name: str,
         payload: dict[str, Any],
     ) -> dict[str, Any]:
-        if tool_name not in {"xiaomi_miot_control_device", "xiaomi_miot_control"}:
+        if tool_name not in {
+            "xiaomi_miot_control_device",
+            "xiaomi_miot_read_device_property",
+            "xiaomi_miot_control",
+        }:
             return payload
         if str(payload.get("direct_response") or "").strip():
             return payload
@@ -730,11 +816,12 @@ class VoiceToolRunner:
         return payload
 
     def _remember_miot_control(self, tool_name: str, payload: dict[str, Any]) -> None:
-        if tool_name != "xiaomi_miot_control_device":
+        if tool_name not in {"xiaomi_miot_control_device", "xiaomi_miot_read_device_property"}:
             return
         status = str(payload.get("status") or "")
         if status == "ambiguous":
-            self._last_miot_control = None
+            if tool_name == "xiaomi_miot_control_device":
+                self._last_miot_control = None
             self._last_miot_ambiguity = None
             self._previous_miot_ambiguity = None
             candidates = (
@@ -754,10 +841,14 @@ class VoiceToolRunner:
                 self._last_miot_ambiguity = {
                     "candidates": remembered_candidates,
                     "query": query,
+                    "tool_name": tool_name,
                     "original_request": str(query.get("request") or ""),
                     "created_at": time.monotonic(),
                     "ttl_seconds": _MIOT_PENDING_CONTEXT_TTL_SECONDS,
                 }
+            return
+        if tool_name == "xiaomi_miot_read_device_property":
+            self._last_miot_ambiguity = None
             return
         if status not in {"verified", "ok"}:
             self._last_miot_control = None
@@ -1725,7 +1816,8 @@ def _select_tool_names_for_text(text: str, available_names: set[str]) -> set[str
     normalized = text.lower().replace(" ", "")
     selected: set[str] = set()
     miot_read_text = _looks_like_miot_read_text(text)
-    if any(term in normalized for term in ("天气", "气温", "温度", "下雨", "雨", "weather")):
+    miot_control_text = _looks_like_miot_control_text(text)
+    if _looks_like_weather_tool_text(normalized):
         selected.add("get_current_weather")
     if any(
         term in normalized
@@ -1747,7 +1839,7 @@ def _select_tool_names_for_text(text: str, available_names: set[str]) -> set[str
         )
     ):
         selected.add("web_search")
-    if miot_read_text:
+    if miot_read_text or miot_control_text:
         selected.discard("web_search")
     if any(
         term in normalized
@@ -1810,7 +1902,7 @@ def _select_tool_names_for_text(text: str, available_names: set[str]) -> set[str
             "关掉",
             "关上",
         )
-    ) or _looks_like_miot_control_text(text):
+    ) or miot_control_text:
         selected.update(
             {
                 "xiaomi_miot_control_device",
@@ -1831,7 +1923,36 @@ def _select_tool_names_for_text(text: str, available_names: set[str]) -> set[str
                 "xiaomi_miot_get_area_info",
             }
         )
+    if miot_read_text or miot_control_text:
+        selected.discard("get_current_weather")
     return selected & available_names
+
+
+def _looks_like_weather_tool_text(normalized: str) -> bool:
+    if _looks_like_iot_temperature_text(normalized):
+        return False
+    return any(term in normalized for term in ("天气", "气温", "温度", "下雨", "雨", "weather"))
+
+
+def _looks_like_iot_temperature_text(normalized: str) -> bool:
+    if "温度" not in normalized and "度" not in normalized:
+        return False
+    device_terms = (
+        "空调",
+        "冷气",
+        "空调机",
+        "加湿器",
+        "净化器",
+        "空气净化器",
+        "传感器",
+        "设备",
+    )
+    if any(term in normalized for term in device_terms):
+        return True
+    return any(
+        term in normalized
+        for term in ("调成", "调到", "调高", "调低", "设置", "设为")
+    )
 
 
 def _looks_like_miot_read_text(text: str) -> bool:
