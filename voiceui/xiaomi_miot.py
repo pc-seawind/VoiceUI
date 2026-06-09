@@ -249,8 +249,9 @@ class XiaomiMiotClient:
         value: Any = None,
         dry_run: bool = False,
     ) -> dict[str, Any]:
+        devices = list(self.get_devices().values())
         command = _miot_command_from_arguments(
-            devices=list(self.get_devices().values()),
+            devices=devices,
             request=request,
             area=area,
             device=device,
@@ -258,10 +259,10 @@ class XiaomiMiotClient:
             action=action,
             value=value,
         )
-        matches = _resolve_device_matches(list(self.get_devices().values()), command)
+        matches = _resolve_device_matches(devices, command)
         if not matches and command.get("device_class") and command.get("device"):
             relaxed_command = {**command, "device_class": ""}
-            matches = _resolve_device_matches(list(self.get_devices().values()), relaxed_command)
+            matches = _resolve_device_matches(devices, relaxed_command)
         if not matches:
             return {
                 "status": "not_found",
@@ -272,14 +273,36 @@ class XiaomiMiotClient:
         best_score = matches[0][0]
         best_matches = [match for match in matches if best_score - match[0] <= 4]
         if len(best_matches) > 1:
-            return {
-                "status": "ambiguous",
-                "message": "找到多个匹配的米家设备，需要用户指定其中一个。",
-                "candidates": [_public_device(match[1]) for match in best_matches[:5]],
-                "query": command,
-            }
+            state_matches = self._resolve_state_qualified_control_matches(best_matches, command)
+            if state_matches is not None:
+                if len(state_matches) == 1:
+                    best_matches = state_matches
+                elif state_matches:
+                    return {
+                        "status": "ambiguous",
+                        "message": "当前有多个符合状态的匹配设备，需要用户指定其中一个。",
+                        "candidates": [_public_device(match[1]) for match in state_matches[:5]],
+                        "query": command,
+                    }
+                else:
+                    state_text = _requested_power_state_description(command)
+                    return {
+                        "status": "not_found",
+                        "message": f"没有发现当前{state_text}的匹配设备。",
+                        "query": command,
+                    }
+            if len(best_matches) == 1:
+                target_device = dict(best_matches[0][1])
+            else:
+                return {
+                    "status": "ambiguous",
+                    "message": "找到多个匹配的米家设备，需要用户指定其中一个。",
+                    "candidates": [_public_device(match[1]) for match in best_matches[:5]],
+                    "query": command,
+                }
+        else:
+            target_device = dict(best_matches[0][1])
 
-        target_device = dict(best_matches[0][1])
         if not target_device.get("online", True):
             return {
                 "status": "offline",
@@ -319,6 +342,52 @@ class XiaomiMiotClient:
             "action": command.get("action"),
             "item": control["item"],
         }
+
+    def _resolve_state_qualified_control_matches(
+        self,
+        matches: list[tuple[int, dict[str, Any]]],
+        command: dict[str, Any],
+    ) -> list[tuple[int, dict[str, Any]]] | None:
+        requested_state = _requested_power_state_for_control(command)
+        if requested_state is None:
+            return None
+
+        known_matches: list[tuple[int, dict[str, Any]]] = []
+        state_matches: list[tuple[int, dict[str, Any]]] = []
+        for score, device in matches:
+            if not device.get("online", True):
+                continue
+            state = self._read_device_power_state(device)
+            if state is None:
+                return None
+            known_matches.append((score, device))
+            if state is requested_state:
+                state_matches.append((score, device))
+        if not known_matches:
+            return None
+        return state_matches
+
+    def _read_device_power_state(self, device: dict[str, Any]) -> bool | None:
+        did = str(device.get("did") or "")
+        if not did:
+            return None
+        try:
+            spec = self.get_device_spec(did)
+            item = _select_power_state_property(spec)
+            if item is None:
+                return None
+            readback = self.send_get_rpc(did, str(item["iid"]))
+        except (KeyError, TypeError, RuntimeError):
+            return None
+
+        if not isinstance(readback, dict):
+            return None
+        value = readback.get("value")
+        if miot_values_equal(True, value):
+            return True
+        if miot_values_equal(False, value):
+            return False
+        return None
 
     def read_device_property(
         self,
@@ -1309,6 +1378,36 @@ def _select_bool_property(items: dict[str, Any]) -> dict[str, Any] | None:
     return sorted(candidates, key=lambda candidate: candidate[0], reverse=True)[0][1]
 
 
+def _select_power_state_property(spec: dict[str, Any]) -> dict[str, Any] | None:
+    items = spec.get("items") if isinstance(spec, dict) else None
+    if not isinstance(items, dict):
+        return None
+
+    candidates: list[tuple[int, dict[str, Any]]] = []
+    for item in items.values():
+        if not isinstance(item, dict):
+            continue
+        if item.get("kind") != "property" or not item.get("readable"):
+            continue
+        if str(item.get("format") or "") != "bool":
+            continue
+        text = _normalize_text(
+            " ".join(
+                str(item.get(key) or "")
+                for key in ("name", "description", "service")
+            )
+        )
+        if not any(token in text for token in ("on", "power", "switchstatus", "switch", "开关")):
+            continue
+        score = 100
+        if item.get("writeable"):
+            score += 10
+        candidates.append((score, item))
+    if not candidates:
+        return None
+    return sorted(candidates, key=lambda candidate: candidate[0], reverse=True)[0][1]
+
+
 def _select_value_list_property(items: dict[str, Any], action: str) -> dict[str, Any] | None:
     if action not in ("turn_on", "turn_off"):
         return None
@@ -1450,6 +1549,34 @@ def _looks_like_air_quality_query(query_norm: str) -> bool:
             "airquality",
         )
     )
+
+
+def _requested_power_state_for_control(command: dict[str, Any]) -> bool | None:
+    action = str(command.get("action") or "")
+    text = _normalize_text(
+        " ".join(
+            str(command.get(key) or "")
+            for key in ("request", "device", "device_class")
+        )
+    )
+    if action == "turn_off" and any(
+        term in text for term in ("开着", "正在开", "还开", "没关", "没有关", "未关")
+    ):
+        return True
+    if action == "turn_on" and any(
+        term in text for term in ("关着", "正在关", "还关", "没开", "没有开", "未开")
+    ):
+        return False
+    return None
+
+
+def _requested_power_state_description(command: dict[str, Any]) -> str:
+    requested_state = _requested_power_state_for_control(command)
+    if requested_state is True:
+        return "开着"
+    if requested_state is False:
+        return "关着"
+    return "符合状态"
 
 
 def _format_property_read_response(

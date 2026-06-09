@@ -359,6 +359,7 @@ class VoiceToolRunner:
         self.max_iterations = max(1, max_iterations)
         self.music_controller = music_controller
         self._last_miot_control: dict[str, Any] | None = None
+        self._last_miot_ambiguity: dict[str, Any] | None = None
 
     @property
     def enabled(self) -> bool:
@@ -497,11 +498,16 @@ class VoiceToolRunner:
             return {"ok": False, "error": str(exc)}
 
     def _build_miot_followup_call(self, messages: list[ChatMessage]) -> ToolCall | None:
-        if "xiaomi_miot_control_device" not in self.tools or not self._last_miot_control:
+        if "xiaomi_miot_control_device" not in self.tools:
             return None
         request = _last_user_text(messages)
         action = _infer_miot_action_from_text(request)
         if not action or not _is_miot_followup_reference(request):
+            return None
+        ambiguity_call = self._build_miot_ambiguity_followup_call(request, action)
+        if ambiguity_call is not None:
+            return ambiguity_call
+        if self._last_miot_ambiguity is not None or not self._last_miot_control:
             return None
         device = self._last_miot_control.get("device")
         if not isinstance(device, dict) or not device.get("name"):
@@ -528,6 +534,51 @@ class VoiceToolRunner:
             arguments=arguments,
         )
 
+    def _build_miot_ambiguity_followup_call(self, request: str, action: str) -> ToolCall | None:
+        ambiguity = self._last_miot_ambiguity
+        if not ambiguity or not _has_miot_state_qualifier(request):
+            return None
+
+        query = ambiguity.get("query") if isinstance(ambiguity.get("query"), dict) else {}
+        candidates = (
+            ambiguity.get("candidates")
+            if isinstance(ambiguity.get("candidates"), list)
+            else []
+        )
+        arguments: dict[str, Any] = {
+            "request": request,
+            "action": action,
+        }
+        for key in ("area", "device", "device_class"):
+            value = str(query.get(key) or "").strip()
+            if value:
+                arguments[key] = value
+
+        if not arguments.get("device_class"):
+            device_class = _common_candidate_value(candidates, "device_class")
+            if device_class:
+                arguments["device_class"] = device_class
+        if not arguments.get("area"):
+            area = _common_candidate_value(candidates, "room_name")
+            if area:
+                arguments["area"] = area
+        if not arguments.get("device") and arguments.get("device_class"):
+            arguments["device"] = str(arguments["device_class"])
+
+        target = str(arguments.get("device") or arguments.get("device_class") or "ambiguous")
+        log_event(
+            "tools",
+            "miot_followup",
+            log_id="tools.miot_followup",
+            action=action,
+            device=target,
+        )
+        return ToolCall(
+            id="local_miot_ambiguity_followup",
+            name="xiaomi_miot_control_device",
+            arguments=arguments,
+        )
+
     def _with_tool_direct_response(
         self,
         tool_name: str,
@@ -545,8 +596,31 @@ class VoiceToolRunner:
     def _remember_miot_control(self, tool_name: str, payload: dict[str, Any]) -> None:
         if tool_name != "xiaomi_miot_control_device":
             return
-        if str(payload.get("status") or "") not in {"verified", "ok"}:
+        status = str(payload.get("status") or "")
+        if status == "ambiguous":
+            self._last_miot_control = None
+            self._last_miot_ambiguity = None
+            candidates = (
+                payload.get("candidates")
+                if isinstance(payload.get("candidates"), list)
+                else []
+            )
+            if candidates:
+                remembered_candidates = [
+                    dict(candidate) for candidate in candidates if isinstance(candidate, dict)
+                ]
+                self._last_miot_ambiguity = {
+                    "candidates": remembered_candidates,
+                    "query": dict(payload.get("query") or {})
+                    if isinstance(payload.get("query"), dict)
+                    else {},
+                }
             return
+        if status not in {"verified", "ok"}:
+            self._last_miot_control = None
+            self._last_miot_ambiguity = None
+            return
+        self._last_miot_ambiguity = None
         device = payload.get("device") if isinstance(payload.get("device"), dict) else None
         if not device or not device.get("name"):
             return
@@ -1222,8 +1296,10 @@ def create_xiaomi_miot_control_device_tool(miot: XiaomiMiotController) -> ToolDe
             "Resolve and control a Xiaomi Home device from natural spoken commands. "
             "Use this for requests like turning the study light on/off. It fuzzy matches "
             "area, device name, and device class, selects the MIoT property/action, and "
-            "verifies readable property writes. If the result status is ambiguous, ask "
-            "the user to choose; if one low-risk device matches, do not ask again."
+            "verifies readable property writes. For commands like closing whichever "
+            "matched device is currently on, pass the original request and device kind; "
+            "the tool can read current power states. If the result status is ambiguous, "
+            "ask the user to choose; if one low-risk device matches, do not ask again."
         ),
         parameters={
             "type": "object",
@@ -1692,6 +1768,32 @@ def _is_miot_followup_reference(text: str) -> bool:
     if "再" in normalized and not _has_explicit_miot_device_text(normalized):
         return True
     return False
+
+
+def _has_miot_state_qualifier(text: str) -> bool:
+    normalized = text.lower().replace(" ", "")
+    return any(
+        term in normalized
+        for term in (
+            "开着",
+            "关着",
+            "没关",
+            "没有关",
+            "未关",
+            "没开",
+            "没有开",
+            "未开",
+        )
+    )
+
+
+def _common_candidate_value(candidates: list[Any], key: str) -> str:
+    values = {
+        str(candidate.get(key) or "").strip()
+        for candidate in candidates
+        if isinstance(candidate, dict) and str(candidate.get(key) or "").strip()
+    }
+    return next(iter(values)) if len(values) == 1 else ""
 
 
 def _has_explicit_miot_device_text(normalized: str) -> bool:
