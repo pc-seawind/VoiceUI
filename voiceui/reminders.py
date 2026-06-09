@@ -8,6 +8,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from math import ceil
+from typing import Any
 
 from voiceui.logs import log_event
 
@@ -19,6 +20,7 @@ class Reminder:
     text: str
     created_at: datetime
     kind: str = "reminder"
+    payload: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,6 +29,14 @@ class ParsedReminder:
     delay_seconds: int
     text: str
     kind: str
+    label: str
+
+
+@dataclass(frozen=True, slots=True)
+class ParsedScheduledCommand:
+    due_at: datetime
+    delay_seconds: int
+    command_text: str
     label: str
 
 
@@ -96,6 +106,7 @@ class ReminderScheduler:
         text: str,
         *,
         kind: str = "reminder",
+        payload: dict[str, Any] | None = None,
     ) -> Reminder:
         created_at = self._now_fn()
         due_at = _ensure_compatible_datetime(due_at, created_at)
@@ -105,6 +116,7 @@ class ReminderScheduler:
             text=text.strip() or "提醒时间到了。",
             created_at=created_at,
             kind=kind,
+            payload=payload,
         )
         self._next_id += 1
         due_timestamp = due_at.timestamp()
@@ -296,6 +308,35 @@ def parse_reminder_request(
     )
 
 
+def parse_scheduled_command(
+    text: str,
+    *,
+    now: datetime | None = None,
+    max_delay_seconds: int = 30 * 24 * 60 * 60,
+) -> ParsedScheduledCommand | None:
+    current = now or _local_now()
+    due_at = _extract_relative_due_at(text, current)
+    if due_at is None:
+        due_at = _extract_clock_due_at(text, current)
+    if due_at is None:
+        return None
+
+    delay_seconds = max(1, ceil(due_at.timestamp() - current.timestamp()))
+    if delay_seconds > max_delay_seconds:
+        return None
+
+    command_text = _clean_scheduled_command_text(_remove_time_fragments(text))
+    if not command_text:
+        return None
+
+    return ParsedScheduledCommand(
+        due_at=due_at,
+        delay_seconds=delay_seconds,
+        command_text=command_text,
+        label=format_delay(delay_seconds),
+    )
+
+
 def format_reminder_confirmation(parsed: ParsedReminder) -> str:
     return f"好的，{parsed.label}提醒你。"
 
@@ -446,6 +487,36 @@ def _clean_alert_message(text: str) -> str:
                 changed = True
     if cleaned in {"我", "你", "可以", "能不能"}:
         return ""
+    return cleaned
+
+
+def _clean_scheduled_command_text(text: str) -> str:
+    cleaned = text.strip(" ，。！？.!?;；：:")
+    prefixes = (
+        "请",
+        "帮我",
+        "麻烦",
+        "你可以",
+        "可以",
+        "设置",
+        "设",
+        "定",
+        "定时",
+        "预约",
+        "到点",
+        "之后",
+        "以后",
+        "后",
+        "把",
+        "给我",
+    )
+    changed = True
+    while changed:
+        changed = False
+        for prefix in prefixes:
+            if cleaned.startswith(prefix):
+                cleaned = cleaned[len(prefix) :].strip(" ，。！？.!?;；：:")
+                changed = True
     return cleaned
 
 

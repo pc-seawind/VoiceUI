@@ -25,6 +25,7 @@ from voiceui.reminders import (
     looks_like_reminder_status_text,
     looks_like_reminder_text,
     parse_reminder_request,
+    parse_scheduled_command,
 )
 from voiceui.session import ConversationSession
 from voiceui.stt import create_stt
@@ -276,6 +277,25 @@ class VoiceAssistant:
                 local_response,
                 timings,
                 mode="local_conversation",
+            )
+
+        try:
+            local_response = self._try_handle_local_miot_schedule_command(transcript)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            return self._finish_processing_error(exc, timings, mode="local_miot_schedule")
+        if local_response is not None:
+            timings["llm"] = 0
+            log_event(
+                "llm",
+                "completed",
+                log_id="llm.completed",
+                latency_ms=0,
+                mode="local_miot_schedule",
+            )
+            return self._finish_generated_response(
+                local_response,
+                timings,
+                routed_to="miot_schedule",
             )
 
         try:
@@ -728,9 +748,10 @@ class VoiceAssistant:
 
     def _handle_reminder_due(self, reminder: Reminder) -> None:
         with self._turn_lock:
+            text = self._due_reminder_text(reminder)
             tts_started = time.monotonic()
             try:
-                self._speak_plain(reminder.text)
+                self._speak_plain(text)
             except Exception as exc:
                 latency_ms = int((time.monotonic() - tts_started) * 1000)
                 log_event(
@@ -740,7 +761,7 @@ class VoiceAssistant:
                     latency_ms=latency_ms,
                     ok=False,
                     error=str(exc),
-                    text=reminder.text,
+                    text=text,
                 )
                 log_event(
                     "error",
@@ -757,8 +778,85 @@ class VoiceAssistant:
                 log_id="tts.completed",
                 latency_ms=latency_ms,
                 ok=True,
-                text=reminder.text,
+                text=text,
             )
+
+    def _due_reminder_text(self, reminder: Reminder) -> str:
+        if reminder.kind != "miot":
+            return reminder.text
+        runner = self.tool_runner
+        run_miot = getattr(runner, "run_miot_control", None)
+        if runner is None or not getattr(runner, "enabled", False) or not callable(run_miot):
+            return (
+                "\u5230\u70b9\u4e86\uff0c\u4f46\u6211\u73b0\u5728\u4e0d\u80fd"
+                "\u6267\u884c\u7c73\u5bb6\u8bbe\u5907\u63a7\u5236\u3002"
+            )
+
+        payload = reminder.payload if isinstance(reminder.payload, dict) else {}
+        arguments = payload.get("arguments") if isinstance(payload.get("arguments"), dict) else {}
+        if not arguments:
+            arguments = {"request": reminder.text}
+        result = run_miot(dict(arguments), remember=True)
+        formatter = getattr(runner, "format_tool_response", None)
+        if callable(formatter):
+            response = str(formatter(result) or "").strip()
+        else:
+            response = str(result.get("direct_response") or result.get("message") or "").strip()
+        return response or (
+            "\u5230\u70b9\u4e86\uff0c\u4f46\u7c73\u5bb6\u8bbe\u5907"
+            "\u63a7\u5236\u6ca1\u6709\u8fd4\u56de\u7ed3\u679c\u3002"
+        )
+
+    def _try_handle_local_miot_schedule_command(self, transcript: str) -> str | None:
+        runner = self.tool_runner
+        if runner is None or not getattr(runner, "enabled", False):
+            return None
+        parsed = parse_scheduled_command(
+            transcript,
+            max_delay_seconds=self.config.conversation.max_reminder_delay_seconds,
+        )
+        if parsed is None:
+            return None
+
+        can_handle = getattr(runner, "can_handle_miot_control_text", None)
+        if not callable(can_handle) or not can_handle(parsed.command_text):
+            return None
+        run_miot = getattr(runner, "run_miot_control", None)
+        if not callable(run_miot):
+            return None
+
+        preview = run_miot({"request": parsed.command_text, "dry_run": True}, remember=False)
+        status = str(preview.get("status") or "")
+        if preview.get("ok") is False or status not in {"resolved", "group_resolved"}:
+            formatter = getattr(runner, "format_tool_response", None)
+            if callable(formatter):
+                response = str(formatter(preview) or "").strip()
+            else:
+                response = str(preview.get("direct_response") or preview.get("message") or "")
+            return response or (
+                "\u8fd9\u4e2a\u7c73\u5bb6\u5b9a\u65f6\u6307\u4ee4"
+                "\u8fd8\u4e0d\u80fd\u786e\u5b9a\u6267\u884c\u76ee\u6807\u3002"
+            )
+
+        arguments = _scheduled_miot_arguments_from_preview(parsed.command_text, preview)
+        reminder = self.reminders.schedule_at(
+            parsed.due_at,
+            parsed.command_text,
+            kind="miot",
+            payload={
+                "tool": "xiaomi_miot_control_device",
+                "arguments": arguments,
+            },
+        )
+        log_event(
+            "miot",
+            "scheduled",
+            log_id="miot.scheduled",
+            id=reminder.id,
+            due_at=reminder.due_at.isoformat(timespec="seconds"),
+            command_len=len(parsed.command_text),
+        )
+        return f"\u597d\u7684\uff0c{parsed.label}\u5e2e\u4f60\u6267\u884c\u3002"
 
     def _try_handle_local_reminder_command(self, transcript: str) -> str | None:
         if not looks_like_reminder_text(transcript):
@@ -1779,6 +1877,39 @@ class VoiceAssistant:
 
 def _looks_like_weather_query(normalized: str) -> bool:
     return any(term in normalized for term in ("天气", "气温", "温度", "下雨", "降雨", "有雨"))
+
+
+def _scheduled_miot_arguments_from_preview(
+    command_text: str,
+    preview: dict[str, object],
+) -> dict[str, object]:
+    arguments: dict[str, object] = {"request": command_text}
+    query = preview.get("query") if isinstance(preview.get("query"), dict) else {}
+    device = preview.get("device") if isinstance(preview.get("device"), dict) else {}
+
+    for key in ("area", "device", "device_class", "action"):
+        value = str(query.get(key) or "").strip()
+        if value:
+            arguments[key] = value
+
+    if device:
+        if device.get("name"):
+            arguments["device"] = str(device["name"])
+        if device.get("room_name"):
+            arguments["area"] = str(device["room_name"])
+        if device.get("device_class"):
+            arguments["device_class"] = str(device["device_class"])
+
+    action = str(preview.get("action") or "").strip()
+    if action:
+        arguments["action"] = action
+
+    if "target_value" in preview and preview.get("target_value") is not None:
+        arguments["value"] = preview["target_value"]
+    elif isinstance(query, dict) and "value" in query and query.get("value") is not None:
+        arguments["value"] = query["value"]
+
+    return arguments
 
 
 def _looks_like_time_query(normalized: str) -> bool:

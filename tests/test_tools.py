@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 import unittest
 from unittest.mock import patch
 
@@ -461,6 +462,48 @@ class ToolsTests(unittest.TestCase):
         self.assertEqual(tool_calls[1]["device"], "书房空调")
         self.assertEqual(tool_calls[1]["device_class"], "aircondition")
         self.assertEqual(tool_calls[1]["action"], "turn_off")
+
+    def test_tool_runner_ignores_expired_ambiguous_miot_context(self) -> None:
+        chat = MiotAmbiguousToolChat()
+        tool_calls: list[dict] = []
+        runner = VoiceToolRunner(
+            chat=chat,
+            tools=[
+                ToolDefinition(
+                    name="xiaomi_miot_control_device",
+                    description="Control Xiaomi device",
+                    parameters={"type": "object", "properties": {}},
+                    handler=lambda arguments: tool_calls.append(dict(arguments)),
+                )
+            ],
+        )
+        runner._last_miot_ambiguity = {  # pylint: disable=protected-access
+            "candidates": [
+                {
+                    "name": "书房空调",
+                    "room_name": "书房",
+                    "device_class": "aircondition",
+                },
+                {
+                    "name": "客厅空调",
+                    "room_name": "客厅",
+                    "device_class": "aircondition",
+                },
+            ],
+            "query": {
+                "device": "空调",
+                "device_class": "aircondition",
+                "action": "turn_off",
+            },
+            "created_at": time.monotonic() - 10,
+            "ttl_seconds": 1,
+        }
+
+        response = runner.complete([ChatMessage(role="user", content="第一个。")])
+
+        self.assertEqual(response, "unused")
+        self.assertEqual(tool_calls, [])
+        self.assertIsNone(runner._last_miot_ambiguity)  # pylint: disable=protected-access
 
     def test_tool_runner_uses_ambiguous_miot_context_for_room_selection(self) -> None:
         chat = MiotAmbiguousToolChat()

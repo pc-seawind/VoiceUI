@@ -49,6 +49,7 @@ _WEATHER_CACHE_PATH = Path(".voiceui/weather_cache.json")
 _WEATHER_DISK_CACHE_LOADED = False
 _WEATHER_GEOCODE_CACHE: dict[str, dict[str, Any]] = {}
 _WEATHER_FORECAST_CACHE: dict[str, dict[str, Any]] = {}
+_MIOT_PENDING_CONTEXT_TTL_SECONDS = 90.0
 
 _COMMON_WEATHER_LOCATIONS: dict[str, dict[str, Any]] = {
     "上海": _weather_place("上海", "中国", "上海市", 31.2304, 121.4737),
@@ -366,6 +367,22 @@ class VoiceToolRunner:
     def enabled(self) -> bool:
         return bool(self.tools)
 
+    def _active_miot_ambiguity(self) -> dict[str, Any] | None:
+        if self._last_miot_ambiguity is None:
+            return None
+        if _miot_context_is_fresh(self._last_miot_ambiguity):
+            return self._last_miot_ambiguity
+        self._last_miot_ambiguity = None
+        return None
+
+    def _active_previous_miot_ambiguity(self) -> dict[str, Any] | None:
+        if self._previous_miot_ambiguity is None:
+            return None
+        if _miot_context_is_fresh(self._previous_miot_ambiguity):
+            return self._previous_miot_ambiguity
+        self._previous_miot_ambiguity = None
+        return None
+
     def complete(self, messages: list[ChatMessage]) -> str:
         followup_call = self._build_miot_followup_call(messages)
         if followup_call is not None:
@@ -450,7 +467,36 @@ class VoiceToolRunner:
         ]
         return payloads
 
-    def _execute_tool_call(self, call: ToolCall) -> dict[str, Any]:
+    def can_handle_miot_control_text(self, text: str) -> bool:
+        return (
+            "xiaomi_miot_control_device" in self.tools
+            and _looks_like_miot_control_text(text)
+        )
+
+    def run_miot_control(
+        self,
+        arguments: dict[str, Any],
+        *,
+        remember: bool = True,
+    ) -> dict[str, Any]:
+        return self._execute_tool_call(
+            ToolCall(
+                id="local_miot_control",
+                name="xiaomi_miot_control_device",
+                arguments=arguments,
+            ),
+            remember=remember,
+        )
+
+    def format_tool_response(self, payload: dict[str, Any]) -> str:
+        return _format_tool_payload_response(payload)
+
+    def _execute_tool_call(
+        self,
+        call: ToolCall,
+        *,
+        remember: bool = True,
+    ) -> dict[str, Any]:
         tool = self.tools.get(call.name)
         if tool is None:
             log_event(
@@ -484,7 +530,8 @@ class VoiceToolRunner:
                 payload = {"ok": True, "result": result}
             payload.setdefault("latency_ms", latency_ms)
             payload = self._with_tool_direct_response(call.name, payload)
-            self._remember_miot_control(call.name, payload)
+            if remember:
+                self._remember_miot_control(call.name, payload)
             return payload
         except Exception as exc:  # pylint: disable=broad-exception-caught
             latency_ms = int((time.monotonic() - started) * 1000)
@@ -511,7 +558,7 @@ class VoiceToolRunner:
             return ambiguity_call
         if not action or not _is_miot_followup_reference(request):
             return None
-        if self._last_miot_ambiguity is not None or not self._last_miot_control:
+        if self._active_miot_ambiguity() is not None or not self._last_miot_control:
             return None
         device = self._last_miot_control.get("device")
         if not isinstance(device, dict) or not device.get("name"):
@@ -539,7 +586,7 @@ class VoiceToolRunner:
         )
 
     def _build_miot_ambiguity_followup_call(self, request: str, action: str) -> ToolCall | None:
-        ambiguity = self._last_miot_ambiguity
+        ambiguity = self._active_miot_ambiguity()
         if not ambiguity:
             return None
 
@@ -608,7 +655,7 @@ class VoiceToolRunner:
     def _build_miot_correction_call(self, request: str) -> ToolCall | None:
         if not _looks_like_miot_correction(request):
             return None
-        ambiguity = self._previous_miot_ambiguity
+        ambiguity = self._active_previous_miot_ambiguity()
         if not ambiguity or not self._last_miot_control:
             return None
 
@@ -699,11 +746,17 @@ class VoiceToolRunner:
                 remembered_candidates = [
                     dict(candidate) for candidate in candidates if isinstance(candidate, dict)
                 ]
+                query = (
+                    dict(payload.get("query") or {})
+                    if isinstance(payload.get("query"), dict)
+                    else {}
+                )
                 self._last_miot_ambiguity = {
                     "candidates": remembered_candidates,
-                    "query": dict(payload.get("query") or {})
-                    if isinstance(payload.get("query"), dict)
-                    else {},
+                    "query": query,
+                    "original_request": str(query.get("request") or ""),
+                    "created_at": time.monotonic(),
+                    "ttl_seconds": _MIOT_PENDING_CONTEXT_TTL_SECONDS,
                 }
             return
         if status not in {"verified", "ok"}:
@@ -1966,6 +2019,19 @@ def _looks_like_miot_correction(text: str) -> bool:
             "\u5bf9",
         )
     )
+
+
+def _miot_context_is_fresh(context: dict[str, Any]) -> bool:
+    created_at = context.get("created_at")
+    if not isinstance(created_at, (int, float)):
+        return True
+    ttl_seconds = context.get("ttl_seconds")
+    ttl = (
+        float(ttl_seconds)
+        if isinstance(ttl_seconds, (int, float))
+        else _MIOT_PENDING_CONTEXT_TTL_SECONDS
+    )
+    return time.monotonic() - float(created_at) <= max(0.0, ttl)
 
 
 def _common_candidate_value(candidates: list[Any], key: str) -> str:

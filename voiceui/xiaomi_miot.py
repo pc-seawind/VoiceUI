@@ -297,7 +297,7 @@ class XiaomiMiotClient:
                         "status": "ambiguous",
                         "decision": "ambiguous",
                         "message": "当前有多个符合状态的匹配设备，需要用户指定其中一个。",
-                        "candidates": [_public_device(match[1]) for match in state_matches[:5]],
+                        "candidates": _public_match_candidates(state_matches[:5], command),
                         "query": command,
                     }
                 else:
@@ -327,7 +327,7 @@ class XiaomiMiotClient:
                     "status": "ambiguous",
                     "decision": "ambiguous",
                     "message": "找到多个匹配的米家设备，需要用户指定其中一个。",
-                    "candidates": [_public_device(match[1]) for match in best_matches[:5]],
+                    "candidates": _public_match_candidates(best_matches[:5], command),
                     "query": command,
                 }
         else:
@@ -349,6 +349,7 @@ class XiaomiMiotClient:
             return {
                 "status": "unsupported",
                 "decision": "unsupported",
+                "capability_gap": "no_control_item",
                 "message": "匹配到了设备，但没有找到适合该指令的可写 MIoT 属性或动作。",
                 "device": _public_device(target_device),
                 "query": command,
@@ -580,7 +581,7 @@ class XiaomiMiotClient:
                 "status": "ambiguous",
                 "decision": "ambiguous",
                 "message": "找到多个匹配的米家设备，需要用户指定其中一个。",
-                "candidates": [_public_device(match[1]) for match in best_matches[:5]],
+                "candidates": _public_match_candidates(best_matches[:5], command),
                 "query": command,
             }
 
@@ -601,6 +602,7 @@ class XiaomiMiotClient:
             return {
                 "status": "unsupported",
                 "decision": "unsupported",
+                "capability_gap": "no_readable_property",
                 "message": "匹配到了设备，但没有找到适合读取的 MIoT 属性。",
                 "device": _public_device(target_device),
                 "query": command,
@@ -2497,6 +2499,57 @@ def _public_device(device: dict[str, Any]) -> dict[str, Any]:
         "device_class": device.get("device_class"),
         "model": device.get("model"),
     }
+
+
+def _public_match_candidates(
+    matches: list[tuple[int, dict[str, Any]]],
+    command: dict[str, Any],
+) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    for score, device in matches:
+        public = _public_device(device)
+        public["match_score"] = score
+        public["hit_fields"] = _match_hit_fields(device, command)
+        candidates.append(public)
+    return candidates
+
+
+def _match_hit_fields(device: dict[str, Any], command: dict[str, Any]) -> list[str]:
+    fields: list[str] = []
+    area_query = str(command.get("area") or "")
+    if area_query and max(
+        _area_match_score(area_query, str(device.get("room_name") or "")),
+        _area_match_score(area_query, str(device.get("home_name") or "")),
+    ) > 0:
+        fields.append("area")
+
+    class_query = str(command.get("device_class") or "")
+    if class_query:
+        if _device_class_matches(class_query, str(device.get("device_class") or "")):
+            fields.append("device_class")
+        elif _text_match_score(class_query, str(device.get("name") or "")) > 0:
+            fields.append("name")
+
+    device_query = str(command.get("device") or "")
+    if device_query:
+        scored_fields = (
+            ("name", _text_match_score(device_query, str(device.get("name") or ""))),
+            (
+                "device_class",
+                _text_match_score(device_query, str(device.get("device_class") or "")),
+            ),
+            ("model", _text_match_score(device_query, str(device.get("model") or ""))),
+        )
+        best_score = max(score for _field, score in scored_fields)
+        fields.extend(field for field, score in scored_fields if score > 0 and score == best_score)
+        inferred_class = _infer_device_class("", device_query, "")
+        if inferred_class and _device_class_matches(
+            inferred_class,
+            str(device.get("device_class") or ""),
+        ):
+            fields.append("device_class")
+
+    return sorted(set(fields))
 
 
 def _token_from_mapping(data: Any) -> XiaomiMiotToken:

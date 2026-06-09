@@ -412,6 +412,38 @@ class XiaomiMiotTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "ambiguous")
         self.assertEqual(len(result["candidates"]), 2)
+        self.assertIsInstance(result["candidates"][0]["match_score"], int)
+        self.assertIn("area", result["candidates"][0]["hit_fields"])
+        self.assertIn("device_class", result["candidates"][0]["hit_fields"])
+
+    def test_control_device_reports_capability_gap_when_no_control_item_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            client = XiaomiMiotClient(
+                XiaomiMiotConfig(
+                    token_file=str(Path(temp_dir) / "token.json"),
+                    uuid_file=str(Path(temp_dir) / "uuid"),
+                    cache_dir=str(Path(temp_dir) / "cache"),
+                ),
+                token=XiaomiMiotToken(access_token="access-secret"),
+            )
+        devices = {
+            "did-light": {
+                "did": "did-light",
+                "name": "书房灯",
+                "room_name": "书房",
+                "device_class": "light",
+                "online": True,
+                "urn": "urn:test",
+            },
+        }
+
+        with patch.object(client, "get_devices", return_value=devices):
+            with patch.object(client, "get_device_spec", return_value={"items": {}}):
+                result = client.control_device(request="打开书房灯")
+
+        self.assertEqual(result["status"], "unsupported")
+        self.assertEqual(result["capability_gap"], "no_control_item")
+        self.assertEqual(result["device"]["name"], "书房灯")
 
     def test_control_device_sets_temperature_value(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

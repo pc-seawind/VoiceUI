@@ -53,6 +53,7 @@ LOG_SPECS: tuple[LogSpec, ...] = (
     LogSpec("llm.first_token", "event", "llm", "first_token"),
     LogSpec("llm.stream_completed", "event", "llm", "stream_completed"),
     LogSpec("miot.resolver", "event", "miot", "resolver"),
+    LogSpec("miot.scheduled", "event", "miot", "scheduled"),
     LogSpec("music.ducked", "event", "music", "ducked"),
     LogSpec("music.playback_error", "event", "music", "playback_error"),
     LogSpec("music.restored", "event", "music", "restored"),

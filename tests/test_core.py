@@ -293,6 +293,37 @@ class SlowToolRunner:
         return "tool reply"
 
 
+class MiotScheduleToolRunner:
+    enabled = True
+
+    def __init__(self, preview: dict[str, object], executed: dict[str, object] | None = None):
+        self.preview = preview
+        self.executed = executed or {}
+        self.calls: list[tuple[dict[str, object], bool]] = []
+        self.can_handle_calls: list[str] = []
+
+    def complete(self, messages: list[ChatMessage]) -> str:
+        raise AssertionError(f"Unexpected normal tool completion: {messages!r}")
+
+    def can_handle_miot_control_text(self, text: str) -> bool:
+        self.can_handle_calls.append(text)
+        return any(term in text for term in ("空调", "灯", "窗帘", "设备"))
+
+    def run_miot_control(
+        self,
+        arguments: dict[str, object],
+        *,
+        remember: bool = True,
+    ) -> dict[str, object]:
+        self.calls.append((dict(arguments), remember))
+        if arguments.get("dry_run"):
+            return dict(self.preview)
+        return dict(self.executed)
+
+    def format_tool_response(self, payload: dict[str, object]) -> str:
+        return str(payload.get("direct_response") or payload.get("message") or "")
+
+
 class BargeFirstTts(FakeTts):
     def speak(self, text: str, stop_event: threading.Event | None = None) -> None:
         self.spoken.append(text)
@@ -722,6 +753,87 @@ class CoreTests(unittest.TestCase):
 
         self.assertEqual(fired, [reminder.id])
         self.assertEqual(tts.spoken, ["闹钟时间到了。"])
+
+    def test_text_turn_schedules_miot_control_after_dry_run(self) -> None:
+        config = AssistantConfig(
+            input=InputConfig(mode="text"),
+            llm=LlmConfig(system_prompt="system"),
+        )
+        assistant = VoiceAssistant(config)
+        assistant.chat = RecordingChat()
+        tts = FakeTts()
+        assistant.tts = tts
+        assistant.tool_runner = MiotScheduleToolRunner(
+            preview={
+                "status": "resolved",
+                "decision": "resolved",
+                "device": {
+                    "name": "客厅空调",
+                    "room_name": "客厅",
+                    "device_class": "aircondition",
+                },
+                "action": "turn_off",
+                "target_value": False,
+            },
+            executed={
+                "status": "verified",
+                "direct_response": "好的，客厅空调已关闭。",
+            },
+        )
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            reply = assistant.run_text_turn("十分钟后关闭空调")
+
+        self.assertEqual(reply.routed_to, "miot_schedule")
+        self.assertIn("帮你执行", reply.text)
+        self.assertEqual(assistant.chat.calls, [])
+        pending = assistant.reminders.pending()
+        self.assertEqual(len(pending), 1)
+        self.assertEqual(pending[0].kind, "miot")
+        self.assertEqual(pending[0].payload["arguments"]["request"], "关闭空调")
+        self.assertEqual(pending[0].payload["arguments"]["device"], "客厅空调")
+        self.assertEqual(pending[0].payload["arguments"]["action"], "turn_off")
+        self.assertEqual(
+            assistant.tool_runner.calls[0],
+            ({"request": "关闭空调", "dry_run": True}, False),
+        )
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            fired = assistant.reminders.run_due(pending[0].due_at)
+
+        self.assertEqual(fired, [pending[0].id])
+        self.assertEqual(tts.spoken, [reply.text, "好的，客厅空调已关闭。"])
+        execute_arguments, remember = assistant.tool_runner.calls[1]
+        self.assertTrue(remember)
+        self.assertNotIn("dry_run", execute_arguments)
+        self.assertEqual(execute_arguments["device"], "客厅空调")
+
+    def test_text_turn_does_not_schedule_ambiguous_miot_control(self) -> None:
+        config = AssistantConfig(
+            input=InputConfig(mode="text"),
+            llm=LlmConfig(system_prompt="system"),
+        )
+        assistant = VoiceAssistant(config)
+        assistant.chat = RecordingChat()
+        assistant.tts = FakeTts()
+        assistant.tool_runner = MiotScheduleToolRunner(
+            preview={
+                "status": "ambiguous",
+                "message": "找到多个匹配设备，请指定哪一个。",
+                "candidates": [
+                    {"name": "书房空调"},
+                    {"name": "客厅空调"},
+                ],
+            }
+        )
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            reply = assistant.run_text_turn("十分钟后关闭空调")
+
+        self.assertEqual(reply.routed_to, "miot_schedule")
+        self.assertEqual(reply.text, "找到多个匹配设备，请指定哪一个。")
+        self.assertEqual(assistant.reminders.pending(), [])
+        self.assertEqual(len(assistant.tool_runner.calls), 1)
 
     def test_text_turn_speaks_progress_prompt_when_tool_runner_is_slow(self) -> None:
         config = AssistantConfig(
