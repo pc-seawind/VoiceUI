@@ -536,7 +536,7 @@ class VoiceToolRunner:
 
     def _build_miot_ambiguity_followup_call(self, request: str, action: str) -> ToolCall | None:
         ambiguity = self._last_miot_ambiguity
-        if not ambiguity or not _has_miot_state_qualifier(request):
+        if not ambiguity:
             return None
 
         query = ambiguity.get("query") if isinstance(ambiguity.get("query"), dict) else {}
@@ -1296,10 +1296,10 @@ def create_xiaomi_miot_control_device_tool(miot: XiaomiMiotController) -> ToolDe
             "Resolve and control a Xiaomi Home device from natural spoken commands. "
             "Use this for requests like turning the study light on/off. It fuzzy matches "
             "area, device name, and device class, selects the MIoT property/action, and "
-            "verifies readable property writes. For commands like closing whichever "
-            "matched device is currently on, pass the original request and device kind; "
-            "the tool can read current power states. If the result status is ambiguous, "
-            "ask the user to choose; if one low-risk device matches, do not ask again."
+            "verifies readable property writes. When multiple matched devices remain, "
+            "the tool can read current power states to close the only device that is on "
+            "or open the only device that is off. If the result status is ambiguous, ask "
+            "the user to choose; if one low-risk device matches, do not ask again."
         ),
         parameters={
             "type": "object",
@@ -1768,23 +1768,6 @@ def _is_miot_followup_reference(text: str) -> bool:
     if "再" in normalized and not _has_explicit_miot_device_text(normalized):
         return True
     return False
-
-
-def _has_miot_state_qualifier(text: str) -> bool:
-    normalized = text.lower().replace(" ", "")
-    return any(
-        term in normalized
-        for term in (
-            "开着",
-            "关着",
-            "没关",
-            "没有关",
-            "未关",
-            "没开",
-            "没有开",
-            "未开",
-        )
-    )
 
 
 def _common_candidate_value(candidates: list[Any], key: str) -> str:

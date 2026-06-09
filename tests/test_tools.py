@@ -322,7 +322,7 @@ class ToolsTests(unittest.TestCase):
         self.assertEqual(tool_calls[1]["device_class"], "light")
         self.assertEqual(tool_calls[1]["action"], "turn_off")
 
-    def test_tool_runner_uses_ambiguous_miot_context_for_state_followup(self) -> None:
+    def test_tool_runner_uses_ambiguous_miot_context_for_pronoun_followup(self) -> None:
         chat = MiotAmbiguousToolChat()
         tool_calls: list[dict] = []
 
@@ -384,17 +384,14 @@ class ToolsTests(unittest.TestCase):
             [
                 ChatMessage(role="user", content="关闭空调"),
                 ChatMessage(role="assistant", content=first),
-                ChatMessage(
-                    role="user",
-                    content="你查一下哪个是开着的，就把开着的那个关了。",
-                ),
+                ChatMessage(role="user", content="把它关了。"),
             ]
         )
 
         self.assertIn("书房空调", first)
         self.assertEqual(second, "好的，书房空调已关闭。")
         self.assertEqual(len(chat.calls), 1)
-        self.assertEqual(tool_calls[1]["request"], "你查一下哪个是开着的，就把开着的那个关了。")
+        self.assertEqual(tool_calls[1]["request"], "把它关了。")
         self.assertEqual(tool_calls[1]["device"], "空调")
         self.assertEqual(tool_calls[1]["device_class"], "aircondition")
         self.assertEqual(tool_calls[1]["action"], "turn_off")

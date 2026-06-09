@@ -273,7 +273,7 @@ class XiaomiMiotClient:
         best_score = matches[0][0]
         best_matches = [match for match in matches if best_score - match[0] <= 4]
         if len(best_matches) > 1:
-            state_matches = self._resolve_state_qualified_control_matches(best_matches, command)
+            state_matches = self._resolve_power_state_control_matches(best_matches, command)
             if state_matches is not None:
                 if len(state_matches) == 1:
                     best_matches = state_matches
@@ -285,7 +285,7 @@ class XiaomiMiotClient:
                         "query": command,
                     }
                 else:
-                    state_text = _requested_power_state_description(command)
+                    state_text = _target_power_state_description(command)
                     return {
                         "status": "not_found",
                         "message": f"没有发现当前{state_text}的匹配设备。",
@@ -343,13 +343,13 @@ class XiaomiMiotClient:
             "item": control["item"],
         }
 
-    def _resolve_state_qualified_control_matches(
+    def _resolve_power_state_control_matches(
         self,
         matches: list[tuple[int, dict[str, Any]]],
         command: dict[str, Any],
     ) -> list[tuple[int, dict[str, Any]]] | None:
-        requested_state = _requested_power_state_for_control(command)
-        if requested_state is None:
+        target_state = _target_power_state_for_control(command)
+        if target_state is None:
             return None
 
         known_matches: list[tuple[int, dict[str, Any]]] = []
@@ -361,7 +361,7 @@ class XiaomiMiotClient:
             if state is None:
                 return None
             known_matches.append((score, device))
-            if state is requested_state:
+            if state is target_state:
                 state_matches.append((score, device))
         if not known_matches:
             return None
@@ -1551,30 +1551,25 @@ def _looks_like_air_quality_query(query_norm: str) -> bool:
     )
 
 
-def _requested_power_state_for_control(command: dict[str, Any]) -> bool | None:
+def _target_power_state_for_control(command: dict[str, Any]) -> bool | None:
     action = str(command.get("action") or "")
-    text = _normalize_text(
-        " ".join(
-            str(command.get(key) or "")
-            for key in ("request", "device", "device_class")
-        )
+    command_text = _normalize_text(
+        " ".join(str(command.get(key) or "") for key in ("request", "device"))
     )
-    if action == "turn_off" and any(
-        term in text for term in ("开着", "正在开", "还开", "没关", "没有关", "未关")
-    ):
+    if any(term in command_text for term in ("全部", "所有", "全都", "每个", "all")):
+        return None
+    if action == "turn_off":
         return True
-    if action == "turn_on" and any(
-        term in text for term in ("关着", "正在关", "还关", "没开", "没有开", "未开")
-    ):
+    if action == "turn_on":
         return False
     return None
 
 
-def _requested_power_state_description(command: dict[str, Any]) -> str:
-    requested_state = _requested_power_state_for_control(command)
-    if requested_state is True:
+def _target_power_state_description(command: dict[str, Any]) -> str:
+    target_state = _target_power_state_for_control(command)
+    if target_state is True:
         return "开着"
-    if requested_state is False:
+    if target_state is False:
         return "关着"
     return "符合状态"
 
