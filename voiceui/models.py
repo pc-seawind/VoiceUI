@@ -150,6 +150,8 @@ class ConversationConfig:
     max_spoken_reply_chars: int = 80
     reminders_enabled: bool = True
     max_reminder_delay_seconds: int = 30 * 24 * 60 * 60
+    self_echo_filter_enabled: bool = True
+    self_echo_window_seconds: float = 8.0
 
 
 @dataclass(slots=True)

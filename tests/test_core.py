@@ -183,6 +183,20 @@ class RecordingChat:
         yield f" {len(self.calls)}"
 
 
+class FixedReplyChat(RecordingChat):
+    def __init__(self, response: str):
+        super().__init__()
+        self.response = response
+
+    def complete(self, messages: list[ChatMessage]) -> str:
+        self.calls.append(list(messages))
+        return self.response
+
+    def stream_complete(self, messages: list[ChatMessage]):
+        self.calls.append(list(messages))
+        yield self.response
+
+
 class FailingChat(RecordingChat):
     def complete(self, messages: list[ChatMessage]) -> str:
         self.calls.append(list(messages))
@@ -415,6 +429,39 @@ class CoreTests(unittest.TestCase):
             [message.content for message in chat.calls[1]],
             ["system", "first", "reply 1", "second"],
         )
+
+    def test_follow_up_exit_command_returns_to_wake_without_llm(self) -> None:
+        config = AssistantConfig(
+            input=InputConfig(mode="audio"),
+            wake=WakeConfig(engine="disabled"),
+            conversation=ConversationConfig(follow_up_seconds=1),
+            llm=LlmConfig(system_prompt="system"),
+        )
+        assistant = VoiceAssistant(config)
+        fake_vad = FakeVad(
+            [
+                Utterance(pcm=b"first", sample_rate=16000, duration_ms=80),
+                Utterance(pcm="退出吧。".encode(), sample_rate=16000, duration_ms=80),
+                SpeechStartTimeoutError,
+            ]
+        )
+        chat = RecordingChat()
+        tts = FakeTts()
+        assistant.wake = FakeWake()
+        assistant.wake_ack = FakeWakeAck()
+        assistant.vad = fake_vad
+        assistant.stt = FakeStt()
+        assistant.chat = chat
+        assistant.tts = tts
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            reply = assistant.run_conversation()
+
+        self.assertEqual(reply.routed_to, "system")
+        self.assertEqual(reply.text, "好的。")
+        self.assertEqual(tts.spoken, ["reply 1", "好的。"])
+        self.assertEqual(len(chat.calls), 1)
+        self.assertEqual(fake_vad.items, [SpeechStartTimeoutError])
 
     def test_run_conversation_ducks_music_after_wake_until_exit(self) -> None:
         config = AssistantConfig(
@@ -1031,7 +1078,7 @@ class CoreTests(unittest.TestCase):
             ["reply 1", "我没太听清，你是想找临时用工渠道吗？"],
         )
 
-    def test_input_gate_clarification_does_not_start_another_barge_in(self) -> None:
+    def test_input_gate_clarification_rejects_self_echo_barge_in(self) -> None:
         config = AssistantConfig(
             input=InputConfig(mode="audio"),
             wake=WakeConfig(engine="disabled"),
@@ -1064,11 +1111,43 @@ class CoreTests(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()):
             reply = assistant.run_conversation()
 
+        clarification = "我没太听清，你是想找临时用工渠道吗？"
         self.assertEqual(reply.routed_to, "input_gate")
-        self.assertEqual(reply.text, "我没太听清，你是想找临时用工渠道吗？")
-        self.assertEqual(assistant.tts.spoken, ["reply 1", reply.text])
-        self.assertEqual(fake_vad.items, [self_echo])
+        self.assertEqual(reply.text, "我没听清。")
+        self.assertEqual(assistant.tts.spoken, ["reply 1", clarification])
+        self.assertEqual(fake_vad.items, [])
         self.assertIsNone(assistant._pending_barge_utterance)
+
+    def test_barge_in_echo_of_normal_reply_is_rejected_without_llm(self) -> None:
+        config = AssistantConfig(
+            input=InputConfig(mode="audio"),
+            wake=WakeConfig(engine="disabled"),
+            conversation=ConversationConfig(
+                follow_up_seconds=0,
+                barge_in_enabled=True,
+            ),
+            llm=LlmConfig(system_prompt="system"),
+        )
+        assistant = VoiceAssistant(config)
+        assistant.wake = FakeWake()
+        assistant.wake_ack = FakeWakeAck()
+        assistant.vad = FakeVad(
+            [
+                Utterance(pcm=b"first", sample_rate=16000, duration_ms=80),
+                Utterance(pcm="今天精神。".encode(), sample_rate=16000, duration_ms=1200),
+            ]
+        )
+        assistant.stt = FakeStt()
+        assistant.chat = FixedReplyChat("听起来你昨晚没休息好，今天精神确实容易亢奋。")
+        assistant.tts = BargeEveryTts()
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            reply = assistant.run_conversation()
+
+        self.assertEqual(reply.routed_to, "input_gate")
+        self.assertEqual(reply.text, "我没听清。")
+        self.assertEqual(len(assistant.chat.calls), 1)
+        self.assertEqual(assistant.tts.spoken, [assistant.chat.response])
 
     def test_barge_in_no_speech_saves_monitor_audio(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

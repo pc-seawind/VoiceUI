@@ -4,6 +4,8 @@ import queue
 import threading
 import time
 from collections.abc import Iterator
+from dataclasses import dataclass
+from difflib import SequenceMatcher
 
 from voiceui.audio import RecordingAudioInput, create_audio_input
 from voiceui.audio_dump import AudioDumpManager, configure_audio_dump
@@ -56,6 +58,19 @@ class _WakeAckHandle:
     def join(self) -> int:
         self.thread.join()
         return self.result.get("latency_ms", 0)
+
+
+@dataclass(frozen=True, slots=True)
+class _SpokenResponse:
+    text: str
+    normalized: str
+    spoken_at: float
+
+
+@dataclass(frozen=True, slots=True)
+class _SelfEchoMatch:
+    matched_chars: int
+    age_ms: int
 
 
 class _StreamingSttHandle:
@@ -169,6 +184,7 @@ class VoiceAssistant:
         self._pending_barge_transcript: str | None = None
         self._pending_barge_stt_ms = 0
         self._pending_barge_stt_extra_timings: dict[str, int] = {}
+        self._recent_spoken_responses: list[_SpokenResponse] = []
         self._turn_lock = threading.RLock()
         if audio_enabled:
             self._warm_up_audio_path()
@@ -253,6 +269,14 @@ class VoiceAssistant:
     def _complete_transcript(self, transcript: str) -> tuple[AssistantReply, dict[str, int]]:
         self.session.add_user(transcript)
         timings: dict[str, int] = {}
+
+        local_response = self._try_handle_local_conversation_command(transcript)
+        if local_response is not None:
+            return self._finish_local_system_response(
+                local_response,
+                timings,
+                mode="local_conversation",
+            )
 
         try:
             local_response = self._try_handle_local_reminder_command(transcript)
@@ -400,7 +424,43 @@ class VoiceAssistant:
             raise error
         return str(result.get("value") or "")
 
+    def _try_handle_local_conversation_command(self, transcript: str) -> str | None:
+        if _looks_like_end_conversation_command(transcript):
+            return "好的。"
+        return None
+
+    def _finish_local_system_response(
+        self,
+        response: str,
+        timings: dict[str, int],
+        *,
+        mode: str,
+    ) -> tuple[AssistantReply, dict[str, int]]:
+        timings["llm"] = 0
+        log_event(
+            "llm",
+            "completed",
+            log_id="llm.completed",
+            latency_ms=0,
+            mode=mode,
+        )
+        return self._finish_generated_response(response, timings, routed_to="system")
+
     def _gate_voice_transcript(self, transcript: str, source: str) -> tuple[str, str, str]:
+        echo_match = self._match_self_echo(transcript, source)
+        if echo_match is not None:
+            log_event(
+                "assistant",
+                "input_gate",
+                log_id="assistant.input_gate",
+                source=source,
+                decision="reject",
+                reason="self_echo",
+                text_len=len(transcript),
+                matched_chars=echo_match.matched_chars,
+                age_ms=echo_match.age_ms,
+            )
+            return "reject", "self_echo", ""
         if not _voice_input_gate_enabled(self.config.conversation, source):
             return "accept", "disabled", ""
         decision, reason = _classify_voice_input(transcript, source)
@@ -417,13 +477,44 @@ class VoiceAssistant:
             return decision, reason, _clarification_response_for_text(transcript)
         return decision, reason, ""
 
+    def _match_self_echo(self, transcript: str, source: str) -> _SelfEchoMatch | None:
+        if source not in {"barge_in", "follow_up"}:
+            return None
+        if not bool(getattr(self.config.conversation, "self_echo_filter_enabled", True)):
+            return None
+        normalized = _normalize_self_echo_text(transcript)
+        if len(normalized) < 2:
+            return None
+        now = time.monotonic()
+        window_seconds = max(
+            0.0,
+            float(getattr(self.config.conversation, "self_echo_window_seconds", 8.0)),
+        )
+        cutoff = now - window_seconds
+        self._recent_spoken_responses = [
+            spoken for spoken in self._recent_spoken_responses if spoken.spoken_at >= cutoff
+        ]
+        best_match: _SelfEchoMatch | None = None
+        for spoken in self._recent_spoken_responses:
+            matched_chars = _self_echo_matched_chars(normalized, spoken.normalized)
+            if not _is_self_echo_match(normalized, spoken.normalized, matched_chars):
+                continue
+            age_ms = int((now - spoken.spoken_at) * 1000)
+            candidate = _SelfEchoMatch(matched_chars=matched_chars, age_ms=age_ms)
+            if best_match is None or candidate.matched_chars > best_match.matched_chars:
+                best_match = candidate
+        return best_match
+
     def _finish_input_gate_clarification(
         self,
         response: str,
         timings: dict[str, int],
     ) -> tuple[AssistantReply, dict[str, int]]:
         timings["llm"] = 0
-        self._speak_response_safely(response, timings, allow_barge_in=False)
+        barge_utterance = self._speak_response_safely(response, timings)
+        if barge_utterance is not None:
+            self._pending_barge_utterance = barge_utterance
+            timings["barge_in"] = barge_utterance.duration_ms
         return AssistantReply(text=response, routed_to="input_gate"), timings
 
     def _speak_progress_prompt(
@@ -513,13 +604,11 @@ class VoiceAssistant:
         self,
         response: str,
         timings: dict[str, int],
-        *,
-        allow_barge_in: bool = True,
     ) -> Utterance | None:
         tts_started = time.monotonic()
         barge_utterance = None
         try:
-            if allow_barge_in and self._should_listen_for_barge_in():
+            if self._should_listen_for_barge_in():
                 barge_utterance = self._speak_with_barge_in(response)
             else:
                 self._speak_plain(response)
@@ -543,6 +632,7 @@ class VoiceAssistant:
             )
             return None
         timings["tts"] = int((time.monotonic() - tts_started) * 1000)
+        self._remember_spoken_response(response)
         log_event(
             "tts",
             "completed",
@@ -552,6 +642,24 @@ class VoiceAssistant:
             text=response,
         )
         return barge_utterance
+
+    def _remember_spoken_response(self, response: str) -> None:
+        normalized = _normalize_self_echo_text(response)
+        if not normalized:
+            return
+        now = time.monotonic()
+        window_seconds = max(
+            0.0,
+            float(getattr(self.config.conversation, "self_echo_window_seconds", 8.0)),
+        )
+        cutoff = now - window_seconds
+        self._recent_spoken_responses = [
+            spoken for spoken in self._recent_spoken_responses if spoken.spoken_at >= cutoff
+        ]
+        self._recent_spoken_responses.append(
+            _SpokenResponse(text=response, normalized=normalized, spoken_at=now)
+        )
+        self._recent_spoken_responses = self._recent_spoken_responses[-8:]
 
     def _stream_and_speak_response(self, timings: dict[str, int]) -> tuple[str, Utterance | None]:
         messages = list(self.session.messages)
@@ -586,6 +694,7 @@ class VoiceAssistant:
             else:
                 self._speak_plain(response)
             timings["tts"] += int((time.monotonic() - fallback_tts_started) * 1000)
+        self._remember_spoken_response(response)
         self.session.add_assistant(response)
         return response, barge_utterance
 
@@ -1397,6 +1506,13 @@ class VoiceAssistant:
             reply = AssistantReply(text=_EMPTY_INPUT_RESPONSE, routed_to="system")
             response_timings = {"llm": 0, "tts": 0}
             log_event("assistant", "empty_input", log_id="assistant.empty_input")
+        elif _looks_like_end_conversation_command(transcript):
+            reply, response_timings = self._finish_local_system_response(
+                "好的。",
+                {},
+                mode="local_conversation",
+            )
+            returned_transcript = ""
         else:
             gate_decision, _gate_reason, gate_response = self._gate_voice_transcript(
                 transcript,
@@ -1717,6 +1833,79 @@ def _is_unusable_transcript(text: str) -> bool:
     if not meaningful:
         return True
     return len(set(meaningful)) <= 1 and len(meaningful) >= 4
+
+
+def _normalize_self_echo_text(text: str) -> str:
+    return "".join(
+        char
+        for char in text.lower()
+        if char.isalnum() or "\u4e00" <= char <= "\u9fff"
+    )
+
+
+def _self_echo_matched_chars(transcript: str, spoken: str) -> int:
+    if not transcript or not spoken:
+        return 0
+    if transcript in spoken:
+        return len(transcript)
+    match = SequenceMatcher(None, transcript, spoken).find_longest_match(
+        0,
+        len(transcript),
+        0,
+        len(spoken),
+    )
+    return match.size
+
+
+def _is_self_echo_match(transcript: str, spoken: str, matched_chars: int) -> bool:
+    text_len = len(transcript)
+    if text_len < 2 or not spoken:
+        return False
+    if transcript in spoken:
+        if text_len >= 4:
+            return True
+        return spoken.startswith(transcript)
+    if text_len <= 3:
+        return _common_prefix_chars(transcript, spoken) >= 2 and "我没太听清" in spoken
+    if text_len <= 8 and spoken.startswith(transcript[:4]):
+        return matched_chars >= 4
+    return False
+
+
+def _common_prefix_chars(left: str, right: str) -> int:
+    count = 0
+    for left_char, right_char in zip(left, right, strict=False):
+        if left_char != right_char:
+            break
+        count += 1
+    return count
+
+
+def _looks_like_end_conversation_command(text: str) -> bool:
+    normalized = text.lower().strip(" \t\r\n，。！？,.!?;；：:")
+    normalized = normalized.replace(" ", "")
+    if normalized in {
+        "退出",
+        "退出吧",
+        "结束",
+        "结束吧",
+        "结束对话",
+        "不聊了",
+        "先这样",
+        "先这样吧",
+        "就这样",
+        "就这样吧",
+        "没事了",
+        "不用了",
+        "算了",
+        "停",
+        "停止",
+        "stop",
+        "exit",
+        "quit",
+    }:
+        return True
+    return normalized.startswith("退出") and len(normalized) <= 5
 
 
 def _looks_like_direct_voice_intent(text: str) -> bool:
