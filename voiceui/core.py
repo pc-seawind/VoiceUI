@@ -423,10 +423,7 @@ class VoiceAssistant:
         timings: dict[str, int],
     ) -> tuple[AssistantReply, dict[str, int]]:
         timings["llm"] = 0
-        barge_utterance = self._speak_response_safely(response, timings)
-        if barge_utterance is not None:
-            self._pending_barge_utterance = barge_utterance
-            timings["barge_in"] = barge_utterance.duration_ms
+        self._speak_response_safely(response, timings, allow_barge_in=False)
         return AssistantReply(text=response, routed_to="input_gate"), timings
 
     def _speak_progress_prompt(
@@ -516,11 +513,13 @@ class VoiceAssistant:
         self,
         response: str,
         timings: dict[str, int],
+        *,
+        allow_barge_in: bool = True,
     ) -> Utterance | None:
         tts_started = time.monotonic()
         barge_utterance = None
         try:
-            if self._should_listen_for_barge_in():
+            if allow_barge_in and self._should_listen_for_barge_in():
                 barge_utterance = self._speak_with_barge_in(response)
             else:
                 self._speak_plain(response)

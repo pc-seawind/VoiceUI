@@ -289,6 +289,16 @@ class BargeFirstTts(FakeTts):
             time.sleep(0.01)
 
 
+class BargeEveryTts(FakeTts):
+    def speak(self, text: str, stop_event: threading.Event | None = None) -> None:
+        self.spoken.append(text)
+        if stop_event is None:
+            return
+        deadline = time.monotonic() + 1.0
+        while not stop_event.is_set() and time.monotonic() < deadline:
+            time.sleep(0.01)
+
+
 class FakeWakeAck:
     def __init__(self):
         self.calls = 0
@@ -1020,6 +1030,45 @@ class CoreTests(unittest.TestCase):
             assistant.tts.spoken,
             ["reply 1", "我没太听清，你是想找临时用工渠道吗？"],
         )
+
+    def test_input_gate_clarification_does_not_start_another_barge_in(self) -> None:
+        config = AssistantConfig(
+            input=InputConfig(mode="audio"),
+            wake=WakeConfig(engine="disabled"),
+            conversation=ConversationConfig(
+                follow_up_seconds=0,
+                barge_in_enabled=True,
+            ),
+            llm=LlmConfig(system_prompt="system"),
+        )
+        assistant = VoiceAssistant(config)
+        self_echo = Utterance(pcm="我没太听清。".encode(), sample_rate=16000, duration_ms=1200)
+        fake_vad = FakeVad(
+            [
+                Utterance(pcm=b"first", sample_rate=16000, duration_ms=80),
+                Utterance(
+                    pcm="来开提供临时民工。".encode(),
+                    sample_rate=16000,
+                    duration_ms=1200,
+                ),
+                self_echo,
+            ]
+        )
+        assistant.wake = FakeWake()
+        assistant.wake_ack = FakeWakeAck()
+        assistant.vad = fake_vad
+        assistant.stt = FakeStt()
+        assistant.chat = RecordingChat()
+        assistant.tts = BargeEveryTts()
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            reply = assistant.run_conversation()
+
+        self.assertEqual(reply.routed_to, "input_gate")
+        self.assertEqual(reply.text, "我没太听清，你是想找临时用工渠道吗？")
+        self.assertEqual(assistant.tts.spoken, ["reply 1", reply.text])
+        self.assertEqual(fake_vad.items, [self_echo])
+        self.assertIsNone(assistant._pending_barge_utterance)
 
     def test_barge_in_no_speech_saves_monitor_audio(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
