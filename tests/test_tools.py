@@ -720,6 +720,83 @@ class ToolsTests(unittest.TestCase):
         self.assertEqual(tool_calls[0]["device_class"], "aircondition")
         self.assertEqual(tool_calls[0]["action"], "set_value")
 
+    def test_tool_runner_retries_last_miot_device_for_failed_followup(self) -> None:
+        tool_calls: list[dict] = []
+
+        def control_device(arguments: dict) -> dict:
+            tool_calls.append(dict(arguments))
+            return {
+                "status": "verified",
+                "action": arguments["action"],
+                "device": {
+                    "name": "书房吸顶灯",
+                    "room_name": "书房",
+                    "device_class": "light",
+                },
+            }
+
+        runner = VoiceToolRunner(
+            chat=NoToolChat(),
+            tools=[
+                ToolDefinition(
+                    name="xiaomi_miot_control_device",
+                    description="Control Xiaomi device",
+                    parameters={"type": "object", "properties": {}},
+                    handler=control_device,
+                )
+            ],
+        )
+        runner._last_miot_control = {  # pylint: disable=protected-access
+            "device": {
+                "name": "书房吸顶灯",
+                "room_name": "书房",
+                "device_class": "light",
+            },
+            "action": "turn_off",
+        }
+
+        response = runner.complete([ChatMessage(role="user", content="没有关成功啊，再关一次。")])
+
+        self.assertEqual(response, "好的，书房吸顶灯已关闭。")
+        self.assertEqual(tool_calls[0]["request"], "没有关成功啊，再关一次。")
+        self.assertEqual(tool_calls[0]["area"], "书房")
+        self.assertEqual(tool_calls[0]["device"], "书房吸顶灯")
+        self.assertEqual(tool_calls[0]["device_class"], "light")
+        self.assertEqual(tool_calls[0]["action"], "turn_off")
+
+    def test_tool_runner_executes_explicit_miot_command_when_llm_omits_tool_call(
+        self,
+    ) -> None:
+        chat = NoToolChat()
+        tool_calls: list[dict] = []
+
+        def control_device(arguments: dict) -> dict:
+            tool_calls.append(dict(arguments))
+            return {
+                "status": "verified",
+                "action": arguments["action"],
+                "device": {"name": "书房吸顶灯"},
+            }
+
+        runner = VoiceToolRunner(
+            chat=chat,
+            tools=[
+                ToolDefinition(
+                    name="xiaomi_miot_control_device",
+                    description="Control Xiaomi device",
+                    parameters={"type": "object", "properties": {}},
+                    handler=control_device,
+                )
+            ],
+        )
+
+        response = runner.complete([ChatMessage(role="user", content="关闭书房的灯。")])
+
+        self.assertEqual(response, "好的，书房吸顶灯已关闭。")
+        self.assertEqual(len(chat.calls), 1)
+        self.assertEqual(tool_calls[0]["request"], "关闭书房的灯。")
+        self.assertEqual(tool_calls[0]["action"], "turn_off")
+
     def test_tool_runner_uses_ambiguous_miot_context_for_group_followup(self) -> None:
         chat = MiotAmbiguousToolChat()
         tool_calls: list[dict] = []

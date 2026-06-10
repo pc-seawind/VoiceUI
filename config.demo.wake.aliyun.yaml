@@ -145,6 +145,7 @@ tts:
 
 conversation:
   follow_up_seconds: 8
+  wake_speech_start_timeout_seconds: 8
   max_turns: 12
   barge_in_enabled: true
 

@@ -1726,12 +1726,19 @@ def _run_selected_production_turn(
             turn_index = assistant.audio_dump.begin_turn()
             wake_ack_handle = assistant._start_wake_ack() if not args.no_ack else None
             assistant.session.reset()
-            reply, transcript = assistant._run_audio_turn(
-                wake,
-                wake_ms=0,
-                wake_ack_handle=wake_ack_handle,
-                turn_index=turn_index,
-            )
+            try:
+                reply, transcript = assistant._run_audio_turn(
+                    wake,
+                    wake_ms=0,
+                    wake_ack_handle=wake_ack_handle,
+                    speech_start_timeout_seconds=(
+                        assistant._wake_speech_start_timeout_seconds()
+                    ),
+                    turn_index=turn_index,
+                )
+            except SpeechStartTimeoutError:
+                reply = assistant._finish_wake_speech_timeout(wake_ack_handle)
+                transcript = ""
             if wake_ack_handle is not None:
                 live.trial.ack_latency_ms = wake_ack_handle.result.get("latency_ms", 0)
             transcripts = [transcript] if transcript else []

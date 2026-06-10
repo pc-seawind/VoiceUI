@@ -1861,6 +1861,34 @@ class VoiceAssistant:
         )
         return utterance, transcript, vad_ms, stt_ms, {"stt_total": stt_total_ms}
 
+    def _wake_speech_start_timeout_seconds(self) -> float:
+        return max(
+            0.0,
+            float(
+                getattr(
+                    self.config.conversation,
+                    "wake_speech_start_timeout_seconds",
+                    8.0,
+                )
+            ),
+        )
+
+    def _finish_wake_speech_timeout(
+        self,
+        wake_ack_handle: _WakeAckHandle | None,
+    ) -> AssistantReply:
+        if wake_ack_handle is not None:
+            wake_ack_handle.join()
+        timeout_seconds = self._wake_speech_start_timeout_seconds()
+        log_event(
+            "session",
+            "wake_speech_timeout",
+            log_id="session.wake_speech_timeout",
+            seconds=timeout_seconds,
+            next_state="returning_to_wake",
+        )
+        return AssistantReply(text="", routed_to="system")
+
     def run_once(self) -> AssistantReply:
         self._start_system_input_dump()
         if self.config.input.mode == "text":
@@ -1877,12 +1905,18 @@ class VoiceAssistant:
                 try:
                     turn_index = self.audio_dump.begin_turn()
                     wake_ack_handle = self._start_wake_ack()
-                    reply, _transcript = self._run_audio_turn(
-                        wake,
-                        wake_ms,
-                        wake_ack_handle=wake_ack_handle,
-                        turn_index=turn_index,
-                    )
+                    try:
+                        reply, _transcript = self._run_audio_turn(
+                            wake,
+                            wake_ms,
+                            wake_ack_handle=wake_ack_handle,
+                            speech_start_timeout_seconds=(
+                                self._wake_speech_start_timeout_seconds()
+                            ),
+                            turn_index=turn_index,
+                        )
+                    except SpeechStartTimeoutError:
+                        return self._finish_wake_speech_timeout(wake_ack_handle)
                     return reply
                 finally:
                     self._unduck_music("conversation")
@@ -1906,12 +1940,18 @@ class VoiceAssistant:
                     turn_index = self.audio_dump.begin_turn()
                     wake_ack_handle = self._start_wake_ack()
                     self.session.reset()
-                    reply, transcript = self._run_audio_turn(
-                        wake,
-                        wake_ms,
-                        wake_ack_handle=wake_ack_handle,
-                        turn_index=turn_index,
-                    )
+                    try:
+                        reply, transcript = self._run_audio_turn(
+                            wake,
+                            wake_ms,
+                            wake_ack_handle=wake_ack_handle,
+                            speech_start_timeout_seconds=(
+                                self._wake_speech_start_timeout_seconds()
+                            ),
+                            turn_index=turn_index,
+                        )
+                    except SpeechStartTimeoutError:
+                        return self._finish_wake_speech_timeout(wake_ack_handle)
                     follow_up_seconds = self.config.conversation.follow_up_seconds
                     if (
                         follow_up_seconds <= 0 or not transcript
@@ -2077,14 +2117,18 @@ def _classify_voice_input(transcript: str, source: str) -> tuple[str, str]:
     text = transcript.strip()
     if _is_unusable_transcript(text):
         return "reject", "unusable_text"
+    strong_intent = _looks_like_strong_voice_intent(text)
+    if source == "wake" and _looks_like_background_wake_text(text, strong_intent):
+        return "clarify", "wake_background_like"
+    if source in {"barge_in", "follow_up"}:
+        if _looks_like_contextual_correction(text):
+            return "accept", "contextual_correction"
+        if len(text) >= 32 and _looks_like_background_monologue(text) and not strong_intent:
+            return "reject", "background_monologue"
     if _looks_like_direct_voice_intent(text):
         return "accept", "direct_intent"
     if source == "wake":
-        if len(text) >= 45 and _looks_like_background_monologue(text):
-            return "clarify", "wake_background_like"
         return "accept", "wake_light_gate"
-    if len(text) >= 32 and _looks_like_background_monologue(text):
-        return "reject", "background_monologue"
     if len(text) <= 24:
         return "clarify", "ambiguous_short"
     return "clarify", "ambiguous_follow_up"
@@ -2270,6 +2314,42 @@ def _looks_like_direct_voice_intent(text: str) -> bool:
     return False
 
 
+def _looks_like_strong_voice_intent(text: str) -> bool:
+    normalized = text.lower().replace(" ", "")
+    if _looks_like_iot_voice_intent(normalized):
+        return True
+    if _looks_like_weather_query(normalized) or _looks_like_time_query(normalized):
+        return True
+    strong_terms = (
+        "帮我",
+        "请",
+        "麻烦",
+        "你能",
+        "你可以",
+        "告诉我",
+        "说一下",
+        "讲一下",
+        "查一下",
+        "查查",
+        "查询",
+        "搜索",
+        "搜一下",
+        "百度",
+        "播放",
+        "停止播放",
+        "暂停",
+        "继续",
+        "取消",
+        "闹钟",
+        "提醒",
+        "定时",
+        "音量",
+        "静音",
+        "你好",
+    )
+    return any(term in normalized for term in strong_terms)
+
+
 def _looks_like_iot_voice_intent(normalized: str) -> bool:
     device_terms = (
         "米家",
@@ -2300,6 +2380,12 @@ def _looks_like_iot_voice_intent(normalized: str) -> bool:
             "关闭",
             "关掉",
             "关上",
+            "关了",
+            "开了",
+            "开灯",
+            "关灯",
+            "拉上",
+            "拉开",
             "调成",
             "调到",
             "设置",
@@ -2315,6 +2401,41 @@ def _looks_like_iot_voice_intent(normalized: str) -> bool:
     ):
         return True
     return normalized.startswith(("开", "关"))
+
+
+def _looks_like_contextual_correction(text: str) -> bool:
+    normalized = text.lower().replace(" ", "")
+    if len(normalized) > 32:
+        return False
+    if any(term in normalized for term in ("我说的是", "刚才说的是", "应该是", "是说")):
+        return True
+    return "不是" in normalized and "是不是" not in normalized and (
+        normalized.startswith("不是")
+        or normalized.startswith("是")
+        or "，不是" in normalized
+        or ",不是" in normalized
+        or len(normalized) <= 18
+    )
+
+
+def _looks_like_background_wake_text(text: str, strong_intent: bool) -> bool:
+    if strong_intent:
+        return False
+    if len(text) >= 45 and _looks_like_background_monologue(text):
+        return True
+    normalized = text.replace(" ", "")
+    if len(normalized) >= 18 and _looks_like_background_continuation(normalized):
+        return True
+    return False
+
+
+def _looks_like_background_continuation(normalized: str) -> bool:
+    if any(term in normalized for term in ("往下看你就懂了", "你就懂了", "这话放在")):
+        return True
+    if "嘛，就" in normalized or "嘛,就" in normalized:
+        return True
+    stripped = normalized.rstrip("。.!！?？,，;；")
+    return stripped.endswith(("因为", "所以", "然后", "但是", "不过", "主要是因为"))
 
 
 def _looks_like_background_monologue(text: str) -> bool:

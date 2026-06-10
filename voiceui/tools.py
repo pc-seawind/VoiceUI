@@ -469,7 +469,14 @@ class VoiceToolRunner:
                 tool_calls=len(response.tool_calls),
             )
             if not response.tool_calls:
-                if _requires_tool_call_for_text(_last_user_text(messages), set(self.tools)):
+                last_text = _last_user_text(messages)
+                if _requires_tool_call_for_text(last_text, set(self.tools)):
+                    direct_call = self._build_direct_miot_control_call(last_text)
+                    if direct_call is not None:
+                        result = self._execute_tool_call(direct_call)
+                        return _direct_tool_response([result]) or _format_tool_payload_response(
+                            result
+                        )
                     log_event(
                         "tools",
                         "missing_required_tool_call",
@@ -535,9 +542,16 @@ class VoiceToolRunner:
         )
 
     def can_handle_miot_followup_text(self, text: str) -> bool:
-        return self._looks_like_last_miot_property_followup(
+        if self._looks_like_last_miot_property_followup(
             text
-        ) or self._can_resolve_active_miot_ambiguity(text)
+        ) or self._can_resolve_active_miot_ambiguity(text):
+            return True
+        return (
+            "xiaomi_miot_control_device" in self.tools
+            and self._last_miot_control is not None
+            and self._active_miot_ambiguity() is None
+            and _is_miot_followup_reference(text)
+        )
 
     def run_miot_control(
         self,
@@ -652,6 +666,33 @@ class VoiceToolRunner:
             id="local_miot_followup",
             name="xiaomi_miot_control_device",
             arguments=arguments,
+        )
+
+    def _build_direct_miot_control_call(self, request: str) -> ToolCall | None:
+        if "xiaomi_miot_control_device" not in self.tools:
+            return None
+        if not _looks_like_miot_control_text(request):
+            return None
+        normalized = request.lower().replace(" ", "")
+        if not _has_explicit_miot_device_text(normalized):
+            return None
+        action = _infer_miot_action_from_text(request)
+        if not action:
+            return None
+        log_event(
+            "tools",
+            "miot_followup",
+            log_id="tools.miot_followup",
+            action=action,
+            device="request",
+        )
+        return ToolCall(
+            id="local_miot_direct",
+            name="xiaomi_miot_control_device",
+            arguments={
+                "request": request,
+                "action": action,
+            },
         )
 
     def _build_miot_ambiguity_followup_call(self, request: str, action: str) -> ToolCall | None:

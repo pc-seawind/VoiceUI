@@ -475,7 +475,7 @@ class CoreTests(unittest.TestCase):
 
         self.assertIsInstance(reply, AssistantReply)
         self.assertEqual(wake_ack.calls, 1)
-        self.assertEqual(fake_vad.start_timeouts, [0.0, 1, 1])
+        self.assertEqual(fake_vad.start_timeouts, [8.0, 1, 1])
         self.assertEqual(tts.spoken, ["reply 1", "reply 2"])
         self.assertEqual([message.content for message in chat.calls[0]], ["system", "first"])
         self.assertEqual(
@@ -515,6 +515,37 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(tts.spoken, ["reply 1"])
         self.assertEqual(len(chat.calls), 1)
         self.assertEqual(fake_vad.items, [SpeechStartTimeoutError])
+
+    def test_wake_speech_timeout_returns_to_wake_without_llm_or_tts(self) -> None:
+        config = AssistantConfig(
+            input=InputConfig(mode="audio"),
+            wake=WakeConfig(engine="disabled"),
+            conversation=ConversationConfig(
+                follow_up_seconds=1,
+                wake_speech_start_timeout_seconds=2,
+            ),
+            llm=LlmConfig(system_prompt="system"),
+        )
+        assistant = VoiceAssistant(config)
+        fake_vad = FakeVad([SpeechStartTimeoutError])
+        chat = RecordingChat()
+        tts = FakeTts()
+        assistant.wake = FakeWake()
+        assistant.wake_ack = FakeWakeAck()
+        assistant.vad = fake_vad
+        assistant.stt = FakeStt()
+        assistant.chat = chat
+        assistant.tts = tts
+
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            reply = assistant.run_conversation()
+
+        self.assertEqual(reply.routed_to, "system")
+        self.assertEqual(reply.text, "")
+        self.assertEqual(chat.calls, [])
+        self.assertEqual(tts.spoken, [])
+        self.assertEqual(fake_vad.start_timeouts, [2])
+        self.assertIn("event=wake_speech_timeout", output.getvalue())
 
     def test_wake_asr_termination_returns_to_wake_without_llm_or_tts(self) -> None:
         config = AssistantConfig(
@@ -1338,6 +1369,84 @@ class CoreTests(unittest.TestCase):
 
         self.assertEqual((decision, reason, response), ("accept", "miot_followup_context", ""))
         self.assertEqual(runner.followup_calls, ["书房的空调。"])
+
+    def test_wake_background_question_terms_clarify_before_direct_intent(self) -> None:
+        config = AssistantConfig(
+            input=InputConfig(mode="audio"),
+            wake=WakeConfig(engine="disabled"),
+            conversation=ConversationConfig(follow_up_seconds=1),
+            llm=LlmConfig(system_prompt="system"),
+        )
+        assistant = VoiceAssistant(config)
+        background = (
+            "所以一个五块钱都不给这些豪门，主要是联赛方式是不要联赛，"
+            "这话放在他们身上，可能是那问题到底出在哪？往下看你就懂了。"
+        )
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            decision, reason, response = assistant._gate_voice_transcript(  # pylint: disable=protected-access
+                background,
+                "wake",
+            )
+
+        self.assertEqual(decision, "clarify")
+        self.assertEqual(reason, "wake_background_like")
+        self.assertEqual(response, "我没太听清，请再说一遍。")
+
+    def test_follow_up_background_question_terms_reject_before_direct_intent(self) -> None:
+        config = AssistantConfig(
+            input=InputConfig(mode="audio"),
+            wake=WakeConfig(engine="disabled"),
+            conversation=ConversationConfig(follow_up_seconds=1),
+            llm=LlmConfig(system_prompt="system"),
+        )
+        assistant = VoiceAssistant(config)
+        background = (
+            "都淹死在平均之地。整个苏超12支队加起来才赚了3.57亿，"
+            "为啥这么猛？因为提问了，哪怕小组就数据。"
+        )
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            decision, reason, response = assistant._gate_voice_transcript(  # pylint: disable=protected-access
+                background,
+                "follow_up",
+            )
+
+        self.assertEqual((decision, reason, response), ("reject", "background_monologue", ""))
+
+    def test_follow_up_contextual_correction_bypasses_short_clarification(self) -> None:
+        config = AssistantConfig(
+            input=InputConfig(mode="audio"),
+            wake=WakeConfig(engine="disabled"),
+            conversation=ConversationConfig(follow_up_seconds=1),
+            llm=LlmConfig(system_prompt="system"),
+        )
+        assistant = VoiceAssistant(config)
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            decision, reason, response = assistant._gate_voice_transcript(  # pylint: disable=protected-access
+                "原神的火神不是虎视。",
+                "follow_up",
+            )
+
+        self.assertEqual((decision, reason, response), ("accept", "contextual_correction", ""))
+
+    def test_follow_up_iot_command_with_le_suffix_is_direct_intent(self) -> None:
+        config = AssistantConfig(
+            input=InputConfig(mode="audio"),
+            wake=WakeConfig(engine="disabled"),
+            conversation=ConversationConfig(follow_up_seconds=1),
+            llm=LlmConfig(system_prompt="system"),
+        )
+        assistant = VoiceAssistant(config)
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            decision, reason, response = assistant._gate_voice_transcript(  # pylint: disable=protected-access
+                "把卧室的灯关了。",
+                "follow_up",
+            )
+
+        self.assertEqual((decision, reason, response), ("accept", "direct_intent", ""))
 
     def test_input_gate_clarification_rejects_self_echo_barge_in(self) -> None:
         config = AssistantConfig(
