@@ -410,7 +410,7 @@ class ToolsTests(unittest.TestCase):
                 )
             ],
         )
-        runner._last_miot_control = {  # pylint: disable=protected-access
+        runner._last_miot_target = {  # pylint: disable=protected-access
             "device": {
                 "name": "书房吸顶灯",
                 "room_name": "书房",
@@ -675,7 +675,7 @@ class ToolsTests(unittest.TestCase):
         self.assertEqual(tool_calls[1]["device_class"], "aircondition")
         self.assertEqual(tool_calls[1]["property_query"], "power")
 
-    def test_tool_runner_reuses_last_miot_device_for_temperature_followup(self) -> None:
+    def test_tool_runner_reuses_last_miot_target_for_temperature_followup(self) -> None:
         tool_calls: list[dict] = []
 
         def control_device(arguments: dict) -> dict:
@@ -702,7 +702,7 @@ class ToolsTests(unittest.TestCase):
                 )
             ],
         )
-        runner._last_miot_control = {  # pylint: disable=protected-access
+        runner._last_miot_target = {  # pylint: disable=protected-access
             "device": {
                 "name": "书房空调",
                 "room_name": "书房",
@@ -720,7 +720,7 @@ class ToolsTests(unittest.TestCase):
         self.assertEqual(tool_calls[0]["device_class"], "aircondition")
         self.assertEqual(tool_calls[0]["action"], "set_value")
 
-    def test_tool_runner_retries_last_miot_device_for_failed_followup(self) -> None:
+    def test_tool_runner_retries_last_miot_target_for_failed_followup(self) -> None:
         tool_calls: list[dict] = []
 
         def control_device(arguments: dict) -> dict:
@@ -746,7 +746,7 @@ class ToolsTests(unittest.TestCase):
                 )
             ],
         )
-        runner._last_miot_control = {  # pylint: disable=protected-access
+        runner._last_miot_target = {  # pylint: disable=protected-access
             "device": {
                 "name": "书房吸顶灯",
                 "room_name": "书房",
@@ -763,6 +763,46 @@ class ToolsTests(unittest.TestCase):
         self.assertEqual(tool_calls[0]["device"], "书房吸顶灯")
         self.assertEqual(tool_calls[0]["device_class"], "light")
         self.assertEqual(tool_calls[0]["action"], "turn_off")
+
+    def test_tool_runner_does_not_retry_unsupported_miot_target(self) -> None:
+        chat = NoToolChat()
+        tool_calls: list[dict] = []
+
+        def control_device(arguments: dict) -> dict:
+            tool_calls.append(dict(arguments))
+            return {
+                "status": "unsupported",
+                "action": arguments["action"],
+                "device": {
+                    "name": "书房吸顶灯",
+                    "room_name": "书房",
+                    "device_class": "light",
+                },
+                "message": "匹配到了设备，但没有找到适合该指令的可写 MIoT 属性或动作。",
+            }
+
+        runner = VoiceToolRunner(
+            chat=chat,
+            tools=[
+                ToolDefinition(
+                    name="xiaomi_miot_control_device",
+                    description="Control Xiaomi device",
+                    parameters={"type": "object", "properties": {}},
+                    handler=control_device,
+                )
+            ],
+        )
+
+        first = runner.complete([ChatMessage(role="user", content="关闭书房灯。")])
+        second = runner.complete([ChatMessage(role="user", content="没有关成功啊，再关一次。")])
+
+        self.assertIn("没有找到适合该指令", first)
+        self.assertEqual(
+            second,
+            "我还没有实际执行到设备控制，不能确认已经完成。请再说一遍具体设备。",
+        )
+        self.assertEqual(len(tool_calls), 1)
+        self.assertIsNone(runner._last_miot_target)  # pylint: disable=protected-access
 
     def test_tool_runner_executes_explicit_miot_command_when_llm_omits_tool_call(
         self,

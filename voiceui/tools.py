@@ -360,6 +360,7 @@ class VoiceToolRunner:
         self.max_iterations = max(1, max_iterations)
         self.music_controller = music_controller
         self._last_miot_control: dict[str, Any] | None = None
+        self._last_miot_target: dict[str, Any] | None = None
         self._last_miot_ambiguity: dict[str, Any] | None = None
         self._previous_miot_ambiguity: dict[str, Any] | None = None
 
@@ -404,7 +405,7 @@ class VoiceToolRunner:
         )
 
     def _looks_like_last_miot_property_followup(self, text: str) -> bool:
-        if not self._last_miot_control or self._active_miot_ambiguity() is not None:
+        if not self._last_miot_target or self._active_miot_ambiguity() is not None:
             return False
         if _infer_miot_action_from_text(text) != "set_value":
             return False
@@ -548,7 +549,7 @@ class VoiceToolRunner:
             return True
         return (
             "xiaomi_miot_control_device" in self.tools
-            and self._last_miot_control is not None
+            and self._last_miot_target is not None
             and self._active_miot_ambiguity() is None
             and _is_miot_followup_reference(text)
         )
@@ -641,9 +642,9 @@ class VoiceToolRunner:
             or self._looks_like_last_miot_property_followup(request)
         ):
             return None
-        if self._active_miot_ambiguity() is not None or not self._last_miot_control:
+        if self._active_miot_ambiguity() is not None or not self._last_miot_target:
             return None
-        device = self._last_miot_control.get("device")
+        device = self._last_miot_target.get("device")
         if not isinstance(device, dict) or not device.get("name"):
             return None
         arguments: dict[str, Any] = {
@@ -863,6 +864,7 @@ class VoiceToolRunner:
         if status == "ambiguous":
             if tool_name == "xiaomi_miot_control_device":
                 self._last_miot_control = None
+                self._last_miot_target = None
             self._last_miot_ambiguity = None
             self._previous_miot_ambiguity = None
             candidates = (
@@ -891,21 +893,31 @@ class VoiceToolRunner:
         if tool_name == "xiaomi_miot_read_device_property":
             self._last_miot_ambiguity = None
             return
-        if status not in {"verified", "ok"}:
+        target = _miot_target_from_payload(payload)
+        if status not in {"verified", "ok", "resolved"}:
             self._last_miot_control = None
+            self._last_miot_target = None
             self._last_miot_ambiguity = None
             self._previous_miot_ambiguity = None
             return
         if self._last_miot_ambiguity is not None:
             self._previous_miot_ambiguity = dict(self._last_miot_ambiguity)
         self._last_miot_ambiguity = None
-        device = payload.get("device") if isinstance(payload.get("device"), dict) else None
-        if not device or not device.get("name"):
+        if target is None:
             return
-        self._last_miot_control = {
-            "device": dict(device),
-            "action": str(payload.get("action") or ""),
-        }
+        self._last_miot_target = dict(target)
+        self._last_miot_control = dict(target)
+
+
+def _miot_target_from_payload(payload: dict[str, Any]) -> dict[str, Any] | None:
+    device = payload.get("device") if isinstance(payload.get("device"), dict) else None
+    action = str(payload.get("action") or "")
+    if not device or not device.get("name") or not action:
+        return None
+    return {
+        "device": dict(device),
+        "action": action,
+    }
 
 
 def create_tool_runner(
