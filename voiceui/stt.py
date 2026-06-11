@@ -496,6 +496,13 @@ class _AliyunNlsStreamingSession(StreamingSpeechToTextSession):
             del self._pending[: self.frame_bytes]
             self.recognizer.send_audio(chunk)
             self.sent_bytes += len(chunk)
+            # Aliyun NLS streaming recognition expects audio to be fed at a
+            # near-real-time pace. In VoiceUI the recognizer may spend time
+            # creating a token/opening the websocket while VAD has already
+            # queued speech audio; without pacing that backlog is flushed too
+            # quickly and NLS can time out waiting for a final recognition
+            # result. Match the non-streaming recognizer's 20 ms frame pacing.
+            time.sleep(0.01)
 
     def finish(self) -> str:
         if self._closed:
@@ -511,6 +518,16 @@ class _AliyunNlsStreamingSession(StreamingSpeechToTextSession):
             self.recognizer.shutdown()
             self._closed = True
 
+        log_event(
+            "stt",
+            "streaming_finish",
+            log_id="stt.streaming_finish",
+            default_enabled=True,
+            sent_bytes=self.sent_bytes,
+            sent_audio_ms=int(self.sent_bytes / 2 / self.sample_rate * 1000),
+            results=len(self.results),
+            errors=len(self.errors),
+        )
         if self.errors:
             raise RuntimeError(f"Aliyun NLS STT failed: {self.errors[-1]}")
         return self.results[-1] if self.results else ""

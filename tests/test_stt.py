@@ -176,9 +176,10 @@ class SttTests(unittest.TestCase):
                 },
             ):
                 with patch("voiceui.stt._get_aliyun_nls_token", return_value="token"):
-                    session = stt.start_streaming(sample_rate=16000)
-                    session.write(b"\x01\x00" * 320)
-                    transcript = session.finish()
+                    with patch("voiceui.stt.time.sleep") as sleep:
+                        session = stt.start_streaming(sample_rate=16000)
+                        session.write(b"\x01\x00" * 320)
+                        transcript = session.finish()
 
         self.assertEqual(transcript, "你好")
         self.assertEqual(len(created), 1)
@@ -191,6 +192,8 @@ class SttTests(unittest.TestCase):
         self.assertEqual(recognizer.kwargs["appkey"], "appkey")
         self.assertEqual(recognizer.sent[0], b"\x00\x00" * 320)
         self.assertEqual(recognizer.sent[1], b"\x01\x00" * 320)
+        self.assertEqual(sleep.call_count, 2)
+        sleep.assert_called_with(0.01)
 
     def test_extract_aliyun_result(self) -> None:
         message = '{"payload":{"result":"second time时间"}}'

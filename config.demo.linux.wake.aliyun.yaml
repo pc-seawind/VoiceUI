@@ -11,6 +11,8 @@ audio:
   block_ms: 80
   device: "reSpeaker XVF3800 4-Mic Array: USB Audio (hw:2,0), ALSA (2 in, 2 out)"
   wake_stream_channel: 0
+  # ch0 is the XVF3800 AEC/EC path and is used for the real assistant.
+  # ch1 is the raw mic channel; use it only for loopback diagnostics.
   command_stream_channel: 0
   input_gain_db: 0.0
   debug: true
@@ -26,13 +28,16 @@ wake:
   debug_top_predictions: 6
 
 wake_ack:
-  enabled: false
+  enabled: true
   wav_path: default
   playback_device: "reSpeaker XVF3800 4-Mic Array: USB Audio (hw:2,0), ALSA (2 in, 2 out)"
 
 vad:
   engine: energy
-  threshold: 6000.0
+  # Service tuning: channel-0 speech during live wake tests was around RMS
+  # 2400-4000, so 6000 timed out after wake. Start lower and retune with
+  # --calibrate-vad in the final room if false starts appear.
+  threshold: 1800.0
   min_speech_ms: 250
   silence_ms: 800
   trailing_silence_trim_ms: 500
@@ -53,12 +58,10 @@ stt:
   debug: true
 
 llm:
-  # Keep the Linux real-device demo independent of non-Aliyun LLM credentials.
-  # This still exercises wake detection, real ALSA capture, Aliyun STT, and
-  # Aliyun TTS using ALIYUN_NLS_APPKEY, ALIYUN_AccessKeyId, and
-  # ALIYUN_AccessKeySecret. Switch to provider: bailian once BAILIAN_API_KEY is
-  # known-good.
-  provider: mock
+  # Real Linux assistant path: wake detection, real ALSA capture, Aliyun STT/TTS,
+  # and Bailian LLM. Aliyun uses ALIYUN_NLS_APPKEY, ALIYUN_AccessKeyId, and
+  # ALIYUN_AccessKeySecret; the LLM uses BAILIAN_API_KEY.
+  provider: bailian
   endpoint: https://dashscope.aliyuncs.com/compatible-mode/v1
   api_key_env: BAILIAN_API_KEY
   model: qwen3.6-flash
@@ -86,7 +89,9 @@ tts:
   playback_sample_rate: 16000
   playback_channels: 2
   stream: true
-  volume: 50
+  # Keep TTS below the earlier loud debug tone level; hardware/PipeWire volume
+  # should also be kept around 50% during live-room tests.
+  volume: 35
   speech_rate: 0
   pitch_rate: 0
   playback_device: "reSpeaker XVF3800 4-Mic Array: USB Audio (hw:2,0), ALSA (2 in, 2 out)"

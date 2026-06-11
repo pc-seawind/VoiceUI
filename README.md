@@ -146,10 +146,9 @@ python -m voiceui --config config.demo.linux.wake.mock.yaml --wake-test
 
 `config.demo.linux.aliyun.yaml` keeps the same ALSA device and energy VAD, then
 switches STT/TTS to Aliyun NLS using `ALIYUN_NLS_APPKEY`,
-`ALIYUN_AccessKeyId`, and `ALIYUN_AccessKeySecret`. The LLM remains mocked so
-the real-device speech path does not depend on a Bailian key.
-`config.demo.linux.wake.aliyun.yaml` adds openWakeWord on top of that and is the
-Linux long-running service candidate:
+`ALIYUN_AccessKeyId`, and `ALIYUN_AccessKeySecret`, and uses Bailian as the real
+LLM via `BAILIAN_API_KEY`. `config.demo.linux.wake.aliyun.yaml` adds
+openWakeWord on top of that and is the Linux long-running service candidate:
 
 ```bash
 voiceui-service --config config.demo.linux.wake.aliyun.yaml
@@ -159,7 +158,19 @@ For production shortcuts, pass `--config auto` (or omit `--config` in
 `voiceui-service`) so VoiceUI chooses the Windows or Linux production demo based
 on the host OS.
 
-Set `llm.provider: bailian` after `BAILIAN_API_KEY` is known-good.
+Linux loopback playback diagnostics should keep the real assistant on the XVF3800
+AEC/EC command channel (`audio.command_stream_channel: 0`) and use the raw mic
+channel only for the diagnostic recording (`--loopback-channel 1`). Stop the
+long-running service first so the input device is not busy, then run:
+
+```bash
+python scripts/linux_loopback_diag.py --config auto --output-dir /tmp/voiceui-loopback-diag
+```
+
+The script plays a short synthesized phrase at a reduced digital gain, records at
+the same time, writes `record_ch0_formal_ec.wav` and
+`record_ch1_loopback_raw.wav`, and runs ASR on the raw loopback channel unless
+`--no-asr` is passed.
 
 Record from the configured XVF3800 command stream:
 
