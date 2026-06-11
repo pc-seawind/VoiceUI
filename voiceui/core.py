@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import queue
+import re
 import threading
 import time
 from collections.abc import Iterator
@@ -35,6 +36,7 @@ from voiceui.reminders import (
 )
 from voiceui.session import ConversationSession
 from voiceui.stt import create_stt
+from voiceui.system_volume import get_system_output_volume, set_system_output_volume
 from voiceui.tools import (
     create_tool_runner,
     format_current_time_response,
@@ -326,6 +328,21 @@ class VoiceAssistant:
         if local_response is not None:
             timings["llm"] = 0
             return self._finish_generated_response(local_response, timings)
+
+        try:
+            local_response = self._try_handle_local_volume_command(transcript)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            return self._finish_processing_error(exc, timings, mode="local_volume")
+        if local_response is not None:
+            timings["llm"] = 0
+            log_event(
+                "llm",
+                "completed",
+                log_id="llm.completed",
+                latency_ms=0,
+                mode="local_volume",
+            )
+            return self._finish_generated_response(local_response, timings, routed_to="volume")
 
         try:
             local_response = self._try_handle_local_info_command(transcript)
@@ -1032,6 +1049,55 @@ class VoiceAssistant:
         if callable(is_active):
             return bool(is_active())
         return False
+
+    def _try_handle_local_volume_command(self, transcript: str) -> str | None:
+        if not (self.config.tools.enabled and self.config.tools.allow_volume):
+            return None
+        normalized = transcript.lower().replace(" ", "")
+        if not _looks_like_volume_query(normalized):
+            return None
+        started = time.monotonic()
+        try:
+            request = _parse_volume_request(normalized)
+            if request["action"] == "get":
+                result = get_system_output_volume(device=self.config.tts.playback_device)
+            else:
+                result = set_system_output_volume(
+                    device=self.config.tts.playback_device,
+                    volume_percent=request.get("volume_percent"),
+                    relative_percent=request.get("relative_percent"),
+                    muted=request.get("muted"),
+                )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            latency_ms = int((time.monotonic() - started) * 1000)
+            log_event(
+                "tool",
+                "executed",
+                log_id="tool.executed",
+                name="local_system_volume",
+                latency_ms=latency_ms,
+                ok=False,
+                mode="local",
+                error=str(exc),
+            )
+            raise
+        latency_ms = int((time.monotonic() - started) * 1000)
+        log_event(
+            "tool",
+            "executed",
+            log_id="tool.executed",
+            name="local_system_volume",
+            latency_ms=latency_ms,
+            ok=True,
+            mode="local",
+        )
+        if request["action"] == "get":
+            return f"现在音量是{int(round(float(result.get('after_percent', 0))))}% 。"
+        if request.get("muted") is True:
+            return "已静音。"
+        if request.get("muted") is False:
+            return "已取消静音。"
+        return f"好的，音量已调到{int(round(float(result.get('after_percent', 0))))}% 。"
 
     def _try_handle_local_info_command(self, transcript: str) -> str | None:
         if not self.config.tools.enabled:
@@ -2027,6 +2093,36 @@ class VoiceAssistant:
             if cron_scheduler is not None:
                 cron_scheduler.stop()
             self.close()
+
+
+def _looks_like_volume_query(normalized: str) -> bool:
+    return any(term in normalized for term in ("音量", "声音", "静音", "volume", "mute"))
+
+
+def _parse_volume_request(normalized: str) -> dict[str, object]:
+    if any(term in normalized for term in ("静音", "mute")):
+        if any(term in normalized for term in ("取消静音", "解除静音", "unmute")):
+            return {"action": "set", "muted": False}
+        return {"action": "set", "muted": True}
+    if any(term in normalized for term in ("多少", "几", "当前", "现在", "查询", "查看")):
+        return {"action": "get"}
+    percent = _extract_percent_number(normalized)
+    if any(term in normalized for term in ("调低", "降低", "小声", "小一点", "降", "低一点")):
+        relative = -(percent if percent is not None else 10.0)
+        return {"action": "set", "relative_percent": relative}
+    louder_terms = ("调高", "提高", "大声", "大一点", "增大", "升高", "加大")
+    if any(term in normalized for term in louder_terms):
+        return {"action": "set", "relative_percent": percent if percent is not None else 10.0}
+    if percent is not None:
+        return {"action": "set", "volume_percent": percent}
+    return {"action": "get"}
+
+
+def _extract_percent_number(text: str) -> float | None:
+    match = re.search(r"(\d+(?:\.\d+)?)%?", text)
+    if not match:
+        return None
+    return max(0.0, min(100.0, float(match.group(1))))
 
 
 def _looks_like_weather_query(normalized: str) -> bool:

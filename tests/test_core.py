@@ -18,6 +18,7 @@ from voiceui.core import (
     _extract_weather_target_day,
     _looks_like_time_query,
     _matches_termination_command,
+    _parse_volume_request,
 )
 from voiceui.llm import ChatMessage, ToolCall, ToolChatResponse
 from voiceui.models import (
@@ -1551,6 +1552,47 @@ class CoreTests(unittest.TestCase):
             metadata = json.loads((debug_dirs[0] / "metadata.json").read_text(encoding="utf-8"))
             self.assertEqual(len(metadata["barge_in"]), 1)
             self.assertEqual(metadata["barge_in"][0]["turn"], 1)
+
+
+    def test_text_turn_handles_volume_locally_without_llm(self) -> None:
+        config = AssistantConfig(
+            input=InputConfig(mode="text"),
+            tools=ToolsConfig(
+                enabled=True,
+                allow_time=False,
+                allow_weather=False,
+                allow_volume=True,
+                allow_music=False,
+            ),
+        )
+        with patch("voiceui.core.warm_weather_cache"):
+            assistant = VoiceAssistant(config)
+        assistant.chat = RecordingChat()
+        assistant.tts = FakeTts()
+
+        with patch("voiceui.core.set_system_output_volume") as set_volume:
+            set_volume.return_value = {"after_percent": 60}
+            reply = assistant.run_text_turn("音量调低20%")
+
+        set_volume.assert_called_once_with(
+            device=config.tts.playback_device,
+            volume_percent=None,
+            relative_percent=-20.0,
+            muted=None,
+        )
+        self.assertEqual(reply.text, "好的，音量已调到60% 。")
+        self.assertEqual(assistant.chat.calls, [])
+
+    def test_parse_volume_request(self) -> None:
+        self.assertEqual(
+            _parse_volume_request("音量调低20%"),
+            {"action": "set", "relative_percent": -20.0},
+        )
+        self.assertEqual(
+            _parse_volume_request("音量调到60%"),
+            {"action": "set", "volume_percent": 60.0},
+        )
+        self.assertEqual(_parse_volume_request("当前音量多少"), {"action": "get"})
 
     def test_audio_turn_streams_stt_during_vad(self) -> None:
         config = AssistantConfig(
