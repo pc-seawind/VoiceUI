@@ -172,7 +172,7 @@ class AliyunNlsSpeechToText(SpeechToText):
         self._token: str | None = None
 
     def supports_streaming(self) -> bool:
-        return True
+        return bool(self.config.streaming)
 
     def start_streaming(self, sample_rate: int) -> StreamingSpeechToTextSession:
         if sample_rate != _ALIYUN_SAMPLE_RATE:

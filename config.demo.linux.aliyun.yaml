@@ -51,6 +51,10 @@ stt:
   timeout_seconds: 20
   language: zh
   leading_silence_ms: 200
+  # Non-streaming NLS is more reliable on the XVF3800 service path; the
+  # streaming SDK stop() can block with "Waiting stop over 20s" after short VAD
+  # captures, preventing any LLM/TTS reply.
+  streaming: false
   debug: true
 
 llm:
@@ -85,9 +89,9 @@ tts:
   playback_sample_rate: 16000
   playback_channels: 2
   stream: true
-  # Keep TTS below the earlier loud debug tone level; hardware/PipeWire volume
-  # should also be kept around 50% during live-room tests.
-  volume: 35
+  # Keep TTS below the earlier loud debug tone level while staying audible.
+  # Avoid single-tone debug playback; use scripts/linux_loopback_diag.py instead.
+  volume: 45
   speech_rate: 0
   pitch_rate: 0
   playback_device: "reSpeaker XVF3800 4-Mic Array: USB Audio (hw:2,0), ALSA (2 in, 2 out)"

@@ -126,6 +126,12 @@ class SttTests(unittest.TestCase):
         silence_bytes = b"\x00\x00" * 1600
         self.assertEqual(recognizer.call_args.kwargs["pcm"], silence_bytes + utterance.pcm)
 
+    def test_aliyun_streaming_stt_can_be_disabled(self) -> None:
+        config = SttConfig(provider="aliyun_nls", streaming=False)
+        stt = AliyunNlsSpeechToText(config)
+
+        self.assertFalse(stt.supports_streaming())
+
     def test_aliyun_streaming_stt_sends_audio_incrementally(self) -> None:
         created: list[object] = []
 

@@ -123,6 +123,7 @@ class SttConfig:
     compute_type: str = "int8"
     mock_text: str = "Hello from mock STT."
     leading_silence_ms: int = 0
+    streaming: bool = True
     debug: bool = False
 
 
