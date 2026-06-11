@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 import types
 from dataclasses import asdict, fields, is_dataclass
 from pathlib import Path
@@ -10,15 +11,44 @@ from voiceui.models import AssistantConfig
 
 T = TypeVar("T")
 
+AUTO_CONFIG = "auto"
+WINDOWS_AUTO_CONFIG_PATH = "config.demo.wake.aliyun.yaml"
+LINUX_AUTO_CONFIG_PATH = "config.demo.linux.wake.aliyun.yaml"
+
 
 def load_config(path: str | Path | None = None) -> AssistantConfig:
     config = AssistantConfig()
-    if path is None:
+    resolved_path = resolve_config_path(path)
+    if resolved_path is None:
         return config
 
-    raw = _read_mapping(Path(path))
+    raw = _read_mapping(resolved_path)
     merged = _deep_merge(asdict(config), raw)
     return _from_mapping(AssistantConfig, merged)
+
+
+
+def resolve_config_path(
+    path: str | Path | None,
+    *,
+    platform: str | None = None,
+) -> Path | None:
+    if path is None:
+        return None
+    requested = str(path).strip()
+    if requested.casefold() == AUTO_CONFIG:
+        return Path(default_config_path_for_platform(platform=platform))
+    return Path(path)
+
+
+def default_config_path_for_platform(*, platform: str | None = None) -> str:
+    platform_name = sys.platform if platform is None else platform
+    normalized = platform_name.casefold()
+    if normalized.startswith(("win32", "cygwin", "msys")):
+        return WINDOWS_AUTO_CONFIG_PATH
+    if normalized.startswith("linux"):
+        return LINUX_AUTO_CONFIG_PATH
+    return WINDOWS_AUTO_CONFIG_PATH
 
 
 def config_to_dict(config: AssistantConfig) -> dict[str, Any]:

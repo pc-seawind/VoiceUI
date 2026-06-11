@@ -4,13 +4,13 @@ import argparse
 import sys
 from pathlib import Path
 
-from voiceui.config import load_config
+from voiceui.config import AUTO_CONFIG, load_config
 from voiceui.core import VoiceAssistant
 from voiceui.env import load_dotenv
 from voiceui.logs import configure_log_files, configure_logging, log_event
 from voiceui.models import AssistantConfig
 
-_DEFAULT_SERVICE_CONFIG = "config.demo.wake.aliyun.yaml"
+_DEFAULT_SERVICE_CONFIG = AUTO_CONFIG
 _SERVICE_STDOUT_MODE = "errors_and_voice_context"
 
 
@@ -19,7 +19,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--config",
         default=_DEFAULT_SERVICE_CONFIG,
-        help=f"Config file for the production service. Default: {_DEFAULT_SERVICE_CONFIG}",
+        help=(
+            "Config file for the production service, or 'auto' to use "
+            "config.demo.wake.aliyun.yaml on Windows and "
+            "config.demo.linux.wake.aliyun.yaml on Linux. "
+            f"Default: {_DEFAULT_SERVICE_CONFIG}"
+        ),
     )
     parser.add_argument(
         "--output-dir",

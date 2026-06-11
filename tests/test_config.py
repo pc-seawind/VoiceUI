@@ -1,8 +1,15 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 
-from voiceui.config import load_config
+from voiceui.config import (
+    LINUX_AUTO_CONFIG_PATH,
+    WINDOWS_AUTO_CONFIG_PATH,
+    default_config_path_for_platform,
+    load_config,
+    resolve_config_path,
+)
 from voiceui.models import (
     AudioConfig,
     CronConfig,
@@ -58,6 +65,41 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.conversation.max_reminder_delay_seconds, 30 * 24 * 60 * 60)
         self.assertTrue(config.conversation.self_echo_filter_enabled)
         self.assertEqual(config.conversation.self_echo_window_seconds, 8.0)
+
+
+    def test_auto_config_path_resolves_by_platform(self) -> None:
+        self.assertEqual(
+            default_config_path_for_platform(platform="win32"),
+            WINDOWS_AUTO_CONFIG_PATH,
+        )
+        self.assertEqual(
+            default_config_path_for_platform(platform="cygwin"),
+            WINDOWS_AUTO_CONFIG_PATH,
+        )
+        self.assertEqual(
+            default_config_path_for_platform(platform="linux"),
+            LINUX_AUTO_CONFIG_PATH,
+        )
+        self.assertEqual(
+            resolve_config_path("auto", platform="win32"),
+            Path(WINDOWS_AUTO_CONFIG_PATH),
+        )
+        self.assertEqual(
+            resolve_config_path("AUTO", platform="linux"),
+            Path(LINUX_AUTO_CONFIG_PATH),
+        )
+        self.assertIsNone(resolve_config_path(None, platform="linux"))
+
+    def test_load_auto_config_can_use_linux_or_windows_config(self) -> None:
+        linux_config = load_config(resolve_config_path("auto", platform="linux"))
+        windows_config = load_config(resolve_config_path("auto", platform="win32"))
+
+        self.assertEqual(linux_config.audio.device, LINUX_XVF_DEVICE)
+        self.assertEqual(linux_config.wake.engine, "openwakeword")
+        self.assertEqual(linux_config.stt.provider, "aliyun_nls")
+        self.assertIn(windows_config.audio.device, XVF_INPUT_DEVICES)
+        self.assertEqual(windows_config.wake.engine, "openwakeword")
+        self.assertEqual(windows_config.stt.provider, "aliyun_nls")
 
     def test_example_config_loads_nested_values(self) -> None:
         config = load_config("config.example.yaml")

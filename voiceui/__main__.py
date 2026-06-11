@@ -32,7 +32,14 @@ _DEFAULT_WAKE_ACK_STYLE = (
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="VoiceUI assistant runtime")
-    parser.add_argument("--config", help="Path to YAML or JSON config file")
+    parser.add_argument(
+        "--config",
+        help=(
+            "Path to YAML or JSON config file, or 'auto' to use "
+            "config.demo.wake.aliyun.yaml on Windows and "
+            "config.demo.linux.wake.aliyun.yaml on Linux"
+        ),
+    )
     parser.add_argument("--dry-run", action="store_true", help="Print resolved config and exit")
     parser.add_argument(
         "--list-audio-devices",

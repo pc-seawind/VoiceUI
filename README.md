@@ -58,9 +58,12 @@ Create local secrets from the template:
 Copy-Item .env.example .env
 ```
 
-Then fill `BAILIAN_API_KEY` for Bailian LLM and `MIFY_API_KEY` if you use
-Mify/MiMo ASR or TTS. The real `.env` is ignored by git and is loaded
-automatically by the CLI.
+Then fill only the keys for the providers used by your config. For Aliyun NLS
+ASR/TTS, set exactly these three environment variables:
+`ALIYUN_NLS_APPKEY`, `ALIYUN_AccessKeyId`, and `ALIYUN_AccessKeySecret`. Fill
+`BAILIAN_API_KEY` only when the selected LLM provider is `bailian`, and
+`MIFY_API_KEY` only when using Mify/MiMo ASR or TTS. The real `.env` is ignored
+by git and is loaded automatically by the CLI.
 
 List audio devices:
 
@@ -142,13 +145,19 @@ python -m voiceui --config config.demo.linux.wake.mock.yaml --wake-test
 ```
 
 `config.demo.linux.aliyun.yaml` keeps the same ALSA device and energy VAD, then
-switches STT/TTS to Aliyun NLS while leaving the LLM mocked so the real-device
-speech path does not depend on a Bailian key. `config.demo.linux.wake.aliyun.yaml`
-adds openWakeWord on top of that and is the Linux long-running service candidate:
+switches STT/TTS to Aliyun NLS using `ALIYUN_NLS_APPKEY`,
+`ALIYUN_AccessKeyId`, and `ALIYUN_AccessKeySecret`. The LLM remains mocked so
+the real-device speech path does not depend on a Bailian key.
+`config.demo.linux.wake.aliyun.yaml` adds openWakeWord on top of that and is the
+Linux long-running service candidate:
 
 ```bash
 voiceui-service --config config.demo.linux.wake.aliyun.yaml
 ```
+
+For production shortcuts, pass `--config auto` (or omit `--config` in
+`voiceui-service`) so VoiceUI chooses the Windows or Linux production demo based
+on the host OS.
 
 Set `llm.provider: bailian` after `BAILIAN_API_KEY` is known-good.
 
@@ -186,10 +195,13 @@ python -m voiceui --config config.example.yaml --calibrate-vad --seconds 10
 WebRTC VAD remains available as an optional engine, but it is no longer the
 default for the hardware demo.
 
-Run once with a config file:
+Run once with a config file, or use `--config auto` to select the production
+demo config for the current OS (`config.demo.wake.aliyun.yaml` on Windows,
+`config.demo.linux.wake.aliyun.yaml` on Linux):
 
 ```powershell
 python -m voiceui --config config.example.yaml --once
+python -m voiceui --config auto --once
 ```
 
 Run continuously:
@@ -321,10 +333,12 @@ The command runs:
 python -m voiceui.service --config config.demo.wake.aliyun.yaml
 ```
 
-On Linux/XVF3800, use the ALSA service candidate instead:
+On Linux/XVF3800, use the ALSA service candidate instead, or rely on the default
+`auto` service config selector:
 
 ```bash
 voiceui-service --config config.demo.linux.wake.aliyun.yaml
+voiceui-service
 ```
 
 Service mode forces `input.mode: audio`, creates a timestamped service run under

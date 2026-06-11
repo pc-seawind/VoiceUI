@@ -4,11 +4,16 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from voiceui.config import AUTO_CONFIG
 from voiceui.models import AssistantConfig, DebugConfig, InputConfig
-from voiceui.service import _prepare_service_config
+from voiceui.service import _DEFAULT_SERVICE_CONFIG, _prepare_service_config
 
 
 class ServiceTests(unittest.TestCase):
+
+    def test_service_config_default_is_auto(self) -> None:
+        self.assertEqual(_DEFAULT_SERVICE_CONFIG, AUTO_CONFIG)
+
     def test_service_config_defaults_to_audio_mode_without_audio_dumps(self) -> None:
         config = AssistantConfig(
             input=InputConfig(mode="text"),

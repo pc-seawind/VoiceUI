@@ -34,6 +34,13 @@ class EnvTests(unittest.TestCase):
                 self.assertEqual(__import__("os").environ["QUOTED"], "quoted value")
                 self.assertEqual(__import__("os").environ["INLINE"], "value")
 
+    def test_env_example_lists_aliyun_nls_keys(self) -> None:
+        example = Path(".env.example").read_text(encoding="utf-8")
+
+        self.assertIn("ALIYUN_NLS_APPKEY=", example)
+        self.assertIn("ALIYUN_AccessKeyId=", example)
+        self.assertIn("ALIYUN_AccessKeySecret=", example)
+
 
 if __name__ == "__main__":
     unittest.main()
