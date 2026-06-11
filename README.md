@@ -92,6 +92,42 @@ TTS configs keep `tts.sample_rate: 24000` as the source/model rate and use
 playback. The bundled wake acknowledgement keeps its original WAV sample rate
 and is also resampled to the device rate at playback.
 
+On Linux, install PortAudio first, then use the ALSA display string from
+`python -m voiceui --list-audio-devices`:
+
+```bash
+sudo apt install libportaudio2
+```
+
+A duplex XVF3800 endpoint appears as one device with both input and output
+channels, for example:
+
+```yaml
+audio:
+  device: "reSpeaker XVF3800 4-Mic Array: USB Audio (hw:2,0), ALSA (2 in, 2 out)"
+
+tts:
+  playback_device: "reSpeaker XVF3800 4-Mic Array: USB Audio (hw:2,0), ALSA (2 in, 2 out)"
+  playback_sample_rate: 16000
+  playback_channels: 2
+```
+
+For a no-cloud Linux hardware smoke test, start with
+`config.demo.linux.mock.yaml`. It uses the real ALSA capture device, disabled
+wake-word detection, energy VAD, mock STT/LLM, and console TTS:
+
+```bash
+python -m voiceui --config config.demo.linux.mock.yaml --once
+```
+
+Speak within `conversation.wake_speech_start_timeout_seconds`; if nothing is
+heard, the smoke test exits cleanly after the configured timeout. Tune
+`vad.threshold` with `--calibrate-vad` before enabling cloud STT/TTS.
+`config.demo.linux.aliyun.yaml` keeps the same ALSA device and energy VAD, then
+switches STT/TTS to Aliyun NLS while leaving the LLM mocked so the real-device
+speech path does not depend on a Bailian key. Set `llm.provider: bailian` after
+`BAILIAN_API_KEY` is known-good.
+
 Record from the configured XVF3800 command stream:
 
 ```powershell

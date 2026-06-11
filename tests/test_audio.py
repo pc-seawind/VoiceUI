@@ -63,6 +63,34 @@ class AudioTests(unittest.TestCase):
 
         self.assertEqual(device, 1)
 
+    def test_resolve_sounddevice_device_uses_full_alsa_duplex_display_name(self) -> None:
+        sd = _FakeSoundDevice()
+
+        input_device = resolve_sounddevice_device(
+            sd,
+            "reSpeaker XVF3800 4-Mic Array: USB Audio (hw:2,0), ALSA (2 in, 2 out)",
+            kind="input",
+        )
+        output_device = resolve_sounddevice_device(
+            sd,
+            "reSpeaker XVF3800 4-Mic Array: USB Audio (hw:2,0), ALSA (2 in, 2 out)",
+            kind="output",
+        )
+
+        self.assertEqual(input_device, 5)
+        self.assertEqual(output_device, 5)
+
+    def test_resolve_sounddevice_device_prefers_alsa_when_it_is_the_only_hostapi(self) -> None:
+        sd = _FakeLinuxSoundDevice()
+
+        device = resolve_sounddevice_device(
+            sd,
+            "reSpeaker XVF3800 4-Mic Array: USB Audio (hw:2,0)",
+            kind="input",
+        )
+
+        self.assertEqual(device, 0)
+
     def test_resolve_sounddevice_device_rejects_ambiguous_substring(self) -> None:
         sd = _FakeSoundDevice()
 
@@ -157,6 +185,7 @@ class _FakeSoundDevice:
         return [
             {"name": "MME"},
             {"name": "Windows WASAPI"},
+            {"name": "ALSA"},
         ]
 
     def query_devices(self):
@@ -189,6 +218,29 @@ class _FakeSoundDevice:
                 "name": "回音消除话筒 (2- reSpeaker XVF3800 4-Mic Array)",
                 "hostapi": 1,
                 "max_input_channels": 0,
+                "max_output_channels": 2,
+            },
+            {
+                "name": "reSpeaker XVF3800 4-Mic Array: USB Audio (hw:2,0)",
+                "hostapi": 2,
+                "max_input_channels": 2,
+                "max_output_channels": 2,
+            },
+        ]
+
+
+class _FakeLinuxSoundDevice:
+    def query_hostapis(self):
+        return [
+            {"name": "ALSA"},
+        ]
+
+    def query_devices(self):
+        return [
+            {
+                "name": "reSpeaker XVF3800 4-Mic Array: USB Audio (hw:2,0)",
+                "hostapi": 0,
+                "max_input_channels": 2,
                 "max_output_channels": 2,
             },
         ]

@@ -30,6 +30,7 @@ XVF2_OUTPUT_DEVICE = (
 )
 XVF_INPUT_DEVICES = {XVF_INPUT_DEVICE, XVF2_INPUT_DEVICE}
 XVF_OUTPUT_DEVICES = {XVF_OUTPUT_DEVICE, XVF2_OUTPUT_DEVICE}
+LINUX_XVF_DEVICE = "reSpeaker XVF3800 4-Mic Array: USB Audio (hw:2,0), ALSA (2 in, 2 out)"
 
 
 class ConfigTests(unittest.TestCase):
@@ -136,6 +137,52 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.tts.sample_rate, 24000)
         self.assertEqual(config.tts.playback_sample_rate, 16000)
         self.assertEqual(config.tts.playback_channels, 2)
+
+
+    def test_linux_mock_config_targets_alsa_xvf3800(self) -> None:
+        config = load_config("config.demo.linux.mock.yaml")
+
+        self.assertEqual(config.input.mode, "audio")
+        self.assertEqual(config.audio.device, LINUX_XVF_DEVICE)
+        self.assertEqual(config.audio.channels, 2)
+        self.assertEqual(config.audio.wake_stream_channel, 0)
+        self.assertEqual(config.audio.command_stream_channel, 0)
+        self.assertEqual(config.wake.engine, "disabled")
+        self.assertEqual(config.vad.engine, "energy")
+        self.assertEqual(config.vad.threshold, 6000.0)
+        self.assertEqual(config.stt.provider, "mock")
+        self.assertEqual(config.llm.provider, "mock")
+        self.assertEqual(config.tts.provider, "console")
+        self.assertEqual(config.tts.playback_device, LINUX_XVF_DEVICE)
+        self.assertEqual(config.tts.playback_sample_rate, 16000)
+        self.assertEqual(config.tts.playback_channels, 2)
+        self.assertEqual(config.conversation.follow_up_seconds, 0)
+        self.assertEqual(config.conversation.wake_speech_start_timeout_seconds, 3)
+        self.assertFalse(config.debug.system_input_dump_enabled)
+
+    def test_linux_aliyun_config_targets_alsa_xvf3800(self) -> None:
+        config = load_config("config.demo.linux.aliyun.yaml")
+
+        self.assertEqual(config.audio.device, LINUX_XVF_DEVICE)
+        self.assertEqual(config.wake.engine, "disabled")
+        self.assertFalse(config.wake_ack.enabled)
+        self.assertEqual(config.vad.engine, "energy")
+        self.assertEqual(config.vad.threshold, 6000.0)
+        self.assertEqual(config.stt.provider, "aliyun_nls")
+        self.assertEqual(config.stt.access_key_id_env, "ALIYUN_AccessKeyId")
+        self.assertEqual(config.stt.access_key_secret_env, "ALIYUN_AccessKeySecret")
+        self.assertEqual(config.stt.app_key_env, "ALIYUN_NLS_APPKEY")
+        self.assertEqual(config.llm.provider, "mock")
+        self.assertEqual(config.llm.api_key_env, "BAILIAN_API_KEY")
+        self.assertEqual(config.llm.extra_body, {"enable_thinking": False})
+        self.assertEqual(config.tts.provider, "aliyun_nls")
+        self.assertEqual(config.tts.playback_device, LINUX_XVF_DEVICE)
+        self.assertEqual(config.tts.playback_sample_rate, 16000)
+        self.assertEqual(config.tts.playback_channels, 2)
+        self.assertEqual(config.conversation.follow_up_seconds, 0)
+        self.assertFalse(config.tools.enabled)
+        self.assertFalse(config.xiaomi_miot.enabled)
+        self.assertFalse(config.debug.system_input_dump_enabled)
 
     def test_demo_configs_load(self) -> None:
         mock_config = load_config("config.demo.mock.yaml")

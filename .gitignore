@@ -12,3 +12,6 @@ models/
 device-identity.json
 debug_sessions/
 .voiceui/
+
+# homespace local project manifest
+homespace.yaml
