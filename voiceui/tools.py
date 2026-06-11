@@ -1405,7 +1405,7 @@ def _normalize_weather_target_day(value: object) -> str:
 def create_get_system_volume_tool(device: str | int | None = None) -> ToolDefinition:
     return ToolDefinition(
         name="get_system_volume",
-        description="Get the current Windows playback volume for the configured speaker.",
+        description="Get the current system playback volume for the configured speaker.",
         parameters={
             "type": "object",
             "properties": {},
@@ -1420,7 +1420,7 @@ def create_set_system_volume_tool(device: str | int | None = None) -> ToolDefini
     return ToolDefinition(
         name="set_system_volume",
         description=(
-            "Set, raise, lower, mute, or unmute the Windows playback volume for the "
+            "Set, raise, lower, mute, or unmute the system playback volume for the "
             "configured speaker. Use volume_percent for absolute requests like 30%, "
             "relative_percent for louder/quieter requests, and muted for mute state."
         ),

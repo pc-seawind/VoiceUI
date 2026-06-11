@@ -121,7 +121,7 @@ tools:
   allow_time: true
   allow_weather: true
   default_weather_location: 北京昌平
-  allow_volume: false
+  allow_volume: true
   allow_music: false
   allow_miot: false
   allow_search: false

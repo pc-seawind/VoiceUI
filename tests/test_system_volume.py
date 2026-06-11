@@ -5,7 +5,9 @@ import unittest
 from unittest.mock import patch
 
 from voiceui.system_volume import (
+    _linux_wpctl_target,
     _percent_to_scalar,
+    get_system_output_volume,
     resolve_output_device_name,
     set_system_output_volume,
 )
@@ -74,6 +76,53 @@ class SystemVolumeTests(unittest.TestCase):
         self.assertEqual(result["after_percent"], 30)
         command = run.call_args.args[0]
         self.assertIn("-EncodedCommand", command)
+
+    def test_linux_get_system_output_volume_uses_wpctl(self) -> None:
+        outputs = {
+            ("get-volume", "@DEFAULT_AUDIO_SINK@"): types.SimpleNamespace(
+                returncode=0, stdout="Volume: 0.80\n", stderr=""
+            )
+        }
+
+        def fake_run(command, **_kwargs):
+            return outputs[tuple(command[1:])]
+
+        with patch("voiceui.system_volume.sys.platform", "linux"):
+            with patch("voiceui.system_volume.subprocess.run", side_effect=fake_run):
+                result = get_system_output_volume()
+
+        self.assertEqual(result["after_percent"], 80.0)
+        self.assertFalse(result["after_muted"])
+
+    def test_linux_set_system_output_volume_uses_wpctl_relative(self) -> None:
+        calls: list[list[str]] = []
+
+        def fake_run(command, **_kwargs):
+            calls.append(command)
+            if command[1] == "get-volume":
+                return types.SimpleNamespace(returncode=0, stdout="Volume: 0.80\n", stderr="")
+            return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        with patch("voiceui.system_volume.sys.platform", "linux"):
+            with patch("voiceui.system_volume.subprocess.run", side_effect=fake_run):
+                result = set_system_output_volume(relative_percent=-20)
+
+        self.assertIn(["wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", "0.6000"], calls)
+        self.assertEqual(result["before_percent"], 80.0)
+        self.assertEqual(result["after_percent"], 80.0)
+
+    def test_linux_wpctl_target_matches_status_description(self) -> None:
+        status = """Audio
+ ├─ Sinks:
+ │  *   57. reSpeaker XVF3800 4-Mic Array Analog Stereo [vol: 0.80]
+"""
+        completed = types.SimpleNamespace(returncode=0, stdout=status, stderr="")
+
+        with patch("voiceui.system_volume.subprocess.run", return_value=completed):
+            target = _linux_wpctl_target("reSpeaker XVF3800 4-Mic Array")
+
+        self.assertEqual(target, "57")
+
 
 
 if __name__ == "__main__":

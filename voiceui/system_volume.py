@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import subprocess
 import sys
 from typing import Any
@@ -60,7 +61,7 @@ def set_system_output_volume(
     if volume_percent is None and relative_percent is None and muted is None:
         raise RuntimeError("volume_percent, relative_percent, or muted is required.")
     device_name = resolve_output_device_name(device)
-    return _run_windows_volume_script(
+    kwargs = dict(
         device_name=device_name,
         has_device_name=bool(device_name),
         has_absolute=volume_percent is not None,
@@ -70,11 +71,14 @@ def set_system_output_volume(
         has_mute=muted is not None,
         muted=bool(muted),
     )
+    if sys.platform.startswith("linux"):
+        return _run_linux_volume_command(**kwargs)
+    return _run_windows_volume_script(**kwargs)
 
 
 def get_system_output_volume(*, device: str | int | None = None) -> dict[str, Any]:
     device_name = resolve_output_device_name(device)
-    return _run_windows_volume_script(
+    kwargs = dict(
         device_name=device_name,
         has_device_name=bool(device_name),
         has_absolute=False,
@@ -84,6 +88,9 @@ def get_system_output_volume(*, device: str | int | None = None) -> dict[str, An
         has_mute=False,
         muted=False,
     )
+    if sys.platform.startswith("linux"):
+        return _run_linux_volume_command(**kwargs)
+    return _run_windows_volume_script(**kwargs)
 
 
 def _percent_to_scalar(value: float) -> float:
@@ -91,6 +98,90 @@ def _percent_to_scalar(value: float) -> float:
     if -1.0 < numeric < 1.0 and numeric != 0.0:
         return numeric
     return numeric / 100.0
+
+
+
+def _run_linux_volume_command(
+    *,
+    device_name: str,
+    has_device_name: bool,
+    has_absolute: bool,
+    absolute_scalar: float,
+    has_relative: bool,
+    relative_scalar: float,
+    has_mute: bool,
+    muted: bool,
+) -> dict[str, Any]:
+    target = _linux_wpctl_target(device_name if has_device_name else "")
+    before, before_muted = _linux_wpctl_get_volume(target)
+    desired = before
+    if has_absolute:
+        desired = absolute_scalar
+    if has_relative:
+        desired += relative_scalar
+    desired = max(0.0, min(1.0, desired))
+
+    if has_absolute or has_relative:
+        _run_wpctl(["set-volume", target, f"{desired:.4f}"])
+    if has_mute:
+        _run_wpctl(["set-mute", target, "1" if muted else "0"])
+
+    after, after_muted = _linux_wpctl_get_volume(target)
+    return {
+        "device": target,
+        "before_percent": round(before * 100, 1),
+        "after_percent": round(after * 100, 1),
+        "before_muted": before_muted,
+        "after_muted": after_muted,
+    }
+
+
+def _linux_wpctl_target(device_name: str) -> str:
+    if not device_name:
+        return "@DEFAULT_AUDIO_SINK@"
+    try:
+        completed = _run_wpctl(["status"])
+    except RuntimeError:
+        return "@DEFAULT_AUDIO_SINK@"
+    requested = _normalize_linux_audio_name(device_name)
+    for line in completed.stdout.splitlines():
+        match = re.search(r"\b(\d+)\.\s+(.+?)\s+\[vol:", line)
+        if not match:
+            continue
+        node_id, description = match.groups()
+        normalized = _normalize_linux_audio_name(description)
+        if requested and (requested in normalized or normalized in requested):
+            return node_id
+    return "@DEFAULT_AUDIO_SINK@"
+
+
+def _normalize_linux_audio_name(name: str) -> str:
+    normalized = name.split(",", 1)[0].split(":", 1)[0]
+    return re.sub(r"\s+", " ", normalized).strip().casefold()
+
+
+def _linux_wpctl_get_volume(target: str) -> tuple[float, bool]:
+    completed = _run_wpctl(["get-volume", target])
+    text = completed.stdout.strip()
+    match = re.search(r"Volume:\s*([0-9.]+)", text)
+    if not match:
+        raise RuntimeError(f"wpctl returned invalid volume output: {text}")
+    return float(match.group(1)), "MUTED" in text.upper()
+
+
+def _run_wpctl(args: list[str]) -> subprocess.CompletedProcess[str]:
+    completed = subprocess.run(
+        ["wpctl", *args],
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if completed.returncode != 0:
+        error = (completed.stderr or completed.stdout).strip()
+        raise RuntimeError(error or f"wpctl exited with {completed.returncode}")
+    return completed
 
 
 def _run_windows_volume_script(
