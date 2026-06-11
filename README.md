@@ -43,6 +43,15 @@ For wake-word testing, install the wake extra as well:
 pip install -e ".[demo,wake]"
 ```
 
+On Linux/Python 3.12, if `openwakeword` pulls an unavailable `tflite-runtime`
+wheel even though you only use `wake.inference_framework: onnx`, install the
+ONNX path explicitly:
+
+```bash
+pip install onnxruntime "tqdm<5" "scikit-learn<2" requests
+pip install --no-deps --index-url https://pypi.org/simple openwakeword==0.6.0
+```
+
 Create local secrets from the template:
 
 ```powershell
@@ -123,10 +132,25 @@ python -m voiceui --config config.demo.linux.mock.yaml --once
 Speak within `conversation.wake_speech_start_timeout_seconds`; if nothing is
 heard, the smoke test exits cleanly after the configured timeout. Tune
 `vad.threshold` with `--calibrate-vad` before enabling cloud STT/TTS.
+`config.demo.linux.wake.mock.yaml` enables openWakeWord with ONNX on the same
+ALSA device and keeps STT/LLM/TTS mocked, which is the first Linux wake-word
+bring-up target:
+
+```bash
+python -m voiceui --config config.demo.linux.wake.mock.yaml --wake-monitor --wake-model any --seconds 20
+python -m voiceui --config config.demo.linux.wake.mock.yaml --wake-test
+```
+
 `config.demo.linux.aliyun.yaml` keeps the same ALSA device and energy VAD, then
 switches STT/TTS to Aliyun NLS while leaving the LLM mocked so the real-device
-speech path does not depend on a Bailian key. Set `llm.provider: bailian` after
-`BAILIAN_API_KEY` is known-good.
+speech path does not depend on a Bailian key. `config.demo.linux.wake.aliyun.yaml`
+adds openWakeWord on top of that and is the Linux long-running service candidate:
+
+```bash
+voiceui-service --config config.demo.linux.wake.aliyun.yaml
+```
+
+Set `llm.provider: bailian` after `BAILIAN_API_KEY` is known-good.
 
 Record from the configured XVF3800 command stream:
 
@@ -295,6 +319,12 @@ The command runs:
 
 ```powershell
 python -m voiceui.service --config config.demo.wake.aliyun.yaml
+```
+
+On Linux/XVF3800, use the ALSA service candidate instead:
+
+```bash
+voiceui-service --config config.demo.linux.wake.aliyun.yaml
 ```
 
 Service mode forces `input.mode: audio`, creates a timestamped service run under

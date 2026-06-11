@@ -184,6 +184,40 @@ class ConfigTests(unittest.TestCase):
         self.assertFalse(config.xiaomi_miot.enabled)
         self.assertFalse(config.debug.system_input_dump_enabled)
 
+
+    def test_linux_wake_mock_config_uses_openwakeword_onnx(self) -> None:
+        config = load_config("config.demo.linux.wake.mock.yaml")
+
+        self.assertEqual(config.audio.device, LINUX_XVF_DEVICE)
+        self.assertEqual(config.wake.engine, "openwakeword")
+        self.assertEqual(config.wake.inference_framework, "onnx")
+        self.assertEqual(config.wake.model, "alexa")
+        self.assertEqual(config.wake.max_wait_seconds, 10)
+        self.assertFalse(config.wake_ack.enabled)
+        self.assertEqual(config.vad.engine, "energy")
+        self.assertEqual(config.stt.provider, "mock")
+        self.assertEqual(config.llm.provider, "mock")
+        self.assertEqual(config.tts.provider, "console")
+        self.assertTrue(config.logging.continuous["wake.score"])
+
+    def test_linux_wake_aliyun_config_uses_openwakeword_and_aliyun_backends(self) -> None:
+        config = load_config("config.demo.linux.wake.aliyun.yaml")
+
+        self.assertEqual(config.audio.device, LINUX_XVF_DEVICE)
+        self.assertEqual(config.wake.engine, "openwakeword")
+        self.assertEqual(config.wake.inference_framework, "onnx")
+        self.assertEqual(config.wake.model, "alexa")
+        self.assertEqual(config.wake.max_wait_seconds, 0)
+        self.assertFalse(config.wake_ack.enabled)
+        self.assertEqual(config.vad.engine, "energy")
+        self.assertEqual(config.stt.provider, "aliyun_nls")
+        self.assertEqual(config.llm.provider, "mock")
+        self.assertEqual(config.tts.provider, "aliyun_nls")
+        self.assertEqual(config.tts.playback_device, LINUX_XVF_DEVICE)
+        self.assertEqual(config.conversation.follow_up_seconds, 8)
+        self.assertFalse(config.conversation.barge_in_enabled)
+        self.assertFalse(config.logging.continuous["wake.score"])
+
     def test_demo_configs_load(self) -> None:
         mock_config = load_config("config.demo.mock.yaml")
         mify_config = load_config("config.demo.mify.yaml")

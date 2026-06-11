@@ -1,0 +1,85 @@
+node:
+  id: linux_xvf3800_wake_mock
+  room: demo_room
+
+input:
+  mode: audio
+
+audio:
+  sample_rate: 16000
+  channels: 2
+  block_ms: 80
+  device: "reSpeaker XVF3800 4-Mic Array: USB Audio (hw:2,0), ALSA (2 in, 2 out)"
+  wake_stream_channel: 0
+  command_stream_channel: 0
+  input_gain_db: 0.0
+  debug: true
+
+wake:
+  engine: openwakeword
+  model: alexa
+  threshold: 0.5
+  max_wait_seconds: 10
+  inference_framework: onnx
+  debug: true
+  debug_interval_seconds: 1.0
+  debug_top_predictions: 6
+
+wake_ack:
+  enabled: false
+  wav_path: default
+  playback_device: "reSpeaker XVF3800 4-Mic Array: USB Audio (hw:2,0), ALSA (2 in, 2 out)"
+
+vad:
+  engine: energy
+  threshold: 6000.0
+  min_speech_ms: 250
+  silence_ms: 800
+  trailing_silence_trim_ms: 500
+  max_speech_ms: 15000
+  pre_roll_ms: 240
+  frame_ms: 20
+  debug: true
+
+stt:
+  provider: mock
+  mock_text: "你好，Linux 唤醒词和真实麦克风链路已经打通。"
+
+llm:
+  provider: mock
+  stream: true
+  system_prompt: >
+    You are a Chinese smart speaker assistant. Reply in natural spoken Chinese
+    with at most 1-2 short sentences.
+
+tts:
+  provider: console
+  playback_device: "reSpeaker XVF3800 4-Mic Array: USB Audio (hw:2,0), ALSA (2 in, 2 out)"
+  playback_sample_rate: 16000
+  playback_channels: 2
+
+conversation:
+  follow_up_seconds: 0
+  wake_speech_start_timeout_seconds: 3
+  max_turns: 1
+  barge_in_enabled: false
+
+debug:
+  enabled: true
+  output_dir: debug_sessions
+  save_audio: false
+  save_metadata: true
+  system_input_dump_enabled: false
+  voice_path_dump_enabled: false
+
+logging:
+  enabled: true
+  events:
+    audio.stream_opened: true
+    audio.first_chunk: true
+    wake.debug_enabled: true
+    wake.detected_debug: true
+    vad.debug_start: true
+    vad.debug_stop: true
+  continuous:
+    wake.score: true
