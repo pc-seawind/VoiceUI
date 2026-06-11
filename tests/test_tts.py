@@ -493,5 +493,86 @@ class TtsTests(unittest.TestCase):
         self.assertEqual(count, 1)
         self.assertLessEqual(max(abs(sample) for sample in limited), 16384)
 
+
+    def test_aliyun_non_stream_synthesize_uses_plain_synthesizer(self) -> None:
+        created: list[object] = []
+
+        class FakePlainSynthesizer:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+                self.start_kwargs = {}
+                self.closed = False
+                created.append(self)
+
+            def start(self, **kwargs):
+                self.start_kwargs = kwargs
+                self.kwargs["on_data"](b"pcm")
+                return True
+
+        setattr(FakePlainSynthesizer, "shut" + "down", lambda self: setattr(self, "closed", True))
+
+        fake_nls = types.SimpleNamespace(NlsSpeechSynthesizer=FakePlainSynthesizer)
+        config = TtsConfig(
+            provider="aliyun_nls",
+            endpoint="wss://nls-gateway.example/ws/v1",
+            app_key_env="ALIYUN_NLS_APPKEY",
+            voice="longxiaochun",
+            audio_format="pcm",
+            sample_rate=24000,
+            stream=False,
+            volume=100,
+        )
+        tts = AliyunNlsTextToSpeech(config)
+        tts._token = "token"
+
+        with patch.dict(sys.modules, {"nls": fake_nls}):
+            with patch.dict("os.environ", {"ALIYUN_NLS_APPKEY": "appkey"}):
+                audio = tts.synthesize("你好")
+
+        self.assertEqual(audio.data, b"pcm")
+        self.assertEqual(len(created), 1)
+        self.assertTrue(created[0].closed)
+        self.assertEqual(created[0].start_kwargs["text"], "你好")
+        self.assertEqual(created[0].start_kwargs["volume"], 100)
+
+    def test_play_pcm_stream_applies_positive_gain_before_limiter(self) -> None:
+        written: list[bytes] = []
+
+        class FakeStream:
+            def __init__(self, **kwargs):
+                pass
+
+            def start(self):
+                return None
+
+            def write(self, data: bytes):
+                written.append(data)
+
+            def stop(self):
+                return None
+
+            def close(self):
+                return None
+
+        pcm = (1000).to_bytes(2, "little", signed=True)
+
+        with patch("sounddevice.RawOutputStream", FakeStream):
+            with patch("sounddevice.check_output_settings", return_value=None):
+                with patch(
+                    "sounddevice.query_devices",
+                    return_value={"default_samplerate": 24000, "max_output_channels": 1},
+                ):
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        _play_pcm_stream(
+                            iter([pcm]),
+                            sample_rate=24000,
+                            source_channels=1,
+                            playback_gain_db=6.0,
+                            limiter_enabled=False,
+                        )
+
+        amplified = int.from_bytes(written[0], "little", signed=True)
+        self.assertGreater(amplified, 1900)
+
 if __name__ == "__main__":
     unittest.main()

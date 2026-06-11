@@ -31,6 +31,7 @@ wake_ack:
   enabled: true
   wav_path: default
   playback_device: "reSpeaker XVF3800 4-Mic Array: USB Audio (hw:2,0), ALSA (2 in, 2 out)"
+  playback_gain_db: 12.0
 
 vad:
   engine: energy
@@ -87,25 +88,30 @@ tts:
   access_key_secret_env: ALIYUN_AccessKeySecret
   app_key_env: ALIYUN_NLS_APPKEY
   timeout_seconds: 20
-  voice: longxiaochun
+  # xiaoyun works reliably with non-streaming NLS and has much higher output
+  # level than the longxiaochun stream-input voice on the XVF3800 path.
+  voice: xiaoyun
   audio_format: pcm
   sample_rate: 24000
   playback_sample_rate: 16000
   playback_channels: 2
-  stream: true
-  # Keep TTS below the earlier loud debug tone level while staying audible.
-  # Avoid single-tone debug playback; use scripts/linux_loopback_diag.py instead.
-  volume: 45
+  # Non-streaming TTS avoids a long stream-input startup delay observed on NLS.
+  stream: false
+  # Use full cloud-side TTS volume, then control room loudness with system volume.
+  volume: 100
   speech_rate: 0
   pitch_rate: 0
   playback_device: "reSpeaker XVF3800 4-Mic Array: USB Audio (hw:2,0), ALSA (2 in, 2 out)"
+  # The XVF3800 playback path is much quieter than direct sine-wave tests.
+  playback_gain_db: 6.0
   limiter_enabled: true
   limiter_threshold: 0.92
 
 conversation:
-  follow_up_seconds: 8
-  wake_speech_start_timeout_seconds: 8
+  follow_up_seconds: 4
+  wake_speech_start_timeout_seconds: 5
   max_turns: 12
+  max_spoken_reply_chars: 28
   barge_in_enabled: false
 
 home_assistant:
@@ -115,7 +121,7 @@ home_assistant:
   default_area: demo_room
 
 tools:
-  enabled: false
+  enabled: true
   max_iterations: 4
   allow_time: true
   allow_weather: true

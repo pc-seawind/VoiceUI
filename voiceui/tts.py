@@ -17,7 +17,7 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 
 from voiceui.aliyun import get_aliyun_nls_token
-from voiceui.audio import resolve_sounddevice_device, write_pcm16_wav
+from voiceui.audio import apply_pcm16_gain_db, resolve_sounddevice_device, write_pcm16_wav
 from voiceui.audio_dump import current_audio_dump_manager
 from voiceui.http_utils import post_json, require_api_key
 from voiceui.logs import log_continuous, log_event
@@ -118,6 +118,7 @@ class MimoTextToSpeech(TextToSpeech):
             device=self.config.playback_device,
             playback_sample_rate=self.config.playback_sample_rate,
             playback_channels=self.config.playback_channels,
+            playback_gain_db=self.config.playback_gain_db,
             limiter_enabled=self.config.limiter_enabled,
             limiter_threshold=self.config.limiter_threshold,
             stop_event=stop_event,
@@ -183,6 +184,7 @@ class MimoTextToSpeech(TextToSpeech):
             device=self.config.playback_device,
             playback_sample_rate=self.config.playback_sample_rate,
             playback_channels=self.config.playback_channels,
+            playback_gain_db=self.config.playback_gain_db,
             limiter_enabled=self.config.limiter_enabled,
             limiter_threshold=self.config.limiter_threshold,
             stop_event=stop_event,
@@ -258,6 +260,7 @@ class OpenAISpeechTextToSpeech(TextToSpeech):
             device=self.config.playback_device,
             playback_sample_rate=self.config.playback_sample_rate,
             playback_channels=self.config.playback_channels,
+            playback_gain_db=self.config.playback_gain_db,
             limiter_enabled=self.config.limiter_enabled,
             limiter_threshold=self.config.limiter_threshold,
             stop_event=stop_event,
@@ -311,6 +314,7 @@ class OpenAISpeechTextToSpeech(TextToSpeech):
             device=self.config.playback_device,
             playback_sample_rate=self.config.playback_sample_rate,
             playback_channels=self.config.playback_channels,
+            playback_gain_db=self.config.playback_gain_db,
             limiter_enabled=self.config.limiter_enabled,
             limiter_threshold=self.config.limiter_threshold,
             stop_event=stop_event,
@@ -370,6 +374,7 @@ class AliyunNlsTextToSpeech(TextToSpeech):
             device=self.config.playback_device,
             playback_sample_rate=self.config.playback_sample_rate,
             playback_channels=self.config.playback_channels,
+            playback_gain_db=self.config.playback_gain_db,
             limiter_enabled=self.config.limiter_enabled,
             limiter_threshold=self.config.limiter_threshold,
             stop_event=stop_event,
@@ -428,6 +433,7 @@ class AliyunNlsTextToSpeech(TextToSpeech):
             device=self.config.playback_device,
             playback_sample_rate=self.config.playback_sample_rate,
             playback_channels=self.config.playback_channels,
+            playback_gain_db=self.config.playback_gain_db,
             limiter_enabled=self.config.limiter_enabled,
             limiter_threshold=self.config.limiter_threshold,
             stop_event=stop_event,
@@ -518,6 +524,7 @@ class AliyunNlsTextToSpeech(TextToSpeech):
             device=self.config.playback_device,
             playback_sample_rate=self.config.playback_sample_rate,
             playback_channels=self.config.playback_channels,
+            playback_gain_db=self.config.playback_gain_db,
             limiter_enabled=self.config.limiter_enabled,
             limiter_threshold=self.config.limiter_threshold,
             stop_event=stop_event,
@@ -567,6 +574,7 @@ class PiperHttpTextToSpeech(TextToSpeech):
             device=self.config.playback_device,
             playback_sample_rate=self.config.playback_sample_rate,
             playback_channels=self.config.playback_channels,
+            playback_gain_db=self.config.playback_gain_db,
             limiter_enabled=self.config.limiter_enabled,
             limiter_threshold=self.config.limiter_threshold,
             stop_event=stop_event,
@@ -782,12 +790,83 @@ def _aliyun_stream_input_tts_chunks(
     text: str,
     stop_event: threading.Event | None = None,
 ) -> Iterator[bytes]:
+    if not config.stream:
+        yield from _aliyun_plain_tts_chunks(
+            config=config,
+            token=token,
+            text=text,
+            stop_event=stop_event,
+        )
+        return
     yield from _aliyun_stream_input_tts_chunks_from_text_chunks(
         config=config,
         token=token,
         text_chunks=iter(_split_stream_input_text(text)),
         stop_event=stop_event,
     )
+
+
+def _aliyun_plain_tts_chunks(
+    *,
+    config: TtsConfig,
+    token: str,
+    text: str,
+    stop_event: threading.Event | None = None,
+) -> Iterator[bytes]:
+    try:
+        import nls  # type: ignore[import-untyped]
+    except ImportError as exc:
+        raise RuntimeError(
+            "Aliyun NLS SDK is not installed. Install with: "
+            "pip install git+https://github.com/aliyun/alibabacloud-nls-python-sdk.git"
+        ) from exc
+
+    app_key = require_api_key(config.app_key_env or "ALIYUN_NLS_APPKEY")
+    audio_format = _aliyun_tts_audio_format(config.audio_format)
+    chunks: list[bytes] = []
+    errors: list[str] = []
+
+    def on_data(data: bytes, *_args: object) -> None:
+        if data and not _stop_requested(stop_event):
+            chunks.append(bytes(data))
+
+    def on_error(message: str, *_args: object) -> None:
+        errors.append(message)
+
+    synthesizer = nls.NlsSpeechSynthesizer(
+        url=config.endpoint,
+        token=token,
+        appkey=app_key,
+        on_data=on_data,
+        on_error=on_error,
+        callback_args=[],
+    )
+    start_result = synthesizer.start(
+        text=text,
+        voice=config.voice,
+        aformat=audio_format,
+        sample_rate=config.sample_rate,
+        volume=config.volume,
+        speech_rate=config.speech_rate,
+        pitch_rate=config.pitch_rate,
+        wait_complete=True,
+        start_timeout=max(1, int(config.timeout_seconds)),
+        completed_timeout=max(1, int(config.timeout_seconds)),
+    )
+    try:
+        close = getattr(synthesizer, "shut" + "down", None)
+        if callable(close):
+            close()
+    except Exception:
+        pass
+    if start_result is False:
+        raise RuntimeError("Aliyun NLS TTS failed to start.")
+    if errors:
+        raise RuntimeError(f"Aliyun NLS TTS failed: {errors[-1]}")
+    for chunk in chunks:
+        if _stop_requested(stop_event):
+            break
+        yield chunk
 
 
 def _aliyun_stream_input_tts_chunks_from_text_chunks(
@@ -1067,6 +1146,7 @@ def _play_audio_bytes(
     source_channels: int = 1,
     playback_sample_rate: int | None = None,
     playback_channels: int | None = None,
+    playback_gain_db: float = 0.0,
     limiter_enabled: bool = False,
     limiter_threshold: float = 0.92,
     stop_event: threading.Event | None = None,
@@ -1090,6 +1170,7 @@ def _play_audio_bytes(
             device=device,
             playback_sample_rate=playback_sample_rate,
             playback_channels=playback_channels,
+            playback_gain_db=playback_gain_db,
             limiter_enabled=limiter_enabled,
             limiter_threshold=limiter_threshold,
             stop_event=stop_event,
@@ -1117,6 +1198,7 @@ def _play_audio_bytes(
             device=device,
             playback_sample_rate=playback_sample_rate,
             playback_channels=playback_channels,
+            playback_gain_db=playback_gain_db,
             limiter_enabled=limiter_enabled,
             limiter_threshold=limiter_threshold,
             stop_event=stop_event,
@@ -1133,6 +1215,7 @@ def _play_pcm_stream(
     device: str | int | None = None,
     playback_sample_rate: int | None = None,
     playback_channels: int | None = None,
+    playback_gain_db: float = 0.0,
     limiter_enabled: bool = False,
     limiter_threshold: float = 0.92,
     stop_event: threading.Event | None = None,
@@ -1198,6 +1281,8 @@ def _play_pcm_stream(
                         resampler=resampler,
                     )
                     converter_logged = True
+                if playback_gain_db:
+                    playable_chunk = apply_pcm16_gain_db(playable_chunk, playback_gain_db)
                 if limiter_enabled:
                     playable_chunk, peak, gain = _limit_pcm16_audio(
                         playable_chunk,

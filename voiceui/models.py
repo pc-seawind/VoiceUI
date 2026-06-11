@@ -85,6 +85,7 @@ class WakeAckConfig:
     enabled: bool = False
     wav_path: str = ""
     playback_device: str | int | None = None
+    playback_gain_db: float = 0.0
 
 
 @dataclass(slots=True)
@@ -176,6 +177,7 @@ class TtsConfig:
     piper_url: str = "http://localhost:5000"
     piper_model: str | None = None
     playback_device: str | int | None = None
+    playback_gain_db: float = 0.0
     limiter_enabled: bool = True
     limiter_threshold: float = 0.92
 

@@ -4,7 +4,7 @@ import wave
 from importlib import resources
 from pathlib import Path
 
-from voiceui.audio import resolve_sounddevice_device
+from voiceui.audio import apply_pcm16_gain_db, resolve_sounddevice_device
 from voiceui.audio_dump import current_audio_dump_manager
 from voiceui.logs import log_event
 from voiceui.models import WakeAckConfig
@@ -30,7 +30,13 @@ class WavWakeAckPlayer(WakeAckPlayer):
     def play(self) -> None:
         wav_path = resolve_wake_ack_path(self.config.wav_path)
         frames, sample_rate, channels = _read_pcm16_wav(wav_path)
-        _play_pcm16(frames, sample_rate=sample_rate, channels=channels, device=self._device())
+        _play_pcm16(
+            frames,
+            sample_rate=sample_rate,
+            channels=channels,
+            device=self._device(),
+            playback_gain_db=self.config.playback_gain_db,
+        )
 
     def _device(self) -> str | int | None:
         device = self.config.playback_device
@@ -74,6 +80,7 @@ def _play_pcm16(
     sample_rate: int,
     channels: int,
     device: str | int | None = None,
+    playback_gain_db: float = 0.0,
 ) -> None:
     try:
         import sounddevice as sd  # type: ignore[import-untyped]
@@ -103,6 +110,8 @@ def _play_pcm16(
             source_channels=channels,
             target_channels=playback_channels,
         )
+    if playback_gain_db:
+        pcm = apply_pcm16_gain_db(pcm, playback_gain_db)
     if playback_sample_rate != sample_rate or playback_channels != channels:
         log_event(
             "wake_ack",
