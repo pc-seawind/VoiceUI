@@ -33,6 +33,9 @@ class ToolChatResponse:
 
 
 class ChatClient:
+    def warm_up(self) -> bool:
+        return False
+
     def complete(self, messages: list[ChatMessage]) -> str:
         raise NotImplementedError
 
@@ -123,6 +126,12 @@ class OpenAICompatibleChatClient(ChatClient):
     def __init__(self, config: LlmConfig):
         self.config = config
 
+    def warm_up(self) -> bool:
+        if self.config.api_key_env:
+            require_api_key(self.config.api_key_env)
+            return True
+        return False
+
     def complete(self, messages: list[ChatMessage]) -> str:
         payload = _openai_chat_payload(self.config, messages, stream=False)
         data = _post_json(
@@ -169,6 +178,12 @@ class OpenAICompatibleChatClient(ChatClient):
 class MimoChatClient(ChatClient):
     def __init__(self, config: LlmConfig):
         self.config = config
+
+    def warm_up(self) -> bool:
+        if self.config.api_key_env:
+            require_api_key(self.config.api_key_env)
+            return True
+        return False
 
     def complete(self, messages: list[ChatMessage]) -> str:
         payload = _openai_chat_payload(self.config, messages, stream=False)

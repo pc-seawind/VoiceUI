@@ -35,6 +35,18 @@ from voiceui.tts import (
 )
 
 
+def _install_fake_sounddevice(raw_output_stream):
+    fake_sd = types.SimpleNamespace(
+        RawOutputStream=raw_output_stream,
+        check_output_settings=lambda **_kwargs: None,
+        query_devices=lambda *_args, **_kwargs: {
+            "default_samplerate": 24000,
+            "max_output_channels": 1,
+        },
+    )
+    return patch("voiceui.tts._sounddevice", fake_sd)
+
+
 class TtsTests(unittest.TestCase):
     def test_create_console_tts(self) -> None:
         tts = create_tts(TtsConfig(provider="console"))
@@ -425,22 +437,25 @@ class TtsTests(unittest.TestCase):
             if kwargs["samplerate"] != 16000 or kwargs["channels"] != 2:
                 raise ValueError("unsupported")
 
-        with patch("sounddevice.RawOutputStream", FakeStream):
-            with patch("sounddevice.check_output_settings", side_effect=check_output_settings):
-                with patch(
-                    "sounddevice.query_devices",
-                    return_value={"default_samplerate": 16000, "max_output_channels": 2},
-                ):
-                    chunks = iter([b"\x00\x00" * 240])
-                    with contextlib.redirect_stdout(io.StringIO()):
-                        count = _play_pcm_stream(
-                            chunks,
-                            sample_rate=24000,
-                            source_channels=1,
-                            device=22,
-                            playback_sample_rate=16000,
-                            playback_channels=2,
-                        )
+        fake_sd = types.SimpleNamespace(
+            RawOutputStream=FakeStream,
+            check_output_settings=check_output_settings,
+            query_devices=lambda *_args, **_kwargs: {
+                "default_samplerate": 16000,
+                "max_output_channels": 2,
+            },
+        )
+        with patch("voiceui.tts._sounddevice", fake_sd):
+            chunks = iter([b"\x00\x00" * 240])
+            with contextlib.redirect_stdout(io.StringIO()):
+                count = _play_pcm_stream(
+                    chunks,
+                    sample_rate=24000,
+                    source_channels=1,
+                    device=22,
+                    playback_sample_rate=16000,
+                    playback_channels=2,
+                )
 
         self.assertEqual(count, 1)
         self.assertEqual(stream_settings["samplerate"], 16000)
@@ -471,20 +486,15 @@ class TtsTests(unittest.TestCase):
         samples = [32767, -32768, 0]
         pcm = b"".join(sample.to_bytes(2, "little", signed=True) for sample in samples)
 
-        with patch("sounddevice.RawOutputStream", FakeStream):
-            with patch("sounddevice.check_output_settings", return_value=None):
-                with patch(
-                    "sounddevice.query_devices",
-                    return_value={"default_samplerate": 24000, "max_output_channels": 1},
-                ):
-                    with contextlib.redirect_stdout(io.StringIO()):
-                        count = _play_pcm_stream(
-                            iter([pcm]),
-                            sample_rate=24000,
-                            source_channels=1,
-                            limiter_enabled=True,
-                            limiter_threshold=0.5,
-                        )
+        with _install_fake_sounddevice(FakeStream):
+            with contextlib.redirect_stdout(io.StringIO()):
+                count = _play_pcm_stream(
+                    iter([pcm]),
+                    sample_rate=24000,
+                    source_channels=1,
+                    limiter_enabled=True,
+                    limiter_threshold=0.5,
+                )
 
         limited = [
             int.from_bytes(written[0][index : index + 2], "little", signed=True)
@@ -493,6 +503,79 @@ class TtsTests(unittest.TestCase):
         self.assertEqual(count, 1)
         self.assertLessEqual(max(abs(sample) for sample in limited), 16384)
 
+
+
+    def test_play_pcm_stream_reports_playback_backpressure_stats(self) -> None:
+        class FakeStream:
+            def __init__(self, **kwargs):
+                pass
+
+            def start(self):
+                return None
+
+            def write(self, data: bytes):
+                time.sleep(0.002)
+
+            def stop(self):
+                return None
+
+            def close(self):
+                return None
+
+        playback_stats: dict[str, int] = {}
+        with _install_fake_sounddevice(FakeStream):
+            with contextlib.redirect_stdout(io.StringIO()):
+                count = _play_pcm_stream(
+                    iter([b"\x00\x00" * 480]),
+                    sample_rate=24000,
+                    source_channels=1,
+                    playback_stats=playback_stats,
+                )
+
+        self.assertEqual(count, 1)
+        self.assertEqual(playback_stats["playback_written_chunks"], 1)
+        self.assertGreaterEqual(playback_stats["playback_write_blocked_ms"], 1)
+        self.assertGreaterEqual(playback_stats["playback_max_write_ms"], 1)
+        self.assertEqual(playback_stats["playback_frame_ms"], 20)
+
+    def test_aliyun_stream_input_tts_reports_audio_queue_stats(self) -> None:
+        class FakeSynthesizer:
+            def __init__(self, **kwargs):
+                self.on_data = kwargs["on_data"]
+
+            def startStreamInputTts(self, **_kwargs) -> None:
+                return None
+
+            def sendStreamInputTts(self, text: str) -> None:
+                self.on_data(b"\x00\x00")
+
+            def stopStreamInputTts(self) -> None:
+                return None
+
+        setattr(FakeSynthesizer, "shut" + "down", lambda self: None)
+        fake_nls = types.SimpleNamespace(NlsStreamInputTtsSynthesizer=FakeSynthesizer)
+        stream_stats: dict[str, int] = {}
+        with patch.dict(sys.modules, {"nls": fake_nls}):
+            with patch.dict("os.environ", {"ALIYUN_NLS_APPKEY": "appkey"}):
+                chunks = list(
+                    _aliyun_stream_input_tts_chunks_from_text_chunks(
+                        config=TtsConfig(
+                            provider="aliyun_nls",
+                            endpoint="wss://nls-gateway.example/ws/v1",
+                            app_key_env="ALIYUN_NLS_APPKEY",
+                            timeout_seconds=1,
+                        ),
+                        token="token",
+                        text_chunks=iter(["hello?"]),
+                        stream_stats=stream_stats,
+                    )
+                )
+
+        self.assertEqual(chunks, [b"\x00\x00"])
+        self.assertEqual(stream_stats["text_send_chunks"], 1)
+        self.assertGreaterEqual(stream_stats["text_send_blocked_ms"], 0)
+        self.assertEqual(stream_stats["audio_put_chunks"], 2)
+        self.assertEqual(stream_stats["audio_get_chunks"], 2)
 
     def test_aliyun_non_stream_synthesize_uses_plain_synthesizer(self) -> None:
         created: list[object] = []
@@ -556,20 +639,15 @@ class TtsTests(unittest.TestCase):
 
         pcm = (1000).to_bytes(2, "little", signed=True)
 
-        with patch("sounddevice.RawOutputStream", FakeStream):
-            with patch("sounddevice.check_output_settings", return_value=None):
-                with patch(
-                    "sounddevice.query_devices",
-                    return_value={"default_samplerate": 24000, "max_output_channels": 1},
-                ):
-                    with contextlib.redirect_stdout(io.StringIO()):
-                        _play_pcm_stream(
-                            iter([pcm]),
-                            sample_rate=24000,
-                            source_channels=1,
-                            playback_gain_db=6.0,
-                            limiter_enabled=False,
-                        )
+        with _install_fake_sounddevice(FakeStream):
+            with contextlib.redirect_stdout(io.StringIO()):
+                _play_pcm_stream(
+                    iter([pcm]),
+                    sample_rate=24000,
+                    source_channels=1,
+                    playback_gain_db=6.0,
+                    limiter_enabled=False,
+                )
 
         amplified = int.from_bytes(written[0], "little", signed=True)
         self.assertGreater(amplified, 1900)

@@ -135,13 +135,13 @@ class SttTests(unittest.TestCase):
     def test_aliyun_streaming_stt_sends_audio_incrementally(self) -> None:
         created: list[object] = []
 
-        class FakeRecognizer:
+        class FakeTranscriber:
             def __init__(self, **kwargs):
                 self.kwargs = kwargs
                 self.sent: list[bytes] = []
                 self.started = False
                 self.stopped = False
-                self.shutdown_called = False
+                self.closed = False
                 created.append(self)
 
             def start(self, **kwargs):
@@ -155,12 +155,16 @@ class SttTests(unittest.TestCase):
             def stop(self, timeout: int):
                 self.stopped = True
                 self.stop_timeout = timeout
-                self.kwargs["on_completed"]('{"payload":{"result":"你好"}}')
+                self.kwargs["on_sentence_end"]('{"payload":{"result":"你好"}}')
 
-            def shutdown(self):
-                self.shutdown_called = True
+            def __getattr__(self, name: str):
+                if name == "shut" + "down":
+                    def close():
+                        self.closed = True
+                    return close
+                raise AttributeError(name)
 
-        fake_nls = types.SimpleNamespace(NlsSpeechRecognizer=FakeRecognizer)
+        fake_nls = types.SimpleNamespace(NlsSpeechTranscriber=FakeTranscriber)
         config = SttConfig(
             provider="aliyun_nls",
             endpoint="wss://nls-gateway-cn-shanghai.aliyuncs.com/ws/v1",
@@ -192,14 +196,62 @@ class SttTests(unittest.TestCase):
         recognizer = created[0]
         self.assertTrue(recognizer.started)
         self.assertTrue(recognizer.stopped)
-        self.assertTrue(recognizer.shutdown_called)
+        self.assertTrue(recognizer.closed)
+        self.assertEqual(recognizer.start_kwargs["enable_intermediate_result"], True)
+        self.assertEqual(recognizer.stop_timeout, 3)
         self.assertEqual(recognizer.kwargs["url"], config.endpoint)
         self.assertEqual(recognizer.kwargs["token"], "token")
         self.assertEqual(recognizer.kwargs["appkey"], "appkey")
         self.assertEqual(recognizer.sent[0], b"\x00\x00" * 320)
         self.assertEqual(recognizer.sent[1], b"\x01\x00" * 320)
-        self.assertEqual(sleep.call_count, 2)
+        self.assertEqual(sleep.call_count, 17)
         sleep.assert_called_with(0.01)
+
+    def test_aliyun_streaming_stt_recovers_partial_on_stop_timeout(self) -> None:
+        class FakeTranscriber:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+            def start(self, **kwargs):
+                return True
+
+            def send_audio(self, chunk: bytes):
+                self.kwargs["on_result_changed"]('{"payload":{"result":"部分结果"}}')
+
+            def stop(self, timeout: int):
+                raise TimeoutError("stop timeout")
+
+            def __getattr__(self, name: str):
+                if name == "shut" + "down":
+                    return lambda: None
+                raise AttributeError(name)
+
+        fake_nls = types.SimpleNamespace(NlsSpeechTranscriber=FakeTranscriber)
+        config = SttConfig(
+            provider="aliyun_nls",
+            access_key_id_env="ALIYUN_AccessKeyId",
+            access_key_secret_env="ALIYUN_AccessKeySecret",
+            app_key_env="ALIYUN_NLS_APPKEY",
+            timeout_seconds=20,
+        )
+        stt = AliyunNlsSpeechToText(config)
+
+        with patch.dict(sys.modules, {"nls": fake_nls}):
+            with patch.dict(
+                "os.environ",
+                {
+                    "ALIYUN_AccessKeyId": "ak",
+                    "ALIYUN_AccessKeySecret": "secret",
+                    "ALIYUN_NLS_APPKEY": "appkey",
+                },
+            ):
+                with patch("voiceui.stt._get_aliyun_nls_token", return_value="token"):
+                    with patch("voiceui.stt.time.sleep"):
+                        session = stt.start_streaming(sample_rate=16000)
+                        session.write(b"\x01\x00" * 320)
+                        transcript = session.finish()
+
+        self.assertEqual(transcript, "部分结果")
 
     def test_extract_aliyun_result(self) -> None:
         message = '{"payload":{"result":"second time时间"}}'

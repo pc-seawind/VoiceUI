@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import queue
 import re
 import threading
 import time
@@ -35,6 +34,7 @@ from voiceui.reminders import (
     parse_scheduled_command,
 )
 from voiceui.session import ConversationSession
+from voiceui.streaming import BoundedBackpressureQueue, StreamFramePolicy
 from voiceui.stt import create_stt
 from voiceui.system_volume import get_system_output_volume, set_system_output_volume
 from voiceui.tools import (
@@ -83,21 +83,38 @@ class _SelfEchoMatch:
 
 
 class _StreamingSttHandle:
-    def __init__(self, stt, sample_rate: int):
+    def __init__(
+        self,
+        stt,
+        sample_rate: int,
+        *,
+        policy: StreamFramePolicy | None = None,
+        max_buffered_chunks: int | None = None,
+    ):
         self.stt = stt
         self.sample_rate = sample_rate
+        if policy is None:
+            policy = StreamFramePolicy(
+                frame_ms=20,
+                buffer_frames=max(1, max_buffered_chunks or 1),
+                ready_timeout_seconds=0.5,
+            )
+        self.policy = policy
+        self.max_buffered_chunks = max(1, policy.buffer_frames)
         self.requested_at: float | None = None
         self.ready_at: float | None = None
         self.completed_at: float | None = None
         self.sent_chunks = 0
+        self.dropped_chunks = 0
         self.result = ""
         self.error: Exception | None = None
-        self._done = object()
-        self._items: queue.Queue[bytes | object] = queue.Queue()
         self._session = None
+        self._ready_event = threading.Event()
+        self._closed = False
+        self._io_lock = threading.Lock()
         self._thread = threading.Thread(
-            target=self._run,
-            name="voiceui-stt-stream",
+            target=self._open_session,
+            name="voiceui-stt-stream-open",
             daemon=True,
         )
 
@@ -105,23 +122,44 @@ class _StreamingSttHandle:
         self.requested_at = time.monotonic()
         self._thread.start()
 
+    def wait_ready(self, timeout: float | None = None) -> bool:
+        return self._ready_event.wait(timeout=timeout)
+
     def write(self, pcm: bytes) -> None:
-        if pcm:
+        if not pcm:
+            return
+        session = self._session_or_raise()
+        with self._io_lock:
+            if self._closed:
+                raise RuntimeError("Streaming STT session is already closed.")
+            session.write(pcm)
             self.sent_chunks += 1
-            self._items.put(pcm)
 
     def finish(self) -> str:
-        self._items.put(self._done)
-        self._thread.join()
+        session = self._session_or_raise()
+        with self._io_lock:
+            if not self._closed:
+                try:
+                    self.result = session.finish()
+                except Exception as exc:
+                    self.error = exc
+                    raise
+                finally:
+                    self.completed_at = time.monotonic()
+                    self._closed = True
         if self.error is not None:
             raise self.error
         return self.result
 
     def abort(self) -> None:
-        self._items.put(self._done)
-        if self._session is not None:
-            self._session.abort()
-        self._thread.join(timeout=1.0)
+        if self.wait_ready(timeout=1.0) and self._session is not None:
+            with self._io_lock:
+                if not self._closed:
+                    self._session.abort()
+                    self._closed = True
+                    self.completed_at = time.monotonic()
+        else:
+            self.completed_at = time.monotonic()
 
     def ready_latency_ms(self) -> int | None:
         if self.requested_at is None or self.ready_at is None:
@@ -134,22 +172,23 @@ class _StreamingSttHandle:
         completed_at = self.completed_at or time.monotonic()
         return int((completed_at - self.requested_at) * 1000)
 
-    def _run(self) -> None:
+    def _session_or_raise(self):
+        self.wait_ready(timeout=None)
+        if self.error is not None:
+            raise self.error
+        if self._session is None:
+            raise RuntimeError("Streaming STT session did not start.")
+        return self._session
+
+    def _open_session(self) -> None:
         try:
             self._session = self.stt.start_streaming(self.sample_rate)
             self.ready_at = time.monotonic()
-            while True:
-                item = self._items.get()
-                if item is self._done:
-                    break
-                self._session.write(item)
-            self.result = self._session.finish()
-            self.completed_at = time.monotonic()
         except Exception as exc:
             self.error = exc
-            if self._session is not None:
-                self._session.abort()
             self.completed_at = time.monotonic()
+        finally:
+            self._ready_event.set()
 
 
 class VoiceAssistant:
@@ -196,7 +235,7 @@ class VoiceAssistant:
         self._recent_spoken_responses: list[_SpokenResponse] = []
         self._turn_lock = threading.RLock()
         if audio_enabled:
-            self._warm_up_audio_path()
+            self._warm_up_runtime_modules()
         self._print_barge_in_config()
         self._start_weather_cache_warmup()
 
@@ -220,16 +259,26 @@ class VoiceAssistant:
             return
         self.audio_dump.start_system_input_dump(self.config.audio)
 
-    def _warm_up_audio_path(self) -> None:
-        warm_up_started = time.monotonic()
+    def _warm_up_runtime_modules(self) -> None:
+        self._warm_up_component("wake", self.wake)
+        self._warm_up_component("vad", self.vad)
+        self._warm_up_component("stt", self.stt)
+        self._warm_up_component("llm", self.chat)
+        self._warm_up_component("tts", self.tts)
+
+    def _warm_up_component(self, module: str, component: object) -> None:
+        warm_up = getattr(component, "warm_up", None)
+        if not callable(warm_up):
+            return
+        started = time.monotonic()
         try:
-            warmed = self.vad.warm_up()
+            warmed = bool(warm_up())
         except Exception as exc:
-            log_event("vad", "warm_up_error", log_id="vad.warm_up_error", error=exc)
+            log_event(module, "warm_up_error", log_id=f"{module}.warm_up_error", error=exc)
             return
         if warmed:
-            latency_ms = int((time.monotonic() - warm_up_started) * 1000)
-            log_event("vad", "warmed_up", log_id="vad.warmed_up", latency_ms=latency_ms)
+            latency_ms = int((time.monotonic() - started) * 1000)
+            log_event(module, "warmed_up", log_id=f"{module}.warmed_up", latency_ms=latency_ms)
 
     def _start_weather_cache_warmup(self) -> None:
         if not (
@@ -1206,7 +1255,9 @@ class VoiceAssistant:
         stop_event: threading.Event | None = None,
         stream_stats: dict[str, int] | None = None,
     ) -> Iterator[str]:
-        items: queue.Queue[object] = queue.Queue()
+        items: BoundedBackpressureQueue[object] = BoundedBackpressureQueue(
+            StreamFramePolicy.text_audio_default().buffer_frames
+        )
         done = object()
 
         def producer() -> None:
@@ -1242,13 +1293,17 @@ class VoiceAssistant:
                 break
             try:
                 item = items.get(timeout=0.1)
-            except queue.Empty:
+            except TimeoutError:
                 if not thread.is_alive():
                     break
                 continue
             if item is done:
+                if stream_stats is not None:
+                    stream_stats.update(items.stats())
                 break
             if isinstance(item, Exception):
+                if stream_stats is not None:
+                    stream_stats.update(items.stats())
                 raise item
             if (
                 stream_stats is not None
@@ -1278,6 +1333,8 @@ class VoiceAssistant:
             latency_ms=timings["llm"],
             first_token_ms=timings.get("llm_first_token", timings["llm"]),
             stream_chunks=stream_stats.get("chunks", 0),
+            blocked_puts=stream_stats.get("blocked_puts", 0),
+            blocked_put_ms=stream_stats.get("blocked_put_ms", 0),
         )
 
     def _should_listen_for_barge_in(self) -> bool:
@@ -1387,8 +1444,16 @@ class VoiceAssistant:
             nonlocal stream_handle
             if stream_handle is not None:
                 return
-            stream_handle = _StreamingSttHandle(self.stt, monitor_audio.sample_rate)
+            stream_handle = _StreamingSttHandle(
+                self.stt,
+                monitor_audio.sample_rate,
+                policy=_streaming_frame_policy(
+                    self.config.vad,
+                    monitor_audio.block_ms,
+                ),
+            )
             stream_handle.start()
+            ready = stream_handle.wait_ready(stream_handle.policy.ready_timeout_seconds)
             start_ms = int((time.monotonic() - stt_start_reference) * 1000)
             log_event(
                 "stt",
@@ -1397,6 +1462,8 @@ class VoiceAssistant:
                 source="barge_in",
                 mode=mode,
                 elapsed_ms=start_ms,
+                ready=ready,
+                ready_ms=stream_handle.ready_latency_ms() or 0,
             )
 
         def combined_speech_start() -> None:
@@ -1436,6 +1503,7 @@ class VoiceAssistant:
             "source": "barge_in",
             "total_latency_ms": stt_total_ms,
             "sent_chunks": stream_handle.sent_chunks,
+            "dropped_chunks": stream_handle.dropped_chunks,
             "text": transcript,
         }
         if ready_ms is not None:
@@ -1848,25 +1916,36 @@ class VoiceAssistant:
         speech_start_timeout_seconds: float,
     ) -> tuple[Utterance, str, int, int, dict[str, int]]:
         vad_started = time.monotonic()
-        stream_handle: _StreamingSttHandle | None = None
+        stream_handle: _StreamingSttHandle | None = _StreamingSttHandle(
+            self.stt,
+            self.command_audio.sample_rate,
+            policy=_streaming_frame_policy(
+                self.config.vad,
+                self.command_audio.block_ms,
+            ),
+        )
+        stream_handle.start()
+        ready = stream_handle.wait_ready(stream_handle.policy.ready_timeout_seconds)
+        log_event(
+            "stt",
+            "streaming_started",
+            log_id="stt.streaming_started",
+            vad_elapsed_ms=0,
+            phase="pre_speech",
+            ready=ready,
+            ready_ms=stream_handle.ready_latency_ms() or 0,
+        )
 
         def on_speech_start() -> None:
-            nonlocal stream_handle
-            if stream_handle is not None:
-                return
-            stream_handle = _StreamingSttHandle(self.stt, self.command_audio.sample_rate)
-            stream_handle.start()
             start_ms = int((time.monotonic() - vad_started) * 1000)
             log_event(
                 "stt",
-                "streaming_started",
-                log_id="stt.streaming_started",
+                "streaming_speech_started",
+                log_id="stt.streaming_speech_started",
                 vad_elapsed_ms=start_ms,
             )
 
         def on_speech_audio(pcm: bytes) -> None:
-            if stream_handle is None:
-                on_speech_start()
             assert stream_handle is not None
             stream_handle.write(pcm)
 
@@ -1915,6 +1994,7 @@ class VoiceAssistant:
             "mode": "streaming",
             "total_latency_ms": stt_total_ms,
             "sent_chunks": stream_handle.sent_chunks,
+            "dropped_chunks": stream_handle.dropped_chunks,
             "text": transcript,
         }
         if ready_ms is not None:
@@ -2621,6 +2701,11 @@ def _extract_weather_target_day(transcript: str) -> str:
         return "tomorrow"
     return "today"
 
+
+
+
+def _streaming_frame_policy(vad_config, audio_block_ms: int) -> StreamFramePolicy:
+    return StreamFramePolicy.from_vad(vad_config, audio_block_ms=audio_block_ms)
 
 def _format_weather_error_response(exc: Exception) -> str:
     message = str(exc)

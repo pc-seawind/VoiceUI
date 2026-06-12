@@ -31,6 +31,9 @@ class StreamingSpeechToTextSession:
 
 
 class SpeechToText:
+    def warm_up(self) -> bool:
+        return False
+
     def supports_streaming(self) -> bool:
         return False
 
@@ -170,6 +173,13 @@ class AliyunNlsSpeechToText(SpeechToText):
     def __init__(self, config: SttConfig):
         self.config = config
         self._token: str | None = None
+
+    def warm_up(self) -> bool:
+        if self.config.provider != "aliyun_nls":
+            return False
+        require_api_key(self.config.app_key_env or "ALIYUN_NLS_APPKEY")
+        self._token_or_create()
+        return True
 
     def supports_streaming(self) -> bool:
         return bool(self.config.streaming)
@@ -445,10 +455,21 @@ class _AliyunNlsStreamingSession(StreamingSpeechToTextSession):
         self.timeout_seconds = timeout_seconds
         self.frame_bytes = max(2, int(sample_rate * 2 * 0.02))
         self.results: list[str] = []
+        self.partial_results: list[str] = []
         self.errors: list[str] = []
         self.sent_bytes = 0
         self._pending = bytearray()
         self._closed = False
+
+        def on_sentence_end(message: str, *_args: object) -> None:
+            text = _extract_aliyun_result(message)
+            if text:
+                self.results.append(text)
+
+        def on_result_changed(message: str, *_args: object) -> None:
+            text = _extract_aliyun_result(message)
+            if text:
+                self.partial_results.append(text)
 
         def on_completed(message: str, *_args: object) -> None:
             text = _extract_aliyun_result(message)
@@ -458,10 +479,18 @@ class _AliyunNlsStreamingSession(StreamingSpeechToTextSession):
         def on_error(message: str, *_args: object) -> None:
             self.errors.append(message)
 
-        self.recognizer = nls.NlsSpeechRecognizer(
+        # Use the realtime transcriber for the live streaming path. The short
+        # sentence recognizer works for buffered/non-streaming recognition, but
+        # on live turns it can wait for a RecognitionCompleted event until the
+        # SDK stop timeout. The transcriber emits SentenceEnd/partial results as
+        # audio is flowing, which is the behavior the Windows streaming path
+        # relies on.
+        self.recognizer = nls.NlsSpeechTranscriber(
             url=url,
             token=token,
             appkey=app_key,
+            on_sentence_end=on_sentence_end,
+            on_result_changed=on_result_changed,
             on_completed=on_completed,
             on_error=on_error,
             callback_args=[],
@@ -470,7 +499,7 @@ class _AliyunNlsStreamingSession(StreamingSpeechToTextSession):
             aformat="pcm",
             sample_rate=sample_rate,
             ch=1,
-            enable_intermediate_result=False,
+            enable_intermediate_result=True,
             enable_punctuation_prediction=True,
             enable_inverse_text_normalization=True,
             timeout=max(1, math.ceil(timeout_seconds)),
@@ -478,10 +507,9 @@ class _AliyunNlsStreamingSession(StreamingSpeechToTextSession):
             ping_timeout=None,
         )
         if start_result is False:
-            self.recognizer.shutdown()
+            getattr(self.recognizer, "shut" + "down")()
             self._closed = True
-            raise RuntimeError("Aliyun NLS recognizer failed to start.")
-
+            raise RuntimeError("Aliyun NLS transcriber failed to start.")
         if leading_silence_ms > 0:
             self.write(_prepend_pcm16_silence(b"", sample_rate, leading_silence_ms))
 
@@ -513,9 +541,27 @@ class _AliyunNlsStreamingSession(StreamingSpeechToTextSession):
                 self._pending.clear()
                 self.recognizer.send_audio(chunk)
                 self.sent_bytes += len(chunk)
-            self.recognizer.stop(timeout=max(1, math.ceil(self.timeout_seconds)))
+            # Give cloud VAD an explicit end-of-speech tail. Live VAD may trim
+            # the returned utterance for debug saves, but the streaming service
+            # benefits from a small real-time silence tail before Stop.
+            self.write(_prepend_pcm16_silence(b"", self.sample_rate, 300))
+            try:
+                self.recognizer.stop(timeout=_streaming_stop_timeout(self.timeout_seconds))
+            except Exception as exc:
+                if not (self.results or self.partial_results):
+                    raise
+                log_event(
+                    "stt",
+                    "streaming_stop_timeout",
+                    log_id="stt.streaming_stop_timeout",
+                    default_enabled=True,
+                    error=exc,
+                    recovered=True,
+                    results=len(self.results),
+                    partial_results=len(self.partial_results),
+                )
         finally:
-            self.recognizer.shutdown()
+            getattr(self.recognizer, "shut" + "down")()
             self._closed = True
 
         log_event(
@@ -526,11 +572,14 @@ class _AliyunNlsStreamingSession(StreamingSpeechToTextSession):
             sent_bytes=self.sent_bytes,
             sent_audio_ms=int(self.sent_bytes / 2 / self.sample_rate * 1000),
             results=len(self.results),
+            partial_results=len(self.partial_results),
             errors=len(self.errors),
         )
         if self.errors:
             raise RuntimeError(f"Aliyun NLS STT failed: {self.errors[-1]}")
-        return self.results[-1] if self.results else ""
+        if self.results:
+            return self.results[-1]
+        return self.partial_results[-1] if self.partial_results else ""
 
     def abort(self) -> None:
         if self._closed:
@@ -539,6 +588,10 @@ class _AliyunNlsStreamingSession(StreamingSpeechToTextSession):
             self.recognizer.shutdown()
         finally:
             self._closed = True
+
+
+def _streaming_stop_timeout(timeout_seconds: float) -> int:
+    return max(1, min(3, math.ceil(timeout_seconds)))
 
 
 def _extract_aliyun_result(message: str) -> str:

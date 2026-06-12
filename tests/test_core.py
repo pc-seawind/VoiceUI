@@ -19,6 +19,8 @@ from voiceui.core import (
     _looks_like_time_query,
     _matches_termination_command,
     _parse_volume_request,
+    _streaming_frame_policy,
+    _StreamingSttHandle,
 )
 from voiceui.llm import ChatMessage, ToolCall, ToolChatResponse
 from voiceui.models import (
@@ -30,6 +32,7 @@ from voiceui.models import (
     LlmConfig,
     ToolsConfig,
     Utterance,
+    VadConfig,
     WakeConfig,
     WakeEvent,
 )
@@ -170,6 +173,24 @@ class FakeStreamingStt(FakeStt):
         self.fallback_calls += 1
         return super().transcribe(utterance)
 
+
+
+class BlockingStreamingSession(FakeStreamingSession):
+    def __init__(self, transcript: str, block_event: threading.Event):
+        super().__init__(transcript)
+        self.block_event = block_event
+        self.write_started = threading.Event()
+
+    def write(self, pcm: bytes) -> None:
+        self.write_started.set()
+        self.block_event.wait(timeout=2.0)
+        super().write(pcm)
+
+
+class BlockingStreamingStt(FakeStreamingStt):
+    def __init__(self, transcript: str, block_event: threading.Event):
+        super().__init__(transcript)
+        self.session = BlockingStreamingSession(transcript, block_event)
 
 class RecordingChat:
     def __init__(self):
@@ -1620,6 +1641,80 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(streaming_stt.session.written, [b"streamed"])
         self.assertTrue(streaming_stt.session.finished)
         self.assertEqual(streaming_stt.fallback_calls, 0)
+
+
+
+    def test_streaming_frame_policy_matches_vad_timing(self) -> None:
+        policy = _streaming_frame_policy(
+            VadConfig(pre_roll_ms=240, min_speech_ms=250, frame_ms=20),
+            audio_block_ms=80,
+        )
+
+        self.assertEqual(policy.frame_ms, 20)
+        self.assertEqual(policy.buffer_frames, 25)
+        self.assertAlmostEqual(policy.ready_timeout_seconds, 0.5)
+
+    def test_streaming_stt_handle_applies_synchronous_backpressure(self) -> None:
+        block_event = threading.Event()
+        stt = BlockingStreamingStt("done", block_event)
+        handle = _StreamingSttHandle(stt, 16000, max_buffered_chunks=1)
+        handle.start()
+        self.assertTrue(handle.wait_ready(timeout=1.0))
+
+        writer = threading.Thread(target=handle.write, args=(b"frame",))
+        started = time.monotonic()
+        writer.start()
+        self.assertTrue(stt.session.write_started.wait(timeout=1.0))
+        writer.join(timeout=0.05)
+        self.assertTrue(writer.is_alive())
+        block_event.set()
+        writer.join(timeout=1.0)
+
+        self.assertFalse(writer.is_alive())
+        self.assertGreaterEqual(time.monotonic() - started, 0.05)
+        self.assertEqual(stt.session.written, [b"frame"])
+        self.assertEqual(handle.sent_chunks, 1)
+        self.assertEqual(handle.finish(), "done")
+
+    def test_audio_turn_waits_for_streaming_stt_ready_before_vad(self) -> None:
+        config = AssistantConfig(
+            input=InputConfig(mode="audio"),
+            wake=WakeConfig(engine="disabled"),
+            conversation=ConversationConfig(follow_up_seconds=0),
+            llm=LlmConfig(system_prompt="system"),
+        )
+        assistant = VoiceAssistant(config)
+        assistant.vad = FakeVad([Utterance(pcm=b"streamed", sample_rate=16000, duration_ms=80)])
+        streaming_stt = FakeStreamingStt("streamed")
+        ready_event = threading.Event()
+        vad_ready_state = {}
+
+        def delayed_start(sample_rate: int):
+            time.sleep(0.05)
+            ready_event.set()
+            return streaming_stt.session
+
+        def on_record():
+            vad_ready_state["ready"] = ready_event.is_set()
+
+        streaming_stt.start_streaming = delayed_start
+        assistant.stt = streaming_stt
+        assistant.vad = FakeVad(
+            [Utterance(pcm=b"streamed", sample_rate=16000, duration_ms=80)],
+            on_record=on_record,
+        )
+        assistant.chat = RecordingChat()
+        assistant.tts = FakeTts()
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            reply, transcript = assistant._run_audio_turn(
+                WakeEvent(engine="test", confidence=1.0, label="wake"),
+                wake_ms=0,
+            )
+
+        self.assertEqual(transcript, "streamed")
+        self.assertEqual(reply.text, "reply 1")
+        self.assertTrue(vad_ready_state["ready"])
 
     def test_barge_in_streams_stt_and_stashes_transcript(self) -> None:
         config = AssistantConfig(

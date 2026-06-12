@@ -4,7 +4,6 @@ import array
 import base64
 import io
 import json
-import queue
 import subprocess
 import sys
 import tempfile
@@ -18,10 +17,16 @@ from pathlib import Path
 
 from voiceui.aliyun import get_aliyun_nls_token
 from voiceui.audio import apply_pcm16_gain_db, resolve_sounddevice_device, write_pcm16_wav
+
+try:
+    import sounddevice as _sounddevice  # type: ignore[import-untyped]
+except (ImportError, OSError):
+    _sounddevice = None
 from voiceui.audio_dump import current_audio_dump_manager
 from voiceui.http_utils import post_json, require_api_key
 from voiceui.logs import log_continuous, log_event
 from voiceui.models import TtsConfig
+from voiceui.streaming import BoundedBackpressureQueue, StreamFramePolicy
 from voiceui.wake_ack import (
     _convert_pcm16_channels,
     _resample_pcm16,
@@ -30,6 +35,9 @@ from voiceui.wake_ack import (
 
 
 class TextToSpeech:
+    def warm_up(self) -> bool:
+        return False
+
     def speak(self, text: str, stop_event: threading.Event | None = None) -> None:
         raise NotImplementedError
 
@@ -149,6 +157,7 @@ class MimoTextToSpeech(TextToSpeech):
         request_started = time.monotonic()
         first_audio_ms: int | None = None
         chunks = 0
+        playback_stats: dict[str, int] = {}
         stream_audio_format = _mimo_audio_format(self.config.audio_format, stream=True)
 
         def audio_chunks() -> Iterator[bytes]:
@@ -188,6 +197,7 @@ class MimoTextToSpeech(TextToSpeech):
             limiter_enabled=self.config.limiter_enabled,
             limiter_threshold=self.config.limiter_threshold,
             stop_event=stop_event,
+            playback_stats=playback_stats,
         )
         if written_chunks == 0 and not _stop_requested(stop_event):
             raise RuntimeError("Streaming TTS response did not contain audio chunks.")
@@ -198,6 +208,10 @@ class MimoTextToSpeech(TextToSpeech):
             provider=self.config.provider,
             first_audio_ms=first_audio_ms if first_audio_ms is not None else 0,
             stream_chunks=chunks,
+            playback_written_chunks=playback_stats.get("playback_written_chunks", 0),
+            playback_write_blocked_ms=playback_stats.get("playback_write_blocked_ms", 0),
+            playback_max_write_ms=playback_stats.get("playback_max_write_ms", 0),
+            playback_frame_ms=playback_stats.get("playback_frame_ms", 0),
             playback_latency_ms=int((time.monotonic() - playback_started) * 1000),
         )
 
@@ -281,6 +295,7 @@ class OpenAISpeechTextToSpeech(TextToSpeech):
         request_started = time.monotonic()
         first_audio_ms: int | None = None
         chunks = 0
+        playback_stats: dict[str, int] = {}
         audio_format = _openai_speech_response_format(self.config.audio_format, stream=True)
 
         def audio_chunks() -> Iterator[bytes]:
@@ -318,6 +333,7 @@ class OpenAISpeechTextToSpeech(TextToSpeech):
             limiter_enabled=self.config.limiter_enabled,
             limiter_threshold=self.config.limiter_threshold,
             stop_event=stop_event,
+            playback_stats=playback_stats,
         )
         if written_chunks == 0 and not _stop_requested(stop_event):
             raise RuntimeError("Streaming TTS response did not contain audio chunks.")
@@ -328,6 +344,10 @@ class OpenAISpeechTextToSpeech(TextToSpeech):
             provider=self.config.provider,
             first_audio_ms=first_audio_ms if first_audio_ms is not None else 0,
             stream_chunks=chunks,
+            playback_written_chunks=playback_stats.get("playback_written_chunks", 0),
+            playback_write_blocked_ms=playback_stats.get("playback_write_blocked_ms", 0),
+            playback_max_write_ms=playback_stats.get("playback_max_write_ms", 0),
+            playback_frame_ms=playback_stats.get("playback_frame_ms", 0),
             playback_latency_ms=int((time.monotonic() - playback_started) * 1000),
         )
 
@@ -351,6 +371,11 @@ class AliyunNlsTextToSpeech(TextToSpeech):
     def __init__(self, config: TtsConfig):
         self.config = config
         self._token: str | None = None
+
+    def warm_up(self) -> bool:
+        require_api_key(self.config.app_key_env or "ALIYUN_NLS_APPKEY")
+        self._token_or_create()
+        return True
 
     def speak(self, text: str, stop_event: threading.Event | None = None) -> None:
         if self.config.stream:
@@ -410,6 +435,8 @@ class AliyunNlsTextToSpeech(TextToSpeech):
         request_started = time.monotonic()
         first_audio_ms: int | None = None
         chunks = 0
+        playback_stats: dict[str, int] = {}
+        tts_stream_stats: dict[str, int] = {}
 
         def audio_chunks() -> Iterator[bytes]:
             nonlocal first_audio_ms, chunks
@@ -418,6 +445,7 @@ class AliyunNlsTextToSpeech(TextToSpeech):
                 token=self._token_or_create(),
                 text=text,
                 stop_event=stop_event,
+                stream_stats=tts_stream_stats,
             ):
                 if _stop_requested(stop_event):
                     break
@@ -437,6 +465,7 @@ class AliyunNlsTextToSpeech(TextToSpeech):
             limiter_enabled=self.config.limiter_enabled,
             limiter_threshold=self.config.limiter_threshold,
             stop_event=stop_event,
+            playback_stats=playback_stats,
         )
         if written_chunks == 0 and not _stop_requested(stop_event):
             raise RuntimeError("Aliyun NLS streaming TTS response did not contain audio chunks.")
@@ -447,6 +476,16 @@ class AliyunNlsTextToSpeech(TextToSpeech):
             provider=self.config.provider,
             first_audio_ms=first_audio_ms if first_audio_ms is not None else 0,
             stream_chunks=chunks,
+            tts_send_chunks=tts_stream_stats.get("text_send_chunks", 0),
+            tts_send_blocked_ms=tts_stream_stats.get("text_send_blocked_ms", 0),
+            tts_audio_put_chunks=tts_stream_stats.get("audio_put_chunks", 0),
+            tts_audio_get_chunks=tts_stream_stats.get("audio_get_chunks", 0),
+            tts_audio_put_blocked_ms=tts_stream_stats.get("audio_put_blocked_ms", 0),
+            tts_audio_put_blocked_count=tts_stream_stats.get("audio_put_blocked_count", 0),
+            playback_written_chunks=playback_stats.get("playback_written_chunks", 0),
+            playback_write_blocked_ms=playback_stats.get("playback_write_blocked_ms", 0),
+            playback_max_write_ms=playback_stats.get("playback_max_write_ms", 0),
+            playback_frame_ms=playback_stats.get("playback_frame_ms", 0),
             playback_latency_ms=int((time.monotonic() - playback_started) * 1000),
         )
 
@@ -462,6 +501,8 @@ class AliyunNlsTextToSpeech(TextToSpeech):
         first_text_sent_ms: int | None = None
         first_text_chars = 0
         chunks = 0
+        playback_stats: dict[str, int] = {}
+        tts_stream_stats: dict[str, int] = {}
         full_text_parts: list[str] = []
 
         def tracked_chunks() -> Iterator[str]:
@@ -509,6 +550,7 @@ class AliyunNlsTextToSpeech(TextToSpeech):
                 text_chunks=tracked_chunks(),
                 stop_event=stop_event,
                 on_event=on_tts_event,
+                stream_stats=tts_stream_stats,
             ):
                 if _stop_requested(stop_event):
                     break
@@ -528,6 +570,7 @@ class AliyunNlsTextToSpeech(TextToSpeech):
             limiter_enabled=self.config.limiter_enabled,
             limiter_threshold=self.config.limiter_threshold,
             stop_event=stop_event,
+            playback_stats=playback_stats,
         )
         if written_chunks == 0 and full_text_parts and not _stop_requested(stop_event):
             raise RuntimeError("Aliyun NLS streaming TTS response did not contain audio chunks.")
@@ -544,6 +587,16 @@ class AliyunNlsTextToSpeech(TextToSpeech):
             first_text_sent_ms=first_text_sent_ms if first_text_sent_ms is not None else 0,
             first_text_chars=first_text_chars,
             stream_chunks=chunks,
+            tts_send_chunks=tts_stream_stats.get("text_send_chunks", 0),
+            tts_send_blocked_ms=tts_stream_stats.get("text_send_blocked_ms", 0),
+            tts_audio_put_chunks=tts_stream_stats.get("audio_put_chunks", 0),
+            tts_audio_get_chunks=tts_stream_stats.get("audio_get_chunks", 0),
+            tts_audio_put_blocked_ms=tts_stream_stats.get("audio_put_blocked_ms", 0),
+            tts_audio_put_blocked_count=tts_stream_stats.get("audio_put_blocked_count", 0),
+            playback_written_chunks=playback_stats.get("playback_written_chunks", 0),
+            playback_write_blocked_ms=playback_stats.get("playback_write_blocked_ms", 0),
+            playback_max_write_ms=playback_stats.get("playback_max_write_ms", 0),
+            playback_frame_ms=playback_stats.get("playback_frame_ms", 0),
             playback_latency_ms=int((time.monotonic() - playback_started) * 1000),
         )
         return "".join(full_text_parts).strip()
@@ -789,6 +842,7 @@ def _aliyun_stream_input_tts_chunks(
     token: str,
     text: str,
     stop_event: threading.Event | None = None,
+    stream_stats: dict[str, int] | None = None,
 ) -> Iterator[bytes]:
     if not config.stream:
         yield from _aliyun_plain_tts_chunks(
@@ -803,6 +857,7 @@ def _aliyun_stream_input_tts_chunks(
         token=token,
         text_chunks=iter(_split_stream_input_text(text)),
         stop_event=stop_event,
+        stream_stats=stream_stats,
     )
 
 
@@ -812,6 +867,7 @@ def _aliyun_plain_tts_chunks(
     token: str,
     text: str,
     stop_event: threading.Event | None = None,
+    stream_stats: dict[str, int] | None = None,
 ) -> Iterator[bytes]:
     try:
         import nls  # type: ignore[import-untyped]
@@ -876,6 +932,7 @@ def _aliyun_stream_input_tts_chunks_from_text_chunks(
     text_chunks: Iterator[str],
     stop_event: threading.Event | None = None,
     on_event: Callable[[str, dict[str, object]], None] | None = None,
+    stream_stats: dict[str, int] | None = None,
 ) -> Iterator[bytes]:
     try:
         import nls  # type: ignore[import-untyped]
@@ -887,7 +944,10 @@ def _aliyun_stream_input_tts_chunks_from_text_chunks(
 
     app_key = require_api_key(config.app_key_env or "ALIYUN_NLS_APPKEY")
     audio_format = _aliyun_tts_audio_format(config.audio_format)
-    items: queue.Queue[object] = queue.Queue()
+    policy = StreamFramePolicy.text_audio_default()
+    items: BoundedBackpressureQueue[object] = BoundedBackpressureQueue(
+        max(4, policy.buffer_frames)
+    )
     done = object()
 
     def on_data(data: bytes, *_args: object) -> None:
@@ -934,16 +994,27 @@ def _aliyun_stream_input_tts_chunks_from_text_chunks(
             )
             _emit_tts_event(on_event, "stream_started")
 
+            text_send_chunks = 0
+            text_send_blocked_ms = 0
             if not _stop_requested(stop_event):
+                send_started = time.monotonic()
                 synthesizer.sendStreamInputTts(first_text_chunk)
+                text_send_blocked_ms += int((time.monotonic() - send_started) * 1000)
+                text_send_chunks += 1
                 _emit_tts_event(on_event, "first_text_sent", chars=len(first_text_chunk))
                 time.sleep(0.02)
 
             for text_chunk in text_segments:
                 if _stop_requested(stop_event):
                     break
+                send_started = time.monotonic()
                 synthesizer.sendStreamInputTts(text_chunk)
+                text_send_blocked_ms += int((time.monotonic() - send_started) * 1000)
+                text_send_chunks += 1
                 time.sleep(0.02)
+            if stream_stats is not None:
+                stream_stats["text_send_chunks"] = text_send_chunks
+                stream_stats["text_send_blocked_ms"] = text_send_blocked_ms
             synthesizer.stopStreamInputTts()
         except Exception as exc:
             items.put(exc)
@@ -964,13 +1035,25 @@ def _aliyun_stream_input_tts_chunks_from_text_chunks(
         timeout = max(0.1, min(1.0, deadline - time.monotonic()))
         try:
             item = items.get(timeout=timeout)
-        except queue.Empty:
+        except TimeoutError:
             if time.monotonic() >= deadline:
                 raise RuntimeError("Aliyun NLS TTS timed out.") from None
             continue
         if item is done:
+            if stream_stats is not None:
+                queue_stats = items.stats()
+                stream_stats["audio_put_chunks"] = queue_stats["put_count"]
+                stream_stats["audio_get_chunks"] = queue_stats["get_count"]
+                stream_stats["audio_put_blocked_ms"] = queue_stats["blocked_put_ms"]
+                stream_stats["audio_put_blocked_count"] = queue_stats["blocked_puts"]
             break
         if isinstance(item, Exception):
+            if stream_stats is not None:
+                queue_stats = items.stats()
+                stream_stats["audio_put_chunks"] = queue_stats["put_count"]
+                stream_stats["audio_get_chunks"] = queue_stats["get_count"]
+                stream_stats["audio_put_blocked_ms"] = queue_stats["blocked_put_ms"]
+                stream_stats["audio_put_blocked_count"] = queue_stats["blocked_puts"]
             raise item
         deadline = time.monotonic() + max(1.0, config.timeout_seconds)
         yield item  # type: ignore[misc]
@@ -1220,14 +1303,15 @@ def _play_pcm_stream(
     limiter_threshold: float = 0.92,
     stop_event: threading.Event | None = None,
     dump_kind: str = "tts_output",
+    playback_stats: dict[str, int] | None = None,
+    policy: StreamFramePolicy | None = None,
 ) -> int:
-    try:
-        import sounddevice as sd  # type: ignore[import-untyped]
-    except ImportError as exc:
+    sd = _sounddevice
+    if sd is None:
         raise RuntimeError(
-            "Streaming audio playback requires sounddevice. "
-            "Install with: pip install -e \".[tts]\""
-        ) from exc
+            "Streaming audio playback requires sounddevice and PortAudio. "
+            "Install with: pip install -e \".[tts]\" and libportaudio."
+        )
 
     playback_device = resolve_sounddevice_device(sd, device, kind="output")
     requested_playback_rate = playback_sample_rate or sample_rate
@@ -1245,6 +1329,9 @@ def _play_pcm_stream(
     dump_start_ms: int | None = None
     dump_chunks: list[bytes] = []
     written_chunks = 0
+    playback_write_blocked_ms = 0
+    playback_max_write_ms = 0
+    frame_policy = policy or StreamFramePolicy.text_audio_default()
     stream = None
     try:
         for chunk in chunks:
@@ -1252,6 +1339,7 @@ def _play_pcm_stream(
                 chunk,
                 sample_rate=sample_rate,
                 channels=source_channels,
+                chunk_ms=frame_policy.frame_ms,
             ):
                 if _stop_requested(stop_event):
                     break
@@ -1310,7 +1398,11 @@ def _play_pcm_stream(
                     if dump_start_ms is None:
                         dump_start_ms = dump_manager.elapsed_ms()
                     dump_chunks.append(playable_chunk)
+                write_started = time.monotonic()
                 stream.write(playable_chunk)
+                write_ms = int((time.monotonic() - write_started) * 1000)
+                playback_write_blocked_ms += write_ms
+                playback_max_write_ms = max(playback_max_write_ms, write_ms)
                 written_chunks += 1
                 if _stop_requested(stop_event):
                     break
@@ -1330,6 +1422,11 @@ def _play_pcm_stream(
                 start_ms=dump_start_ms,
                 end_ms=dump_manager.elapsed_ms(),
             )
+    if playback_stats is not None:
+        playback_stats["playback_written_chunks"] = written_chunks
+        playback_stats["playback_write_blocked_ms"] = playback_write_blocked_ms
+        playback_stats["playback_max_write_ms"] = playback_max_write_ms
+        playback_stats["playback_frame_ms"] = frame_policy.frame_ms
     return written_chunks
 
 

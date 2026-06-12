@@ -15,6 +15,9 @@ _OPENWAKEWORD_MODEL_SUFFIXES = {".onnx", ".tflite"}
 
 
 class WakeDetector:
+    def warm_up(self) -> bool:
+        return False
+
     def wait(self, audio: AudioInput) -> WakeEvent:
         raise NotImplementedError
 
@@ -77,6 +80,11 @@ class OpenWakeWordDetector(WakeDetector):
                 "Failed to initialize openWakeWord "
                 f"model={self.config.model!r} framework={self.config.inference_framework}: {exc}"
             ) from exc
+
+    def warm_up(self) -> bool:
+        if self._model is None:
+            self._model = self._load_model()
+        return True
 
     def wait(self, audio: AudioInput) -> WakeEvent:
         if audio.sample_rate != 16000:
