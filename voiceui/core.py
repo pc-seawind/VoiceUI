@@ -110,19 +110,28 @@ class _StreamingSttHandle:
         self.error: Exception | None = None
         self._session = None
         self._ready_event = threading.Event()
+        self._started = False
         self._closed = False
         self._io_lock = threading.Lock()
-        self._thread = threading.Thread(
-            target=self._open_session,
-            name="voiceui-stt-stream-open",
-            daemon=True,
-        )
+        self._start_lock = threading.Lock()
+        self._thread: threading.Thread | None = None
 
     def start(self) -> None:
-        self.requested_at = time.monotonic()
-        self._thread.start()
+        with self._start_lock:
+            if self._started:
+                return
+            self._started = True
+            self.requested_at = time.monotonic()
+            self._thread = threading.Thread(
+                target=self._open_session,
+                name="voiceui-stt-stream-open",
+                daemon=True,
+            )
+            self._thread.start()
 
     def wait_ready(self, timeout: float | None = None) -> bool:
+        if not self._started:
+            return False
         return self._ready_event.wait(timeout=timeout)
 
     def write(self, pcm: bytes) -> None:
@@ -152,6 +161,9 @@ class _StreamingSttHandle:
         return self.result
 
     def abort(self) -> None:
+        if not self._started:
+            self.completed_at = time.monotonic()
+            return
         if self.wait_ready(timeout=1.0) and self._session is not None:
             with self._io_lock:
                 if not self._closed:
@@ -173,6 +185,8 @@ class _StreamingSttHandle:
         return int((completed_at - self.requested_at) * 1000)
 
     def _session_or_raise(self):
+        if not self._started:
+            self.start()
         self.wait_ready(timeout=None)
         if self.error is not None:
             raise self.error
@@ -232,6 +246,7 @@ class VoiceAssistant:
         self._pending_barge_transcript: str | None = None
         self._pending_barge_stt_ms = 0
         self._pending_barge_stt_extra_timings: dict[str, int] = {}
+        self._standby_stt_handle: _StreamingSttHandle | None = None
         self._recent_spoken_responses: list[_SpokenResponse] = []
         self._turn_lock = threading.RLock()
         if audio_enabled:
@@ -249,6 +264,9 @@ class VoiceAssistant:
         return CronScheduler(self.config.cron, run_job)
 
     def close(self) -> None:
+        if self._standby_stt_handle is not None:
+            self._standby_stt_handle.abort()
+            self._standby_stt_handle = None
         self.reminders.stop()
         self.audio_dump.stop_system_input_dump()
         configure_audio_dump(None)
@@ -1906,6 +1924,43 @@ class VoiceAssistant:
             log_event("debug", "saved", log_id="debug.saved", path=debug_dir)
         return reply, returned_transcript
 
+    def _streaming_stt_policy(self) -> StreamFramePolicy:
+        return _streaming_frame_policy(
+            self.config.vad,
+            self.command_audio.block_ms,
+        )
+
+    def _start_standby_streaming_stt(self, *, phase: str) -> None:
+        if not self._should_stream_stt():
+            return
+        if self._standby_stt_handle is not None:
+            return
+        handle = _StreamingSttHandle(
+            self.stt,
+            self.command_audio.sample_rate,
+            policy=self._streaming_stt_policy(),
+        )
+        handle.start()
+        self._standby_stt_handle = handle
+        log_event(
+            "stt",
+            "streaming_preopened",
+            log_id="stt.streaming_preopened",
+            phase=phase,
+        )
+
+    def _take_standby_streaming_stt(self) -> _StreamingSttHandle:
+        handle = self._standby_stt_handle
+        self._standby_stt_handle = None
+        if handle is None:
+            handle = _StreamingSttHandle(
+                self.stt,
+                self.command_audio.sample_rate,
+                policy=self._streaming_stt_policy(),
+            )
+            handle.start()
+        return handle
+
     def _should_stream_stt(self) -> bool:
         supports_streaming = getattr(self.stt, "supports_streaming", None)
         return bool(callable(supports_streaming) and supports_streaming())
@@ -1916,15 +1971,7 @@ class VoiceAssistant:
         speech_start_timeout_seconds: float,
     ) -> tuple[Utterance, str, int, int, dict[str, int]]:
         vad_started = time.monotonic()
-        stream_handle: _StreamingSttHandle | None = _StreamingSttHandle(
-            self.stt,
-            self.command_audio.sample_rate,
-            policy=_streaming_frame_policy(
-                self.config.vad,
-                self.command_audio.block_ms,
-            ),
-        )
-        stream_handle.start()
+        stream_handle: _StreamingSttHandle | None = self._take_standby_streaming_stt()
         ready = stream_handle.wait_ready(stream_handle.policy.ready_timeout_seconds)
         log_event(
             "stt",
@@ -2046,6 +2093,7 @@ class VoiceAssistant:
 
         try:
             wake, wake_ms = self._wait_for_wake()
+            self._start_standby_streaming_stt(phase="post_wake")
             with self._turn_lock:
                 self._duck_music("conversation")
                 try:
@@ -2080,6 +2128,7 @@ class VoiceAssistant:
 
         try:
             wake, wake_ms = self._wait_for_wake()
+            self._start_standby_streaming_stt(phase="post_wake")
             with self._turn_lock:
                 self._duck_music("conversation")
                 try:
@@ -2108,6 +2157,7 @@ class VoiceAssistant:
                         if self._pending_barge_utterance is None:
                             if follow_up_seconds <= 0:
                                 return reply
+                            self._start_standby_streaming_stt(phase="follow_up")
                             log_event(
                                 "session",
                                 "listening_for_follow_up",

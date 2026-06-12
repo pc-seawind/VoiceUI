@@ -80,6 +80,7 @@ LOG_SPECS: tuple[LogSpec, ...] = (
     LogSpec("stt.completed", "event", "stt", "completed"),
     LogSpec("stt.streaming_config", "event", "stt", "streaming_config", False),
     LogSpec("stt.streaming_finish", "event", "stt", "streaming_finish", False),
+    LogSpec("stt.streaming_preopened", "event", "stt", "streaming_preopened"),
     LogSpec("stt.streaming_speech_started", "event", "stt", "streaming_speech_started"),
     LogSpec("stt.streaming_stop_timeout", "event", "stt", "streaming_stop_timeout"),
     LogSpec("stt.streaming_started", "event", "stt", "streaming_started"),

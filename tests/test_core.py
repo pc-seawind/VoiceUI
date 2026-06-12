@@ -1716,6 +1716,39 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(reply.text, "reply 1")
         self.assertTrue(vad_ready_state["ready"])
 
+
+    def test_audio_turn_uses_preopened_streaming_stt_handle(self) -> None:
+        config = AssistantConfig(
+            input=InputConfig(mode="audio"),
+            wake=WakeConfig(engine="disabled"),
+            conversation=ConversationConfig(follow_up_seconds=0),
+            llm=LlmConfig(system_prompt="system"),
+        )
+        assistant = VoiceAssistant(config)
+        assistant.vad = FakeVad([Utterance(pcm=b"streamed", sample_rate=16000, duration_ms=80)])
+        streaming_stt = FakeStreamingStt("streamed")
+        assistant.stt = streaming_stt
+        assistant.chat = RecordingChat()
+        assistant.tts = FakeTts()
+
+        assistant._start_standby_streaming_stt(phase="test")
+        standby = assistant._standby_stt_handle
+        self.assertIsNotNone(standby)
+        self.assertTrue(standby.wait_ready(timeout=1.0))
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            reply, transcript = assistant._run_audio_turn(
+                WakeEvent(engine="test", confidence=1.0, label="wake"),
+                wake_ms=0,
+            )
+
+        self.assertEqual(transcript, "streamed")
+        self.assertEqual(reply.text, "reply 1")
+        self.assertIsNone(assistant._standby_stt_handle)
+        self.assertEqual(streaming_stt.start_sample_rates, [16000])
+        self.assertEqual(streaming_stt.session.written, [b"streamed"])
+        self.assertTrue(streaming_stt.session.finished)
+
     def test_barge_in_streams_stt_and_stashes_transcript(self) -> None:
         config = AssistantConfig(
             input=InputConfig(mode="audio"),
