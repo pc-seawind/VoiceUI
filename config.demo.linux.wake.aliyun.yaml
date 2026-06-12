@@ -56,10 +56,9 @@ stt:
   timeout_seconds: 20
   language: zh
   leading_silence_ms: 200
-  # Non-streaming NLS is more reliable on the XVF3800 service path; the
-  # streaming SDK stop() can block with "Waiting stop over 20s" after short VAD
-  # captures, preventing any LLM/TTS reply.
-  streaming: false
+  # Full streaming path: STT session is pre-opened before VAD and PCM frames are
+  # pushed synchronously with ready/backpressure gates.
+  streaming: true
   debug: true
 
 llm:
@@ -95,8 +94,9 @@ tts:
   sample_rate: 24000
   playback_sample_rate: 16000
   playback_channels: 2
-  # Non-streaming TTS avoids a long stream-input startup delay observed on NLS.
-  stream: false
+  # Full streaming path: LLM chunks feed stream-input TTS and playback is
+  # frame-sized with write/backpressure metrics.
+  stream: true
   # Use full cloud-side TTS volume, then control room loudness with system volume.
   volume: 100
   speech_rate: 0
