@@ -959,7 +959,38 @@ def _aliyun_stream_input_tts_chunks_from_text_chunks(
 
     def producer() -> None:
         synthesizer = None
+        stream_started = False
+        stream_stopped = False
+        start_error: Exception | None = None
+
+        def start_synthesizer() -> None:
+            nonlocal synthesizer, stream_started, start_error
+            try:
+                synthesizer = nls.NlsStreamInputTtsSynthesizer(
+                    url=config.endpoint,
+                    token=token,
+                    appkey=app_key,
+                    on_data=on_data,
+                    on_error=on_error,
+                    callback_args=[],
+                )
+                synthesizer.startStreamInputTts(
+                    voice=config.voice,
+                    aformat=audio_format,
+                    sample_rate=config.sample_rate,
+                    volume=config.volume,
+                    speech_rate=config.speech_rate,
+                    pitch_rate=config.pitch_rate,
+                )
+                stream_started = True
+                _emit_tts_event(on_event, "stream_started")
+            except Exception as exc:
+                start_error = exc
+
         try:
+            start_thread = threading.Thread(target=start_synthesizer, daemon=True)
+            start_thread.start()
+
             text_segments = _iter_stream_input_text(
                 text_chunks,
                 max_chars=32,
@@ -968,6 +999,11 @@ def _aliyun_stream_input_tts_chunks_from_text_chunks(
             )
             first_text_chunk = _next_stream_input_text(text_segments, stop_event)
             if first_text_chunk is None:
+                start_thread.join(timeout=max(1.0, config.timeout_seconds))
+                if start_thread.is_alive():
+                    raise RuntimeError("Aliyun NLS TTS timed out while starting stream.")
+                if start_error is not None:
+                    raise start_error
                 return
             _emit_tts_event(
                 on_event,
@@ -976,23 +1012,13 @@ def _aliyun_stream_input_tts_chunks_from_text_chunks(
                 text_preview=first_text_chunk[:16],
             )
 
-            synthesizer = nls.NlsStreamInputTtsSynthesizer(
-                url=config.endpoint,
-                token=token,
-                appkey=app_key,
-                on_data=on_data,
-                on_error=on_error,
-                callback_args=[],
-            )
-            synthesizer.startStreamInputTts(
-                voice=config.voice,
-                aformat=audio_format,
-                sample_rate=config.sample_rate,
-                volume=config.volume,
-                speech_rate=config.speech_rate,
-                pitch_rate=config.pitch_rate,
-            )
-            _emit_tts_event(on_event, "stream_started")
+            start_thread.join(timeout=max(1.0, config.timeout_seconds))
+            if start_thread.is_alive():
+                raise RuntimeError("Aliyun NLS TTS timed out while starting stream.")
+            if start_error is not None:
+                raise start_error
+            if synthesizer is None or not stream_started:
+                raise RuntimeError("Aliyun NLS TTS failed to start stream.")
 
             text_send_chunks = 0
             text_send_blocked_ms = 0
@@ -1016,10 +1042,18 @@ def _aliyun_stream_input_tts_chunks_from_text_chunks(
                 stream_stats["text_send_chunks"] = text_send_chunks
                 stream_stats["text_send_blocked_ms"] = text_send_blocked_ms
             synthesizer.stopStreamInputTts()
+            stream_stopped = True
         except Exception as exc:
             items.put(exc)
         finally:
+            if "start_thread" in locals():
+                start_thread.join(timeout=0.2)
             if synthesizer is not None:
+                if stream_started and not stream_stopped:
+                    try:
+                        synthesizer.stopStreamInputTts()
+                    except Exception:
+                        pass
                 try:
                     synthesizer.shutdown()
                 except Exception:

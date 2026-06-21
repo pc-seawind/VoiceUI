@@ -305,7 +305,7 @@ class TtsTests(unittest.TestCase):
         self.assertEqual(stream.call_args.kwargs["token"], "token")
         self.assertEqual(play_pcm_stream.call_args.kwargs["sample_rate"], 24000)
 
-    def test_aliyun_stream_input_tts_waits_for_first_text_before_start(self) -> None:
+    def test_aliyun_stream_input_tts_starts_before_first_text(self) -> None:
         events: list[str] = []
         first_text_ready = threading.Event()
         received_chunks: list[bytes] = []
@@ -359,7 +359,7 @@ class TtsTests(unittest.TestCase):
                 thread.start()
                 time.sleep(0.05)
                 self.assertIn("generator_started", events)
-                self.assertNotIn("start", events)
+                self.assertIn("start", events)
 
                 first_text_ready.set()
                 thread.join(timeout=2.0)
@@ -367,7 +367,7 @@ class TtsTests(unittest.TestCase):
         self.assertFalse(thread.is_alive())
         self.assertEqual(errors, [])
         self.assertEqual(received_chunks, [b"\x00\x00"])
-        self.assertLess(events.index("text_yielded"), events.index("start"))
+        self.assertLess(events.index("start"), events.index("text_yielded"))
         self.assertEqual(
             [event for event in events if event in ("start", "send:hello?", "stop", "shutdown")],
             ["start", "send:hello?", "stop", "shutdown"],

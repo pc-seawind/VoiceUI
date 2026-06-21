@@ -91,9 +91,8 @@ tts:
   access_key_secret_env: ALIYUN_AccessKeySecret
   app_key_env: ALIYUN_NLS_APPKEY
   timeout_seconds: 20
-  # xiaoyun works reliably with non-streaming NLS and has much higher output
-  # level than the longxiaochun stream-input voice on the XVF3800 path.
-  voice: xiaoyun
+  # Match the Windows demo voice so Linux and Windows sound consistent.
+  voice: longxiaochun
   audio_format: pcm
   sample_rate: 24000
   playback_sample_rate: 16000
