@@ -10,9 +10,11 @@ audio:
   channels: 2
   block_ms: 80
   device: "reSpeaker XVF3800 4-Mic Array: USB Audio (hw:2,0), ALSA (2 in, 2 out)"
-  wake_stream_channel: 0
-  # ch0 is the XVF3800 AEC/EC path and is used for the real assistant.
-  # ch1 is the raw mic channel; use it only for loopback diagnostics.
+  # On this Linux host, wake-monitor trials show the raw channel gives much
+  # stronger openWakeWord scores for "alexa" than the AEC/EC channel.
+  wake_stream_channel: 1
+  # ch0 is the XVF3800 AEC/EC path and is still used for the real assistant.
+  # ch1 is the raw mic channel used only for wake and loopback diagnostics.
   command_stream_channel: 0
   input_gain_db: 0.0
   debug: true
@@ -20,7 +22,9 @@ audio:
 wake:
   engine: openwakeword
   model: alexa
-  threshold: 0.5
+  # Local wake-monitor trials on the XVF3800 raw channel peaked around 0.5 for
+  # "alexa", so keep the bring-up threshold lower than the default 0.5.
+  threshold: 0.3
   max_wait_seconds: 0
   inference_framework: onnx
   debug: true
@@ -108,7 +112,9 @@ tts:
   limiter_threshold: 0.92
 
 conversation:
-  follow_up_seconds: 4
+  # Disable follow-up while validating the Linux XVF3800 path: the current room
+  # can re-trigger VAD from short echo/noise fragments after TTS playback.
+  follow_up_seconds: 0
   wake_speech_start_timeout_seconds: 5
   max_turns: 12
   max_spoken_reply_chars: 28

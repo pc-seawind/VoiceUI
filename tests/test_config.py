@@ -265,7 +265,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.tts.volume, 100)
         self.assertEqual(config.tts.playback_gain_db, 6.0)
         self.assertEqual(config.wake_ack.playback_gain_db, 12.0)
-        self.assertEqual(config.conversation.follow_up_seconds, 4)
+        self.assertEqual(config.conversation.follow_up_seconds, 0)
         self.assertEqual(config.conversation.wake_speech_start_timeout_seconds, 5)
         self.assertEqual(config.conversation.max_spoken_reply_chars, 28)
         self.assertTrue(config.tools.enabled)
