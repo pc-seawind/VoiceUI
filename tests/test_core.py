@@ -316,6 +316,23 @@ class SlowToolRunner:
         return "tool reply"
 
 
+class StreamingToolRunner:
+    enabled = True
+
+    def __init__(self):
+        self.complete_calls: list[list[ChatMessage]] = []
+        self.stream_calls: list[list[ChatMessage]] = []
+
+    def complete(self, messages: list[ChatMessage]) -> str:
+        self.complete_calls.append(list(messages))
+        raise AssertionError("Expected streaming tool completion")
+
+    def stream_complete(self, messages: list[ChatMessage]):
+        self.stream_calls.append(list(messages))
+        yield "streamed "
+        yield "tool reply"
+
+
 class MiotTextToolRunner:
     enabled = True
 
@@ -972,6 +989,27 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(tts.spoken[0], "正在搜索，请稍等。")
         self.assertEqual(tts.spoken[-1], "tool reply")
         self.assertEqual(len(tool_runner.calls), 1)
+
+    def test_text_turn_streams_tool_runner_when_llm_stream_enabled(self) -> None:
+        config = AssistantConfig(
+            input=InputConfig(mode="text"),
+            llm=LlmConfig(system_prompt="system", stream=True),
+            tools=ToolsConfig(enabled=True, allow_weather=False),
+        )
+        with patch("voiceui.core.warm_weather_cache"):
+            assistant = VoiceAssistant(config)
+        tts = FakeTts()
+        tool_runner = StreamingToolRunner()
+        assistant.tts = tts
+        assistant.tool_runner = tool_runner
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            reply = assistant.run_text_turn("讲个笑话")
+
+        self.assertEqual(reply.text, "streamed tool reply")
+        self.assertEqual(tts.spoken, ["streamed tool reply"])
+        self.assertEqual(len(tool_runner.stream_calls), 1)
+        self.assertEqual(tool_runner.complete_calls, [])
 
     def test_text_turn_reports_tool_runner_error_without_raising(self) -> None:
         config = AssistantConfig(

@@ -11,7 +11,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -510,6 +510,122 @@ class VoiceToolRunner:
                 return direct_response
 
         return _fallback_tool_response(working_messages)
+
+    def stream_complete(self, messages: list[ChatMessage]) -> Iterator[str]:
+        followup_call = self._build_miot_followup_call(messages)
+        if followup_call is not None:
+            result = self._execute_tool_call(followup_call)
+            yield _direct_tool_response([result]) or _format_tool_payload_response(result)
+            return
+
+        selected_tool_payloads = self._select_tool_payloads(messages)
+        if not selected_tool_payloads:
+            llm_started = time.monotonic()
+            chunks = 0
+            try:
+                for chunk in self.chat.stream_complete(messages):
+                    if not chunk:
+                        continue
+                    chunks += 1
+                    yield chunk
+            finally:
+                llm_ms = int((time.monotonic() - llm_started) * 1000)
+                log_event(
+                    "tools",
+                    "llm_round",
+                    log_id="tools.llm_round",
+                    round=1,
+                    llm_call_ms=llm_ms,
+                    tools_sent=0,
+                    tool_calls=0,
+                    stream=True,
+                    chunks=chunks,
+                )
+            return
+
+        working_messages = _with_tool_use_instructions(messages)
+        for iteration in range(self.max_iterations):
+            llm_started = time.monotonic()
+            response = self.chat.complete_with_tools(working_messages, selected_tool_payloads)
+            llm_ms = int((time.monotonic() - llm_started) * 1000)
+            log_event(
+                "tools",
+                "llm_round",
+                log_id="tools.llm_round",
+                round=iteration + 1,
+                llm_call_ms=llm_ms,
+                tools_sent=len(selected_tool_payloads),
+                tool_calls=len(response.tool_calls),
+                stream=False,
+            )
+            if not response.tool_calls:
+                last_text = _last_user_text(messages)
+                if _requires_tool_call_for_text(last_text, set(self.tools)):
+                    direct_call = self._build_direct_miot_control_call(last_text)
+                    if direct_call is not None:
+                        result = self._execute_tool_call(direct_call)
+                        yield _direct_tool_response([result]) or _format_tool_payload_response(
+                            result
+                        )
+                        return
+                    log_event(
+                        "tools",
+                        "missing_required_tool_call",
+                        log_id="tools.missing_required_tool_call",
+                        requested_tool="xiaomi_miot_control_device",
+                    )
+                    yield "我还没有实际执行到设备控制，不能确认已经完成。请再说一遍具体设备。"
+                    return
+                yield response.content.strip()
+                return
+
+            working_messages.append(
+                ChatMessage(
+                    role="assistant",
+                    content=response.content,
+                    tool_calls=[_assistant_tool_call_payload(call) for call in response.tool_calls],
+                )
+            )
+            tool_results: list[dict[str, Any]] = []
+            for call in response.tool_calls:
+                result = self._execute_tool_call(call)
+                tool_results.append(result)
+                working_messages.append(
+                    ChatMessage(
+                        role="tool",
+                        content=_to_json_text(result),
+                        tool_call_id=call.id,
+                    )
+                )
+            direct_response = _direct_tool_response(tool_results)
+            if direct_response:
+                yield direct_response
+                return
+
+            llm_started = time.monotonic()
+            chunks = 0
+            try:
+                for chunk in self.chat.stream_complete(working_messages):
+                    if not chunk:
+                        continue
+                    chunks += 1
+                    yield chunk
+            finally:
+                llm_ms = int((time.monotonic() - llm_started) * 1000)
+                log_event(
+                    "tools",
+                    "llm_round",
+                    log_id="tools.llm_round",
+                    round=iteration + 2,
+                    llm_call_ms=llm_ms,
+                    tools_sent=0,
+                    tool_calls=0,
+                    stream=True,
+                    chunks=chunks,
+                )
+            return
+
+        yield _fallback_tool_response(working_messages)
 
     def _select_tool_payloads(self, messages: list[ChatMessage]) -> list[dict[str, Any]]:
         selected_names = _select_tool_names_for_text(_last_user_text(messages), set(self.tools))

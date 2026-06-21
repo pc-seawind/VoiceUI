@@ -427,6 +427,30 @@ class VoiceAssistant:
             return self._finish_generated_response(local_response, timings)
 
         if self.tool_runner is not None and self.tool_runner.enabled:
+            if self.config.llm.stream and callable(
+                getattr(self.tool_runner, "stream_complete", None)
+            ):
+                try:
+                    response, barge_utterance = self._stream_and_speak_tool_response(
+                        transcript,
+                        timings,
+                    )
+                except Exception as exc:  # pylint: disable=broad-exception-caught
+                    return self._finish_processing_error(exc, timings, mode="tools_stream")
+                if barge_utterance is not None:
+                    self._pending_barge_utterance = barge_utterance
+                    timings["barge_in"] = barge_utterance.duration_ms
+                record_text_event("llm", "completed", response, mode="tools_stream")
+                log_event(
+                    "tts",
+                    "completed",
+                    log_id="tts.completed",
+                    latency_ms=timings["tts"],
+                    ok=True,
+                    text=response,
+                )
+                return AssistantReply(text=response), timings
+
             llm_started = time.monotonic()
             try:
                 response = self._complete_tools_with_progress_prompt(transcript)
@@ -533,6 +557,21 @@ class VoiceAssistant:
         if isinstance(error, Exception):
             raise error
         return str(result.get("value") or "")
+
+    def _stream_and_speak_tool_response(
+        self,
+        transcript: str,
+        timings: dict[str, int],
+    ) -> tuple[str, Utterance | None]:
+        del transcript
+        assert self.tool_runner is not None
+        messages = list(self.session.messages)
+        stream_complete = self.tool_runner.stream_complete
+        return self._stream_and_speak_response(
+            timings,
+            text_stream_factory=lambda: stream_complete(messages),
+            log_mode="tools_stream",
+        )
 
     def _try_handle_local_conversation_command(self, transcript: str) -> str | None:
         if _looks_like_end_conversation_command(transcript):
@@ -870,7 +909,13 @@ class VoiceAssistant:
         )
         self._recent_spoken_responses = self._recent_spoken_responses[-8:]
 
-    def _stream_and_speak_response(self, timings: dict[str, int]) -> tuple[str, Utterance | None]:
+    def _stream_and_speak_response(
+        self,
+        timings: dict[str, int],
+        *,
+        text_stream_factory=None,
+        log_mode: str = "stream",
+    ) -> tuple[str, Utterance | None]:
         messages = list(self.session.messages)
         llm_stop_event = threading.Event()
         llm_stream_stats: dict[str, int] = {}
@@ -879,6 +924,7 @@ class VoiceAssistant:
             timings,
             stop_event=llm_stop_event,
             stream_stats=llm_stream_stats,
+            text_stream_factory=text_stream_factory,
         )
         barge_utterance = None
         tts_started = time.monotonic()
@@ -893,7 +939,7 @@ class VoiceAssistant:
         finally:
             llm_stop_event.set()
         timings["tts"] = int((time.monotonic() - tts_started) * 1000)
-        self._print_streaming_llm_stats(timings, llm_stream_stats)
+        self._print_streaming_llm_stats(timings, llm_stream_stats, mode=log_mode)
 
         if not response:
             response = "I could not produce a response."
@@ -1272,6 +1318,7 @@ class VoiceAssistant:
         timings: dict[str, int],
         stop_event: threading.Event | None = None,
         stream_stats: dict[str, int] | None = None,
+        text_stream_factory=None,
     ) -> Iterator[str]:
         items: BoundedBackpressureQueue[object] = BoundedBackpressureQueue(
             StreamFramePolicy.text_audio_default().buffer_frames
@@ -1283,7 +1330,12 @@ class VoiceAssistant:
             first_token_ms: int | None = None
             chunks = 0
             try:
-                for chunk in self.chat.stream_complete(messages):
+                text_stream = (
+                    text_stream_factory()
+                    if text_stream_factory is not None
+                    else self.chat.stream_complete(messages)
+                )
+                for chunk in text_stream:
                     if stop_event is not None and stop_event.is_set():
                         break
                     if not chunk:
@@ -1341,6 +1393,8 @@ class VoiceAssistant:
         self,
         timings: dict[str, int],
         stream_stats: dict[str, int],
+        *,
+        mode: str = "stream",
     ) -> None:
         if "llm" not in timings:
             return
@@ -1353,6 +1407,7 @@ class VoiceAssistant:
             stream_chunks=stream_stats.get("chunks", 0),
             blocked_puts=stream_stats.get("blocked_puts", 0),
             blocked_put_ms=stream_stats.get("blocked_put_ms", 0),
+            mode=mode,
         )
 
     def _should_listen_for_barge_in(self) -> bool:

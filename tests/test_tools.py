@@ -247,6 +247,55 @@ class DirectChat(ChatClient):
         return ToolChatResponse(content="tool reply")
 
 
+class StreamingDirectChat(DirectChat):
+    def __init__(self):
+        super().__init__()
+        self.stream_calls: list[list[ChatMessage]] = []
+
+    def stream_complete(self, messages: list[ChatMessage]):
+        self.stream_calls.append(list(messages))
+        yield "plain "
+        yield "reply"
+
+
+class ToolThenStreamingChat(ChatClient):
+    def __init__(self):
+        self.tool_calls: list[tuple[list[ChatMessage], list[dict]]] = []
+        self.stream_calls: list[list[ChatMessage]] = []
+
+    def complete(self, messages: list[ChatMessage]) -> str:
+        raise AssertionError(f"Unexpected non-stream completion: {messages!r}")
+
+    def complete_with_tools(
+        self,
+        messages: list[ChatMessage],
+        tools: list[dict],
+    ) -> ToolChatResponse:
+        self.tool_calls.append((list(messages), tools))
+        return ToolChatResponse(
+            tool_calls=[
+                ToolCall(
+                    id="call_1",
+                    name="demo_tool",
+                    arguments={"value": 3},
+                    raw={
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "demo_tool",
+                            "arguments": "{\"value\":3}",
+                        },
+                    },
+                )
+            ]
+        )
+
+    def stream_complete(self, messages: list[ChatMessage]):
+        self.stream_calls.append(list(messages))
+        yield "streamed "
+        yield "tool reply"
+
+
 class ToolsTests(unittest.TestCase):
     def test_tool_runner_adds_assistant_and_tool_messages(self) -> None:
         chat = FakeToolChat()
@@ -1012,6 +1061,59 @@ class ToolsTests(unittest.TestCase):
         self.assertEqual(response, "plain reply")
         self.assertEqual(len(chat.complete_calls), 1)
         self.assertEqual(chat.tool_calls, [])
+
+    def test_tool_runner_streams_plain_llm_when_no_tool_intent_matches(self) -> None:
+        chat = StreamingDirectChat()
+        runner = VoiceToolRunner(
+            chat=chat,
+            tools=[
+                ToolDefinition(
+                    name="get_current_time",
+                    description="Current time",
+                    parameters={"type": "object", "properties": {}},
+                    handler=lambda _arguments: {},
+                ),
+                ToolDefinition(
+                    name="web_search",
+                    description="Search web",
+                    parameters={"type": "object", "properties": {}},
+                    handler=lambda _arguments: {},
+                ),
+            ],
+        )
+
+        chunks = list(runner.stream_complete([ChatMessage(role="user", content="讲个笑话")]))
+
+        self.assertEqual(chunks, ["plain ", "reply"])
+        self.assertEqual(len(chat.stream_calls), 1)
+        self.assertEqual(chat.complete_calls, [])
+        self.assertEqual(chat.tool_calls, [])
+
+    def test_tool_runner_streams_final_reply_after_tool_result(self) -> None:
+        chat = ToolThenStreamingChat()
+        runner = VoiceToolRunner(
+            chat=chat,
+            tools=[
+                ToolDefinition(
+                    name="demo_tool",
+                    description="Demo",
+                    parameters={"type": "object", "properties": {}},
+                    handler=lambda args: {"doubled": args["value"] * 2},
+                )
+            ],
+        )
+
+        chunks = list(runner.stream_complete([ChatMessage(role="user", content="run")]))
+
+        self.assertEqual(chunks, ["streamed ", "tool reply"])
+        self.assertEqual(len(chat.tool_calls), 1)
+        self.assertEqual(len(chat.stream_calls), 1)
+        stream_messages = chat.stream_calls[0]
+        self.assertEqual(stream_messages[-2].role, "assistant")
+        self.assertEqual(stream_messages[-2].tool_calls[0]["id"], "call_1")
+        self.assertEqual(stream_messages[-1].role, "tool")
+        self.assertEqual(stream_messages[-1].tool_call_id, "call_1")
+        self.assertIn('"doubled":6', stream_messages[-1].content)
 
     def test_tool_runner_sends_only_matching_tool_payloads(self) -> None:
         chat = DirectChat()
