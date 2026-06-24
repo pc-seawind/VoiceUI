@@ -9,7 +9,7 @@ audio:
   sample_rate: 16000
   channels: 2
   block_ms: 80
-  device: "reSpeaker XVF3800 4-Mic Array: USB Audio (hw:2,0), ALSA (2 in, 2 out)"
+  device: "reSpeaker XVF3800 4-Mic Array: USB Audio"
   wake_stream_channel: 0
   # ch0 is the XVF3800 AEC/EC path and is used for the real assistant.
   # ch1 is the raw mic channel; use it only for loopback diagnostics.
@@ -26,7 +26,7 @@ wake:
 wake_ack:
   enabled: false
   wav_path: default
-  playback_device: "reSpeaker XVF3800 4-Mic Array: USB Audio (hw:2,0), ALSA (2 in, 2 out)"
+  playback_device: "reSpeaker XVF3800 4-Mic Array: USB Audio"
   playback_gain_db: 18.0
 
 vad:
@@ -96,7 +96,7 @@ tts:
   volume: 100
   speech_rate: 0
   pitch_rate: 0
-  playback_device: "reSpeaker XVF3800 4-Mic Array: USB Audio (hw:2,0), ALSA (2 in, 2 out)"
+  playback_device: "reSpeaker XVF3800 4-Mic Array: USB Audio"
   # The XVF3800 playback path is much quieter than direct sine-wave tests.
   playback_gain_db: 6.0
   limiter_enabled: true
@@ -127,7 +127,7 @@ tools:
 
 music:
   provider: disabled
-  playback_device: "reSpeaker XVF3800 4-Mic Array: USB Audio (hw:2,0), ALSA (2 in, 2 out)"
+  playback_device: "reSpeaker XVF3800 4-Mic Array: USB Audio"
   playback_sample_rate: 16000
   playback_channels: 2
 
