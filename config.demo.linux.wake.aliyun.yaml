@@ -133,7 +133,7 @@ tools:
   default_weather_location: 北京昌平
   allow_volume: true
   allow_music: false
-  allow_miot: false
+  allow_miot: true
   allow_search: false
 
 music:
@@ -143,7 +143,7 @@ music:
   playback_channels: 2
 
 xiaomi_miot:
-  enabled: false
+  enabled: true
   cloud_server: cn
   token_file: .voiceui/miot_token.json
   cache_dir: .voiceui/miot_cache

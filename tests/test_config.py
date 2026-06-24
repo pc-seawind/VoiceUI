@@ -227,7 +227,10 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.tts.playback_channels, 2)
         self.assertEqual(config.conversation.follow_up_seconds, 0)
         self.assertTrue(config.tools.enabled)
-        self.assertFalse(config.xiaomi_miot.enabled)
+        self.assertTrue(config.tools.allow_miot)
+        self.assertTrue(config.xiaomi_miot.enabled)
+        self.assertEqual(config.xiaomi_miot.token_file, ".voiceui/miot_token.json")
+        self.assertTrue(config.xiaomi_miot.control_verify)
         self.assertFalse(config.debug.system_input_dump_enabled)
 
 
@@ -269,6 +272,10 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.conversation.wake_speech_start_timeout_seconds, 5)
         self.assertEqual(config.conversation.max_spoken_reply_chars, 28)
         self.assertTrue(config.tools.enabled)
+        self.assertTrue(config.tools.allow_miot)
+        self.assertTrue(config.xiaomi_miot.enabled)
+        self.assertEqual(config.xiaomi_miot.token_file, ".voiceui/miot_token.json")
+        self.assertTrue(config.xiaomi_miot.control_verify)
         self.assertEqual(config.tts.playback_device, LINUX_XVF_DEVICE)
         self.assertFalse(config.conversation.barge_in_enabled)
         self.assertFalse(config.logging.continuous["wake.score"])
