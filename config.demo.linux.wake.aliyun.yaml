@@ -161,6 +161,11 @@ debug:
   system_input_dump_segment_seconds: 30
   voice_path_dump_enabled: false
 
+web:
+  enabled: true
+  host: 0.0.0.0
+  port: 8765
+
 logging:
   enabled: true
   events:

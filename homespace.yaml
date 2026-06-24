@@ -1,0 +1,25 @@
+# VoiceUI — project manifest (homespace artifact registry).
+# Lives inside the repo; commits with the code.
+# Per docs/domain-design.md §10.4, declare artifacts this
+# project exports to other domains via /import.
+#
+# Four artifact kinds (peers; pick by shape):
+#   mcp     — structured tool with input/output schemas
+#   script  — CLI invocation; consumer runs via Bash
+#   dataset — data dir; consumer Reads files
+#   doc     — markdown; consumer Reads + summary injects
+#           into system_prompt
+name: VoiceUI
+domain: code
+description: "Voice assistant runtime with a web console for remote logs, debug sessions, and text input."
+artifacts:
+  - kind: script
+    name: voiceui-web-console
+    cmd: /home/emox/work/projects/VoiceUI/.venv/bin/python -m voiceui.web --config auto --host 0.0.0.0 --port 8765
+    hint: "Start the VoiceUI web console on port 8765 for logs, debug sessions, conversation history, and text chat input."
+# Example:
+# artifacts:
+#   - kind: script
+#     name: VoiceUI-hello
+#     cmd: python /home/emox/work/projects/VoiceUI/cli.py hello
+#     hint: "one-liner describing what this script does"

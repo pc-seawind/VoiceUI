@@ -176,6 +176,11 @@ debug:
   system_input_dump_segment_seconds: 30
   voice_path_dump_enabled: true
 
+web:
+  enabled: false
+  host: 127.0.0.1
+  port: 8765
+
 logging:
   enabled: true
   # Event logs are one-off state changes or completed operations. Most are on by default.

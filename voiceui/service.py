@@ -9,6 +9,7 @@ from voiceui.core import VoiceAssistant
 from voiceui.env import load_dotenv
 from voiceui.logs import configure_log_files, configure_logging, log_event
 from voiceui.models import AssistantConfig
+from voiceui.web import VoiceUiWebConsole, start_web_console
 
 _DEFAULT_SERVICE_CONFIG = AUTO_CONFIG
 _SERVICE_STDOUT_MODE = "errors_and_voice_context"
@@ -35,9 +36,17 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Enable audio dumps. Disabled by default for production service runs.",
     )
+    parser.add_argument(
+        "--web",
+        action="store_true",
+        help="Enable the VoiceUI web console for logs, debug sessions, and text input.",
+    )
+    parser.add_argument("--web-host", help="Override web console bind host.")
+    parser.add_argument("--web-port", type=int, help="Override web console bind port.")
     args = parser.parse_args(argv)
 
     assistant: VoiceAssistant | None = None
+    web_console: VoiceUiWebConsole | None = None
     try:
         load_dotenv()
         config = load_config(args.config)
@@ -46,10 +55,23 @@ def main(argv: list[str] | None = None) -> int:
             output_dir=Path(args.output_dir) if args.output_dir else None,
             audio_dump=args.audio_dump,
         )
+        if args.web:
+            config.web.enabled = True
+        if args.web_host:
+            config.web.host = args.web_host
+        if args.web_port is not None:
+            config.web.port = args.web_port
         configure_logging(config.logging)
         configure_log_files(stdout_mode=_SERVICE_STDOUT_MODE)
 
         assistant = VoiceAssistant(config)
+        if config.web.enabled:
+            web_console = start_web_console(
+                assistant,
+                host=config.web.host,
+                port=config.web.port,
+                title="VoiceUI Service",
+            )
         log_event(
             "service",
             "started",
@@ -57,15 +79,25 @@ def main(argv: list[str] | None = None) -> int:
             config=args.config,
             output_dir=config.debug.output_dir,
             audio_dump=args.audio_dump,
+            web=bool(web_console),
+            web_url=web_console.url if web_console is not None else "",
         )
-        assistant.run_forever()
+        try:
+            assistant.run_forever()
+        finally:
+            if web_console is not None:
+                web_console.stop()
         return 0
     except KeyboardInterrupt:
+        if web_console is not None:
+            web_console.stop()
         if assistant is not None:
             _restore_service_log_files(assistant)
         log_event("service", "stopped", log_id="service.stopped", reason="keyboard_interrupt")
         return 130
     except Exception as exc:
+        if web_console is not None:
+            web_console.stop()
         if assistant is not None:
             _restore_service_log_files(assistant)
         log_event("service", "error", log_id="service.error", error=exc)

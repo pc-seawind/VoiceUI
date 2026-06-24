@@ -317,6 +317,13 @@ class LoggingConfig:
 
 
 @dataclass(slots=True)
+class WebConfig:
+    enabled: bool = False
+    host: str = "127.0.0.1"
+    port: int = 8765
+
+
+@dataclass(slots=True)
 class AssistantConfig:
     node: NodeConfig = field(default_factory=NodeConfig)
     input: InputConfig = field(default_factory=InputConfig)
@@ -336,6 +343,7 @@ class AssistantConfig:
     tools: ToolsConfig = field(default_factory=ToolsConfig)
     debug: DebugConfig = field(default_factory=DebugConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
+    web: WebConfig = field(default_factory=WebConfig)
 
 
 @dataclass(slots=True)

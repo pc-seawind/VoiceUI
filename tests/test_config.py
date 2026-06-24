@@ -20,6 +20,7 @@ from voiceui.models import (
     MusicConfig,
     SearchConfig,
     SttConfig,
+    WebConfig,
     XiaomiMiotConfig,
 )
 
@@ -52,6 +53,10 @@ class ConfigTests(unittest.TestCase):
         self.assertFalse(config.cron.enabled)
         self.assertIsInstance(config.logging, LoggingConfig)
         self.assertTrue(config.logging.enabled)
+        self.assertIsInstance(config.web, WebConfig)
+        self.assertFalse(config.web.enabled)
+        self.assertEqual(config.web.host, "127.0.0.1")
+        self.assertEqual(config.web.port, 8765)
         self.assertTrue(config.conversation.input_gate_enabled)
         self.assertTrue(config.conversation.follow_up_gate_enabled)
         self.assertTrue(config.conversation.barge_in_gate_enabled)

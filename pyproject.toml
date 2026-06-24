@@ -47,6 +47,7 @@ all = [
 voiceui = "voiceui.__main__:main"
 voiceui-service = "voiceui.service:main"
 voiceui-wake-proximity = "voiceui.wake_proximity:main"
+voiceui-web = "voiceui.web:main"
 
 [tool.ruff]
 line-length = 100

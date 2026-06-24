@@ -151,6 +151,11 @@ LOG_SPECS: tuple[LogSpec, ...] = (
     LogSpec("wake_ack.played", "event", "wake_ack", "played"),
     LogSpec("weather.warmed_up", "event", "weather", "warmed_up"),
     LogSpec("weather.warmup_error", "event", "weather", "warmup_error"),
+    LogSpec("web.error", "event", "web", "error"),
+    LogSpec("web.started", "event", "web", "started"),
+    LogSpec("web.stopped", "event", "web", "stopped"),
+    LogSpec("web.text_received", "event", "web", "text_received"),
+    LogSpec("web.turn_completed", "event", "web", "turn_completed"),
 )
 
 _LOG_SPECS_BY_ID = {spec.log_id: spec for spec in LOG_SPECS}
