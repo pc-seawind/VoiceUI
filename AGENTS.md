@@ -22,18 +22,17 @@ this repository.
 - Continuous logs, such as wake scores and limiters, must default to off unless
   they are explicitly enabled by config or CLI flags.
 - Production service mode uses `stdout_mode="errors_and_voice_context"`:
-  non-error runtime logs go to the active turn `debug.log` during a turn and to
-  the root `debug.log` while idle, error logs still go to stdout, and stdout
-  also prints concise voice context lines.
+  non-error runtime logs go to the active run `debug.log`, error logs still go
+  to stdout, and stdout also prints concise voice context lines.
 
 ## Debug And Audio Dumps
 
 - Normal CLI/demo runs use one timestamped debug session directory:
   `debug_sessions/<run>/`.
-- Long-running production service runs use turn-scoped timestamped directories:
-  startup/idle logs go to `debug_sessions/debug.log`, and each actual wake/text
-  turn gets `debug_sessions/<turn>/`. Do not create empty timestamped directories
-  just because the daemon started or the web page opened.
+- Long-running production service runs use one timestamped run directory per
+  service process: `debug_sessions/<run>/`. Startup/idle logs and all wake/text
+  turn logs for that process go directly into that directory; do not create
+  per-turn subdirectories unless a new requirement explicitly asks for them.
 - Runtime debug logs go to the active session's `debug.log`.
 - Metadata is appended into one `metadata.json` inside the active session.
   Do not create one metadata file per audio file.
