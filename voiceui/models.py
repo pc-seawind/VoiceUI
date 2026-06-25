@@ -188,6 +188,7 @@ class TtsConfig:
 class ConversationConfig:
     follow_up_seconds: int = 10
     wake_speech_start_timeout_seconds: float = 8.0
+    post_tts_wake_cooldown_seconds: float = 0.0
     max_turns: int = 12
     barge_in_enabled: bool = False
     voice_termination_enabled: bool = True

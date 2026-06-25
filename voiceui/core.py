@@ -303,6 +303,7 @@ class VoiceAssistant:
         self._pending_barge_stt_extra_timings: dict[str, int] = {}
         self._standby_stt_handle: _StreamingSttHandle | None = None
         self._recent_spoken_responses: list[_SpokenResponse] = []
+        self._last_tts_completed_at: float | None = None
         self._turn_lock = threading.RLock()
         if audio_enabled:
             self._warm_up_runtime_modules()
@@ -1012,6 +1013,7 @@ class VoiceAssistant:
         self._duck_music("tts")
         try:
             self.tts.speak(text, stop_event=stop_event)
+            self._mark_tts_completed()
         finally:
             self._unduck_music("tts")
 
@@ -1022,9 +1024,14 @@ class VoiceAssistant:
     ) -> str:
         self._duck_music("tts")
         try:
-            return self.tts.speak_text_stream(text_chunks, stop_event=stop_event)
+            response = self.tts.speak_text_stream(text_chunks, stop_event=stop_event)
+            self._mark_tts_completed()
+            return response
         finally:
             self._unduck_music("tts")
+
+    def _mark_tts_completed(self) -> None:
+        self._last_tts_completed_at = time.monotonic()
 
     def _duck_music(self, reason: str) -> None:
         duck = getattr(self.music_controller, "duck", None)
@@ -1839,6 +1846,7 @@ class VoiceAssistant:
         return text, None
 
     def _wait_for_wake(self) -> tuple[WakeEvent, int]:
+        self._wait_for_wake_rearm_delay()
         wake_started = time.monotonic()
         wake = self.wake.wait(self.wake_audio)
         wake_ms = int((time.monotonic() - wake_started) * 1000)
@@ -1852,6 +1860,32 @@ class VoiceAssistant:
             latency_ms=wake_ms,
         )
         return wake, wake_ms
+
+    def _wait_for_wake_rearm_delay(self) -> None:
+        cooldown_seconds = max(
+            0.0,
+            float(
+                getattr(
+                    self.config.conversation,
+                    "post_tts_wake_cooldown_seconds",
+                    0.0,
+                )
+            ),
+        )
+        if cooldown_seconds <= 0.0 or self._last_tts_completed_at is None:
+            return
+        elapsed_seconds = time.monotonic() - self._last_tts_completed_at
+        remaining_seconds = cooldown_seconds - elapsed_seconds
+        if remaining_seconds <= 0.0:
+            return
+        log_event(
+            "session",
+            "wake_rearm_delay",
+            log_id="session.wake_rearm_delay",
+            seconds=f"{remaining_seconds:.3f}",
+            reason="post_tts",
+        )
+        time.sleep(remaining_seconds)
 
     def _start_wake_ack(self) -> _WakeAckHandle:
         result: dict[str, int] = {}
