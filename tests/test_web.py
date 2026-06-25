@@ -108,7 +108,7 @@ class WebConsoleTests(unittest.TestCase):
             try:
                 payload = json.dumps({"text": "hello web"}).encode("utf-8")
                 request = Request(
-                    console.url + "api/chat",
+                    console.url + "_rpc/chat",
                     data=payload,
                     headers={"Content-Type": "application/json"},
                     method="POST",

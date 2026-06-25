@@ -196,7 +196,7 @@ class VoiceUiWebConsole:
                         {
                             "name": audio_path.name,
                             "size": audio_path.stat().st_size,
-                            "url": f"/debug/audio/{path.name}/{audio_path.name}",
+                            "url": f"debug/audio/{path.name}/{audio_path.name}",
                         }
                     )
         return {
@@ -305,6 +305,8 @@ class _VoiceUiWebHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         path = parsed.path
+        if path.startswith("/_rpc/"):
+            path = "/api/" + path.removeprefix("/_rpc/")
         query = parse_qs(parsed.query)
         try:
             if path == "/":
@@ -344,8 +346,11 @@ class _VoiceUiWebHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
+        path = parsed.path
+        if path.startswith("/_rpc/"):
+            path = "/api/" + path.removeprefix("/_rpc/")
         try:
-            if parsed.path != "/api/chat":
+            if path != "/api/chat":
                 self.send_error(HTTPStatus.NOT_FOUND)
                 return
             length = int(self.headers.get("Content-Length", "0") or "0")
@@ -674,19 +679,19 @@ function renderLogs(){
   if ($('autoscroll').checked) $('logs').scrollTop = $('logs').scrollHeight;
 }
 async function loadStatus(){
-  const s = await fetch('/api/status').then(r=>r.json());
+  const s = await fetch('_rpc/status').then(r=>r.json());
   $('status').textContent = `session=${s.session || '-'} · input=${s.input_enabled ? 'enabled' : 'viewer-only'} · ${s.url}`;
 }
-async function loadConversation(){ records = (await fetch('/api/conversation?limit=300').then(r=>r.json())).records || []; renderConversation(); }
-async function loadLogs(){ logLines = (await fetch('/api/logs?tail=800').then(r=>r.json())).lines || []; renderLogs(); }
+async function loadConversation(){ records = (await fetch('_rpc/conversation?limit=300').then(r=>r.json())).records || []; renderConversation(); }
+async function loadLogs(){ logLines = (await fetch('_rpc/logs?tail=800').then(r=>r.json())).lines || []; renderLogs(); }
 async function loadDebug(){
-  const data = await fetch('/api/debug/sessions').then(r=>r.json());
+  const data = await fetch('_rpc/debug/sessions').then(r=>r.json());
   const sel = $('session-select');
   sel.innerHTML = (data.sessions || []).map(s => `<option value="${esc(s.name)}">${esc(s.name)} ${s.latest ? '(latest)' : ''}</option>`).join('');
   if (sel.value) await loadDebugDetail(sel.value);
 }
 async function loadDebugDetail(name){
-  const d = await fetch('/api/debug/session?name=' + encodeURIComponent(name)).then(r=>r.json());
+  const d = await fetch('_rpc/debug/session?name=' + encodeURIComponent(name)).then(r=>r.json());
   const turns = d.metadata?.turns || [];
   const audios = d.audio_files || [];
   $('debug-detail').innerHTML = `<p><span class="pill">${esc(d.path)}</span></p>` +
@@ -707,7 +712,7 @@ $('chat-form').addEventListener('submit', async (e) => {
   if (!text) return;
   $('chat-input').value = '';
   records.push({role:'user', text, timestamp:new Date().toISOString()}); renderConversation();
-  const res = await fetch('/api/chat', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({text})}).then(r=>r.json());
+  const res = await fetch('_rpc/chat', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({text})}).then(r=>r.json());
   if (res.ok) records.push({role:'assistant', text:res.reply || '', timestamp:new Date().toISOString()});
   else records.push({role:'assistant', text:'发送失败：' + (res.error || 'unknown'), timestamp:new Date().toISOString()});
   renderConversation(); setTimeout(loadConversation, 500); setTimeout(loadLogs, 500);
@@ -715,7 +720,7 @@ $('chat-form').addEventListener('submit', async (e) => {
 $('chat-input').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('chat-form').requestSubmit(); }});
 $('refresh-logs').onclick = loadLogs; $('refresh-debug').onclick = loadDebug; $('log-filter').oninput = renderLogs; $('session-select').onchange = e => loadDebugDetail(e.target.value);
 function connectEvents(){
-  const es = new EventSource('/api/events');
+  const es = new EventSource('_rpc/events');
   es.addEventListener('logs', e => { logLines.push(...(JSON.parse(e.data).lines || [])); logLines = logLines.slice(-1200); renderLogs(); });
   es.addEventListener('conversation', e => { records.push(...(JSON.parse(e.data).records || [])); records = records.slice(-500); renderConversation(); });
   es.onerror = () => { es.close(); setTimeout(connectEvents, 3000); };
