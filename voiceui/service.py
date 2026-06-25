@@ -34,7 +34,26 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--audio-dump",
         action="store_true",
-        help="Enable audio dumps. Disabled by default for production service runs.",
+        help=(
+            "Enable all audio dumps, including the long-running raw system input dump. "
+            "Disabled by default for production service runs."
+        ),
+    )
+    parser.add_argument(
+        "--voice-path-dump",
+        action="store_true",
+        help=(
+            "Enable per-turn voice-path dumps without opening an extra continuous "
+            "input stream. Useful on devices that cannot open the microphone twice."
+        ),
+    )
+    parser.add_argument(
+        "--system-input-dump",
+        action="store_true",
+        help=(
+            "Enable only the long-running raw system input dump. This may require "
+            "the input device to support multiple simultaneous readers."
+        ),
     )
     parser.add_argument(
         "--web",
@@ -54,6 +73,8 @@ def main(argv: list[str] | None = None) -> int:
             config,
             output_dir=Path(args.output_dir) if args.output_dir else None,
             audio_dump=args.audio_dump,
+            voice_path_dump=args.voice_path_dump,
+            system_input_dump=args.system_input_dump,
         )
         if args.web:
             config.web.enabled = True
@@ -79,6 +100,8 @@ def main(argv: list[str] | None = None) -> int:
             config=args.config,
             output_dir=config.debug.output_dir,
             audio_dump=args.audio_dump,
+            voice_path_dump=config.debug.voice_path_dump_enabled,
+            system_input_dump=config.debug.system_input_dump_enabled,
             web=bool(web_console),
             web_url=web_console.url if web_console is not None else "",
         )
@@ -109,15 +132,19 @@ def _prepare_service_config(
     *,
     output_dir: Path | None,
     audio_dump: bool,
+    voice_path_dump: bool = False,
+    system_input_dump: bool = False,
 ) -> None:
     config.input.mode = "audio"
     config.debug.enabled = True
     if output_dir is not None:
         config.debug.output_dir = str(output_dir)
-    config.debug.save_audio = bool(audio_dump)
+    enable_voice_path_dump = bool(audio_dump or voice_path_dump)
+    enable_system_input_dump = bool(audio_dump or system_input_dump)
+    config.debug.save_audio = bool(enable_voice_path_dump or enable_system_input_dump)
     config.debug.save_metadata = True
-    config.debug.system_input_dump_enabled = bool(audio_dump)
-    config.debug.voice_path_dump_enabled = bool(audio_dump)
+    config.debug.system_input_dump_enabled = enable_system_input_dump
+    config.debug.voice_path_dump_enabled = enable_voice_path_dump
 
 
 def _restore_service_log_files(assistant: VoiceAssistant) -> None:

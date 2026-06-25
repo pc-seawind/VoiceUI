@@ -23,6 +23,17 @@ voiceui-service --config auto --web --web-host 0.0.0.0 --web-port 8765
 
 Open `http://<host>:8765/` from the remote machine.
 
+Production service audio dumps are off unless explicitly requested. To collect
+per-turn wake / utterance / TTS dumps without opening a second microphone input
+stream, use:
+
+```bash
+voiceui-service --config auto --voice-path-dump
+```
+
+Use `--system-input-dump` only when the audio device supports a second
+continuous reader; `--audio-dump` enables both dump modes.
+
 On the home deployment, the existing `vhome.emox.space` Cloudflare tunnel
 also exposes the console under:
 
@@ -34,6 +45,16 @@ The `/voiceui/` path is proxied by the local vhome static server to
 `127.0.0.1:8765`. The browser API endpoints intentionally use the
 `_rpc/...` relative path alias so they do not collide with vhome's existing
 `/api/*` route for Visual Memory.
+
+The home deployment also mounts the NAS `Homespace/VoiceUI` share at
+`~/.voiceui-nas` and starts the service with:
+
+```bash
+voiceui-service --config auto --output-dir ~/.voiceui-nas/debug_sessions --voice-path-dump
+```
+
+This puts `debug.log`, `metadata.json`, `text_records/*.jsonl`, and per-turn
+`audio_dumps/*.wav` under the NAS-backed debug session tree.
 
 ## Standalone viewer / text assistant
 

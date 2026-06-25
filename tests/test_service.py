@@ -46,6 +46,40 @@ class ServiceTests(unittest.TestCase):
         self.assertTrue(config.debug.system_input_dump_enabled)
         self.assertTrue(config.debug.voice_path_dump_enabled)
 
+    def test_service_config_can_enable_voice_path_dumps_without_system_input_dump(
+        self,
+    ) -> None:
+        config = AssistantConfig(debug=DebugConfig(enabled=False, save_audio=False))
+
+        _prepare_service_config(
+            config,
+            output_dir=None,
+            audio_dump=False,
+            voice_path_dump=True,
+        )
+
+        self.assertTrue(config.debug.enabled)
+        self.assertTrue(config.debug.save_audio)
+        self.assertFalse(config.debug.system_input_dump_enabled)
+        self.assertTrue(config.debug.voice_path_dump_enabled)
+
+    def test_service_config_can_enable_system_input_dump_without_voice_path_dump(
+        self,
+    ) -> None:
+        config = AssistantConfig(debug=DebugConfig(enabled=False, save_audio=False))
+
+        _prepare_service_config(
+            config,
+            output_dir=None,
+            audio_dump=False,
+            system_input_dump=True,
+        )
+
+        self.assertTrue(config.debug.enabled)
+        self.assertTrue(config.debug.save_audio)
+        self.assertTrue(config.debug.system_input_dump_enabled)
+        self.assertFalse(config.debug.voice_path_dump_enabled)
+
 
 if __name__ == "__main__":
     unittest.main()
