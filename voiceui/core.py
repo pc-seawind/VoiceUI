@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import queue
 import re
 import threading
 import time
@@ -83,6 +84,8 @@ class _SelfEchoMatch:
 
 
 class _StreamingSttHandle:
+    _STOP = object()
+
     def __init__(
         self,
         stt,
@@ -109,12 +112,17 @@ class _StreamingSttHandle:
         self.result = ""
         self.error: Exception | None = None
         self._session = None
+        self._write_queue: queue.Queue[bytes | object] = queue.Queue()
         self._ready_event = threading.Event()
+        self._writer_done = threading.Event()
         self._started = False
         self._closed = False
+        self._abort_requested = False
         self._io_lock = threading.Lock()
+        self._state_lock = threading.Lock()
         self._start_lock = threading.Lock()
         self._thread: threading.Thread | None = None
+        self._writer_thread: threading.Thread | None = None
 
     def start(self) -> None:
         with self._start_lock:
@@ -128,6 +136,12 @@ class _StreamingSttHandle:
                 daemon=True,
             )
             self._thread.start()
+            self._writer_thread = threading.Thread(
+                target=self._write_loop,
+                name="voiceui-stt-stream-writer",
+                daemon=True,
+            )
+            self._writer_thread.start()
 
     def wait_ready(self, timeout: float | None = None) -> bool:
         if not self._started:
@@ -137,25 +151,37 @@ class _StreamingSttHandle:
     def write(self, pcm: bytes) -> None:
         if not pcm:
             return
-        session = self._session_or_raise()
-        with self._io_lock:
+        if not self._started:
+            self.start()
+        if self.error is not None and self._ready_event.is_set():
+            raise self.error
+        with self._state_lock:
             if self._closed:
                 raise RuntimeError("Streaming STT session is already closed.")
-            session.write(pcm)
-            self.sent_chunks += 1
+            # Do not call the cloud session from the VAD/audio capture thread.
+            # Some providers pace writes internally; blocking here can stop
+            # sounddevice reads long enough to create audible gaps in the
+            # captured utterance.
+            self._write_queue.put(pcm)
 
     def finish(self) -> str:
+        if not self._started:
+            self.start()
+        with self._state_lock:
+            if not self._closed:
+                self._closed = True
+                self._write_queue.put(self._STOP)
+        if self._writer_thread is not None:
+            self._writer_thread.join()
         session = self._session_or_raise()
         with self._io_lock:
-            if not self._closed:
-                try:
-                    self.result = session.finish()
-                except Exception as exc:
-                    self.error = exc
-                    raise
-                finally:
-                    self.completed_at = time.monotonic()
-                    self._closed = True
+            try:
+                self.result = session.finish()
+            except Exception as exc:
+                self.error = exc
+                raise
+            finally:
+                self.completed_at = time.monotonic()
         if self.error is not None:
             raise self.error
         return self.result
@@ -164,14 +190,20 @@ class _StreamingSttHandle:
         if not self._started:
             self.completed_at = time.monotonic()
             return
+        with self._state_lock:
+            self._abort_requested = True
+            if not self._closed:
+                self._closed = True
+                self._write_queue.put(self._STOP)
         if self.wait_ready(timeout=1.0) and self._session is not None:
             with self._io_lock:
-                if not self._closed:
+                if self.completed_at is None:
                     self._session.abort()
-                    self._closed = True
                     self.completed_at = time.monotonic()
         else:
             self.completed_at = time.monotonic()
+        if self._writer_thread is not None:
+            self._writer_thread.join(timeout=1.0)
 
     def ready_latency_ms(self) -> int | None:
         if self.requested_at is None or self.ready_at is None:
@@ -203,6 +235,29 @@ class _StreamingSttHandle:
             self.completed_at = time.monotonic()
         finally:
             self._ready_event.set()
+
+    def _write_loop(self) -> None:
+        try:
+            self.wait_ready(timeout=None)
+            if self.error is not None or self._session is None:
+                return
+            while True:
+                item = self._write_queue.get()
+                if item is self._STOP:
+                    return
+                if self._abort_requested:
+                    return
+                try:
+                    with self._io_lock:
+                        if self._abort_requested:
+                            return
+                        self._session.write(item)
+                    self.sent_chunks += 1
+                except Exception as exc:  # pylint: disable=broad-exception-caught
+                    self.error = exc
+                    return
+        finally:
+            self._writer_done.set()
 
 
 class VoiceAssistant:
@@ -1526,7 +1581,7 @@ class VoiceAssistant:
                 ),
             )
             stream_handle.start()
-            ready = stream_handle.wait_ready(stream_handle.policy.ready_timeout_seconds)
+            ready = stream_handle.wait_ready(timeout=0)
             start_ms = int((time.monotonic() - stt_start_reference) * 1000)
             log_event(
                 "stt",
@@ -2027,7 +2082,7 @@ class VoiceAssistant:
     ) -> tuple[Utterance, str, int, int, dict[str, int]]:
         vad_started = time.monotonic()
         stream_handle: _StreamingSttHandle | None = self._take_standby_streaming_stt()
-        ready = stream_handle.wait_ready(stream_handle.policy.ready_timeout_seconds)
+        ready = stream_handle.wait_ready(timeout=0)
         log_event(
             "stt",
             "streaming_started",

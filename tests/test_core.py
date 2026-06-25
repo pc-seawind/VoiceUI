@@ -192,6 +192,7 @@ class BlockingStreamingStt(FakeStreamingStt):
         super().__init__(transcript)
         self.session = BlockingStreamingSession(transcript, block_event)
 
+
 class RecordingChat:
     def __init__(self):
         self.calls: list[list[ChatMessage]] = []
@@ -1692,29 +1693,27 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(policy.buffer_frames, 25)
         self.assertAlmostEqual(policy.ready_timeout_seconds, 0.5)
 
-    def test_streaming_stt_handle_applies_synchronous_backpressure(self) -> None:
+    def test_streaming_stt_handle_writes_without_blocking_capture_thread(self) -> None:
         block_event = threading.Event()
         stt = BlockingStreamingStt("done", block_event)
         handle = _StreamingSttHandle(stt, 16000, max_buffered_chunks=1)
         handle.start()
         self.assertTrue(handle.wait_ready(timeout=1.0))
 
-        writer = threading.Thread(target=handle.write, args=(b"frame",))
         started = time.monotonic()
-        writer.start()
-        self.assertTrue(stt.session.write_started.wait(timeout=1.0))
-        writer.join(timeout=0.05)
-        self.assertTrue(writer.is_alive())
-        block_event.set()
-        writer.join(timeout=1.0)
+        handle.write(b"frame")
+        elapsed = time.monotonic() - started
 
-        self.assertFalse(writer.is_alive())
-        self.assertGreaterEqual(time.monotonic() - started, 0.05)
+        self.assertLess(elapsed, 0.05)
+        self.assertTrue(stt.session.write_started.wait(timeout=1.0))
+        self.assertEqual(stt.session.written, [])
+        block_event.set()
+
+        self.assertEqual(handle.finish(), "done")
         self.assertEqual(stt.session.written, [b"frame"])
         self.assertEqual(handle.sent_chunks, 1)
-        self.assertEqual(handle.finish(), "done")
 
-    def test_audio_turn_waits_for_streaming_stt_ready_before_vad(self) -> None:
+    def test_audio_turn_starts_vad_before_streaming_stt_is_ready(self) -> None:
         config = AssistantConfig(
             input=InputConfig(mode="audio"),
             wake=WakeConfig(engine="disabled"),
@@ -1752,8 +1751,8 @@ class CoreTests(unittest.TestCase):
 
         self.assertEqual(transcript, "streamed")
         self.assertEqual(reply.text, "reply 1")
-        self.assertTrue(vad_ready_state["ready"])
-
+        self.assertFalse(vad_ready_state["ready"])
+        self.assertEqual(streaming_stt.session.written, [b"streamed"])
 
     def test_audio_turn_uses_preopened_streaming_stt_handle(self) -> None:
         config = AssistantConfig(
