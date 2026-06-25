@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 
 from voiceui.audio import resolve_sounddevice_device, write_pcm16_wav
-from voiceui.logs import log_event
+from voiceui.logs import configure_log_files, log_event
 from voiceui.models import AudioConfig, DebugConfig
 
 
@@ -41,23 +41,42 @@ class AudioDumpManager:
     def elapsed_ms(self) -> int:
         return max(0, int((time.monotonic() - self.origin_mono) * 1000))
 
+    @property
+    def turn_scoped_sessions(self) -> bool:
+        return getattr(self.config, "session_scope", "run") == "turn"
+
     def begin_turn(self) -> int:
         with self._session_lock:
-            self._turn_index += 1
-            self._current_turn_index = self._turn_index
-            return self._current_turn_index
+            return self._begin_turn_locked()
 
     def ensure_turn(self) -> int:
         with self._session_lock:
             if self._current_turn_index is None:
-                self._turn_index += 1
-                self._current_turn_index = self._turn_index
+                return self._begin_turn_locked()
             return self._current_turn_index
 
     def end_turn(self, turn_index: int | None = None) -> None:
+        reset_log_path = False
         with self._session_lock:
             if turn_index is None or self._current_turn_index == turn_index:
                 self._current_turn_index = None
+                reset_log_path = self.turn_scoped_sessions
+        if reset_log_path:
+            configure_log_files(
+                debug_log_path=self._root_debug_log_path(),
+                text_record_dir=self.text_record_dir(),
+            )
+
+    def _begin_turn_locked(self) -> int:
+        self._turn_index += 1
+        self._current_turn_index = self._turn_index
+        if self.turn_scoped_sessions:
+            self._session_dir = _create_debug_session_dir(Path(self.config.output_dir))
+            configure_log_files(
+                debug_log_path=self._session_dir / "debug.log",
+                text_record_dir=self.text_record_dir(),
+            )
+        return self._current_turn_index
 
     @property
     def current_turn_index(self) -> int | None:
@@ -68,15 +87,32 @@ class AudioDumpManager:
         if not self.config.enabled:
             return None
         with self._session_lock:
+            if self.turn_scoped_sessions and self._current_turn_index is None:
+                # In turn-scoped mode, opening the web page or starting the
+                # service must not create an empty timestamped turn directory.
+                return self._session_dir
             if self._session_dir is None:
                 self._session_dir = _create_debug_session_dir(Path(self.config.output_dir))
             return self._session_dir
 
     def debug_log_path(self) -> Path | None:
+        if not self.config.enabled:
+            return None
+        if self.turn_scoped_sessions:
+            with self._session_lock:
+                session_dir = (
+                    self._session_dir if self._current_turn_index is not None else None
+                )
+            if session_dir is None:
+                return self._root_debug_log_path()
+            return session_dir / "debug.log"
         session_dir = self.debug_session_dir()
         if session_dir is None:
             return None
         return session_dir / "debug.log"
+
+    def _root_debug_log_path(self) -> Path:
+        return Path(self.config.output_dir) / "debug.log"
 
     def text_record_dir(self) -> Path | None:
         if not self.config.enabled:

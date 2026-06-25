@@ -170,6 +170,7 @@ class ConfigTests(unittest.TestCase):
         self.assertTrue(config.debug.system_input_dump_enabled)
         self.assertEqual(config.debug.system_input_dump_segment_seconds, 30)
         self.assertTrue(config.debug.voice_path_dump_enabled)
+        self.assertEqual(config.debug.session_scope, "run")
 
     def test_mify_config_loads_backend_values(self) -> None:
         config = load_config("config.mify.example.yaml")
@@ -284,6 +285,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.tts.playback_device, LINUX_XVF_DEVICE)
         self.assertFalse(config.conversation.barge_in_enabled)
         self.assertFalse(config.logging.continuous["wake.score"])
+        self.assertEqual(config.debug.session_scope, "run")
 
     def test_demo_configs_load(self) -> None:
         mock_config = load_config("config.demo.mock.yaml")

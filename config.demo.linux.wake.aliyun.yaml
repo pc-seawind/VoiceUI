@@ -159,6 +159,7 @@ debug:
   save_metadata: true
   system_input_dump_enabled: false
   system_input_dump_segment_seconds: 30
+  session_scope: run
   voice_path_dump_enabled: false
 
 web:

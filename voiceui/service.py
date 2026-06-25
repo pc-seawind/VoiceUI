@@ -143,6 +143,10 @@ def _prepare_service_config(
     enable_system_input_dump = bool(audio_dump or system_input_dump)
     config.debug.save_audio = bool(enable_voice_path_dump or enable_system_input_dump)
     config.debug.save_metadata = True
+    # Long-running service mode should create timestamped debug sessions only
+    # for actual user turns/wakeups, not for every daemon restart. Startup and
+    # idle logs stay in <output_dir>/debug.log.
+    config.debug.session_scope = "turn"
     config.debug.system_input_dump_enabled = enable_system_input_dump
     config.debug.voice_path_dump_enabled = enable_voice_path_dump
 

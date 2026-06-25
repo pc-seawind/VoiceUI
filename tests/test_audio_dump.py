@@ -6,6 +6,7 @@ import wave
 from pathlib import Path
 
 from voiceui.audio_dump import AudioDumpManager, _SegmentedWavDumpWriter, dump_filename
+from voiceui.logs import reset_logging
 from voiceui.models import DebugConfig
 
 
@@ -63,6 +64,38 @@ class AudioDumpTests(unittest.TestCase):
             )
             self.assertFalse((dump.path.parent / "voice_path").exists())
             self.assertFalse((dump.path.parent / "system_input").exists())
+
+
+    def test_turn_scoped_sessions_are_created_per_turn_not_on_startup(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = AudioDumpManager(
+                DebugConfig(enabled=True, output_dir=temp_dir, session_scope="turn")
+            )
+
+            self.assertEqual(manager.debug_log_path(), Path(temp_dir) / "debug.log")
+            self.assertIsNone(manager.debug_session_dir())
+            self.assertEqual(list(Path(temp_dir).iterdir()), [])
+
+            first_turn = manager.begin_turn()
+            first_session = manager.debug_session_dir()
+            self.assertIsNotNone(first_session)
+            assert first_session is not None
+            self.assertEqual(manager.debug_log_path(), first_session / "debug.log")
+            manager.end_turn(first_turn)
+            self.assertEqual(manager.debug_log_path(), Path(temp_dir) / "debug.log")
+
+            second_turn = manager.begin_turn()
+            second_session = manager.debug_session_dir()
+            self.assertIsNotNone(second_session)
+            assert second_session is not None
+            manager.end_turn(second_turn)
+
+            self.assertNotEqual(first_session, second_session)
+            self.assertEqual(
+                sorted(path.name for path in Path(temp_dir).iterdir() if path.is_dir()),
+                sorted([first_session.name, second_session.name, "text_records"]),
+            )
+        reset_logging()
 
     def test_segmented_writer_splits_system_input_dump(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

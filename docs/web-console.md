@@ -53,8 +53,11 @@ The home deployment also mounts the NAS `Homespace/VoiceUI` share at
 voiceui-service --config auto --output-dir ~/.voiceui-nas/debug_sessions --voice-path-dump
 ```
 
-This puts `debug.log`, `metadata.json`, `text_records/*.jsonl`, and per-turn
-`audio_dumps/*.wav` under the NAS-backed debug session tree.
+Production service mode uses turn-scoped debug sessions: startup/idle logs go to
+`<output-dir>/debug.log`, while each actual wake/text turn creates one timestamped
+`<output-dir>/<turn>/` directory containing that turn's `debug.log`, `metadata.json`,
+and `audio_dumps/*.wav`. `text_records/*.jsonl` stays directly under
+`<output-dir>/text_records/`.
 
 ## Standalone viewer / text assistant
 

@@ -13,13 +13,17 @@ from voiceui.web import VoiceUiWebConsole, read_text_records, start_web_console
 
 
 class _StubConfig:
-    def __init__(self, output_dir: str):
-        self.debug = DebugConfig(enabled=True, output_dir=output_dir)
+    def __init__(self, output_dir: str, *, session_scope: str = "run"):
+        self.debug = DebugConfig(
+            enabled=True,
+            output_dir=output_dir,
+            session_scope=session_scope,
+        )
 
 
 class _StubAssistant:
-    def __init__(self, output_dir: str):
-        self.config = _StubConfig(output_dir)
+    def __init__(self, output_dir: str, *, session_scope: str = "run"):
+        self.config = _StubConfig(output_dir, session_scope=session_scope)
         self.audio_dump = AudioDumpManager(self.config.debug)
         self.received: list[str] = []
 
@@ -96,6 +100,23 @@ class WebConsoleTests(unittest.TestCase):
             detail = console.debug_session(session.name)
             self.assertEqual(detail["metadata"]["turns"][0]["transcript"], "hi")
             self.assertEqual(len(detail["audio_files"]), 1)
+
+
+    def test_turn_scoped_console_logs_use_root_debug_log_when_idle(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            old_session = root / "20260624-120000"
+            old_session.mkdir()
+            (old_session / "debug.log").write_text("old session\n", encoding="utf-8")
+            (root / "debug.log").write_text("service idle\n", encoding="utf-8")
+            assistant = _StubAssistant(temp_dir, session_scope="turn")
+
+            console = VoiceUiWebConsole(assistant, debug_output_dir=root)
+
+            logs = console.logs()
+            self.assertEqual(logs["path"], str(root / "debug.log"))
+            self.assertEqual(logs["lines"], ["service idle"])
+            self.assertEqual(console.logs(session="latest")["lines"], ["old session"])
 
     def test_chat_endpoint_submits_text_and_records_user_input(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

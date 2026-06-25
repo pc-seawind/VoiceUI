@@ -307,6 +307,7 @@ class DebugConfig:
     system_input_dump_enabled: bool = True
     system_input_dump_segment_seconds: float = 30.0
     voice_path_dump_enabled: bool = True
+    session_scope: Literal["run", "turn"] = "run"
 
 
 @dataclass(slots=True)

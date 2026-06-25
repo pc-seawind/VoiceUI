@@ -159,14 +159,26 @@ class VoiceUiWebConsole:
         return self.debug_output_dir / "text_records"
 
     def logs(self, *, session: str | None = None, tail: int = 500) -> dict[str, Any]:
-        session_dir = self.resolve_session_dir(session)
-        path = session_dir / "debug.log" if session_dir is not None else None
+        path = self.resolve_log_path(session)
+        session_dir = self.resolve_session_dir(session) if session not in {None, ""} else None
         lines = tail_lines(path, max_lines=tail) if path is not None else []
         return {
             "session": session_dir.name if session_dir is not None else None,
             "path": str(path) if path is not None else None,
             "lines": lines,
         }
+
+    def resolve_log_path(self, session: str | None) -> Path | None:
+        if session in {None, "", "current"}:
+            assistant = self.assistant
+            manager = getattr(assistant, "audio_dump", None)
+            get_path = getattr(manager, "debug_log_path", None)
+            if callable(get_path):
+                path = get_path()
+                if path is not None:
+                    return Path(path)
+        session_dir = self.resolve_session_dir(session)
+        return session_dir / "debug.log" if session_dir is not None else None
 
     def conversation(self, *, limit: int = 200) -> dict[str, Any]:
         records = read_text_records(self.text_record_dir(), limit=limit)
@@ -259,18 +271,14 @@ class VoiceUiWebConsole:
         handler.send_header("Connection", "keep-alive")
         handler.end_headers()
 
-        session_dir = self.resolve_session_dir(session)
-        log_path = session_dir / "debug.log" if session_dir is not None else None
+        log_path = self.resolve_log_path(session)
         log_offset = log_path.stat().st_size if log_path is not None and log_path.exists() else 0
         text_offsets = {
             path: path.stat().st_size for path in sorted(self.text_record_dir().glob("*.jsonl"))
         }
         while True:
             try:
-                current_session_dir = self.resolve_session_dir(session)
-                current_log_path = (
-                    current_session_dir / "debug.log" if current_session_dir is not None else None
-                )
+                current_log_path = self.resolve_log_path(session)
                 if current_log_path != log_path:
                     log_path = current_log_path
                     log_offset = 0

@@ -33,6 +33,7 @@ class ServiceTests(unittest.TestCase):
             self.assertEqual(config.debug.output_dir, temp_dir)
             self.assertFalse(config.debug.save_audio)
             self.assertTrue(config.debug.save_metadata)
+            self.assertEqual(config.debug.session_scope, "turn")
             self.assertFalse(config.debug.system_input_dump_enabled)
             self.assertFalse(config.debug.voice_path_dump_enabled)
 
