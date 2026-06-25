@@ -481,32 +481,6 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(vad_saw_ack_finished, [False])
         self.assertTrue(wake_ack.finished.is_set())
 
-    def test_post_tts_wake_cooldown_delays_rearming_wake(self) -> None:
-        config = AssistantConfig(
-            input=InputConfig(mode="audio"),
-            wake=WakeConfig(engine="disabled"),
-            conversation=ConversationConfig(
-                follow_up_seconds=0,
-                post_tts_wake_cooldown_seconds=0.5,
-            ),
-            llm=LlmConfig(system_prompt="system"),
-        )
-        with patch("voiceui.core.warm_weather_cache"):
-            assistant = VoiceAssistant(config)
-        assistant._last_tts_completed_at = time.monotonic()
-
-        with (
-            patch("voiceui.core.time.sleep") as sleep,
-            contextlib.redirect_stdout(io.StringIO()) as output,
-        ):
-            assistant._wait_for_wake_rearm_delay()
-
-        sleep.assert_called_once()
-        delay = sleep.call_args.args[0]
-        self.assertGreater(delay, 0.0)
-        self.assertLessEqual(delay, 0.5)
-        self.assertIn("event=wake_rearm_delay", output.getvalue())
-
     def test_run_conversation_keeps_context_for_follow_up_without_second_wake(self) -> None:
         config = AssistantConfig(
             input=InputConfig(mode="audio"),

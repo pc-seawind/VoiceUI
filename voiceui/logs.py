@@ -76,7 +76,6 @@ LOG_SPECS: tuple[LogSpec, ...] = (
     LogSpec("session.follow_up_timeout", "event", "session", "follow_up_timeout"),
     LogSpec("session.listening_for_follow_up", "event", "session", "listening_for_follow_up"),
     LogSpec("session.processing_barge_in", "event", "session", "processing_barge_in"),
-    LogSpec("session.wake_rearm_delay", "event", "session", "wake_rearm_delay"),
     LogSpec("session.wake_speech_timeout", "event", "session", "wake_speech_timeout"),
     LogSpec("stt.completed", "event", "stt", "completed"),
     LogSpec("stt.streaming_config", "event", "stt", "streaming_config", False),

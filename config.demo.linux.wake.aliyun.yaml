@@ -111,13 +111,10 @@ tts:
   limiter_threshold: 0.92
 
 conversation:
-  # Disable follow-up while validating the Linux XVF3800 path: the current room
-  # can re-trigger VAD from short echo/noise fragments after TTS playback.
-  follow_up_seconds: 0
+  # After a wake word, stay in conversation mode and listen for follow-up
+  # speech on the command/AEC channel before returning to wake monitoring.
+  follow_up_seconds: 10
   wake_speech_start_timeout_seconds: 5
-  # The wake channel uses the raw XVF3800 mic path, so immediately re-arming wake
-  # after our own TTS can re-detect the playback tail and play "我在" again.
-  post_tts_wake_cooldown_seconds: 1.2
   max_turns: 12
   max_spoken_reply_chars: 28
   barge_in_enabled: false
