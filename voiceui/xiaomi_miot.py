@@ -247,7 +247,9 @@ class XiaomiMiotClient:
         device: str = "",
         device_class: str = "",
         action: str = "",
+        property_query: str = "",
         value: Any = None,
+        relative_delta: Any = None,
         dry_run: bool = False,
     ) -> dict[str, Any]:
         devices = list(self.get_devices().values())
@@ -258,7 +260,9 @@ class XiaomiMiotClient:
             device=device,
             device_class=device_class,
             action=action,
+            property_query=property_query,
             value=value,
+            relative_delta=relative_delta,
         )
         unsupported_operation = _unsupported_miot_operation_response(command)
         if unsupported_operation is not None:
@@ -354,6 +358,7 @@ class XiaomiMiotClient:
                 "device": _public_device(target_device),
                 "query": command,
             }
+        control = self._resolve_relative_control_value(str(target_device["did"]), control)
         if dry_run:
             _log_miot_resolver(command, "resolved", 1, reason="dry_run")
             return {
@@ -362,6 +367,7 @@ class XiaomiMiotClient:
                 "device": _public_device(target_device),
                 "iid": control["iid"],
                 "target_value": control["value"],
+                "previous_value": control.get("previous_value"),
                 "action": command.get("action"),
                 "item": control["item"],
             }
@@ -378,8 +384,26 @@ class XiaomiMiotClient:
             "decision": "executed",
             "device": _public_device(target_device),
             "target_value": control["value"],
+            "previous_value": control.get("previous_value"),
             "action": command.get("action"),
             "item": control["item"],
+        }
+
+    def _resolve_relative_control_value(
+        self,
+        did: str,
+        control: dict[str, Any],
+    ) -> dict[str, Any]:
+        relative_delta = control.get("relative_delta")
+        if not isinstance(relative_delta, (int, float)) or isinstance(relative_delta, bool):
+            return control
+        item = control.get("item") if isinstance(control.get("item"), dict) else {}
+        current = self.send_get_rpc(did, str(control["iid"])).get("value")
+        target_value = _apply_relative_numeric_delta(current, float(relative_delta), item)
+        return {
+            **control,
+            "value": target_value,
+            "previous_value": current,
         }
 
     def _execute_group_control(
@@ -416,12 +440,14 @@ class XiaomiMiotClient:
                 if control is None:
                     failures.append({"device": public_device, "reason": "unsupported"})
                     continue
+                control = self._resolve_relative_control_value(str(device["did"]), control)
                 if dry_run:
                     successes.append(
                         {
                             "device": public_device,
                             "iid": control["iid"],
                             "target_value": control["value"],
+                            "previous_value": control.get("previous_value"),
                             "item": control["item"],
                         }
                     )
@@ -437,6 +463,7 @@ class XiaomiMiotClient:
                         **result,
                         "device": public_device,
                         "target_value": control["value"],
+                        "previous_value": control.get("previous_value"),
                         "item": control["item"],
                     }
                 )
@@ -1141,7 +1168,9 @@ class XiaomiMiotController:
             device=str(arguments.get("device") or ""),
             device_class=str(arguments.get("device_class") or ""),
             action=str(arguments.get("action") or ""),
+            property_query=str(arguments.get("property") or arguments.get("property_query") or ""),
             value=arguments.get("value"),
+            relative_delta=arguments.get("relative_delta"),
             dry_run=_optional_bool(arguments.get("dry_run"), default=False),
         )
 
@@ -1444,9 +1473,16 @@ def _miot_command_from_arguments(
     device: str,
     device_class: str,
     action: str,
-    value: Any,
+    value: Any = None,
+    property_query: str = "",
+    relative_delta: Any = None,
 ) -> dict[str, Any]:
     request_text = str(request or "")
+    inferred_relative_delta = (
+        relative_delta
+        if relative_delta is not None
+        else _infer_relative_control_delta(request_text)
+    )
     inferred_value = value if value is not None else _infer_control_value(request_text)
     inferred_action = _infer_action(action, request_text, inferred_value)
     command = {
@@ -1456,8 +1492,10 @@ def _miot_command_from_arguments(
         "device": str(device or "").strip(),
         "device_class": _infer_device_class(device_class, device, request_text),
         "action": inferred_action,
-        "property": _infer_control_property_query(request_text, inferred_value, inferred_action),
+        "property": str(property_query or "").strip()
+        or _infer_control_property_query(request_text, inferred_value, inferred_action),
         "value": inferred_value,
+        "relative_delta": _optional_float(inferred_relative_delta),
     }
     if not command["area"] and request_text:
         command["area"] = _infer_area(devices, request_text)
@@ -1698,6 +1736,11 @@ def _select_set_value_property(
 ) -> dict[str, Any] | None:
     action = str(command.get("action") or "")
     value = command.get("value")
+    relative_delta = command.get("relative_delta")
+    has_relative_delta = isinstance(relative_delta, (int, float)) and not isinstance(
+        relative_delta,
+        bool,
+    )
     if action != "set_value" and (value is None or isinstance(value, bool)):
         return None
 
@@ -1707,7 +1750,7 @@ def _select_set_value_property(
             return selected_value_list
         return None
 
-    if not isinstance(value, (int, float)) or isinstance(value, bool):
+    if (not isinstance(value, (int, float)) or isinstance(value, bool)) and not has_relative_delta:
         return None
 
     property_query = _normalize_text(str(command.get("property") or command.get("request") or ""))
@@ -1722,14 +1765,15 @@ def _select_set_value_property(
         if value_range is None:
             continue
         coerced_value = _coerce_numeric_control_value(value, item)
-        if coerced_value is None:
+        if coerced_value is None and not has_relative_delta:
             continue
-        minimum = value_range.get("min")
-        maximum = value_range.get("max")
-        if isinstance(minimum, (int, float)) and coerced_value < minimum:
-            continue
-        if isinstance(maximum, (int, float)) and coerced_value > maximum:
-            continue
+        if not has_relative_delta:
+            minimum = value_range.get("min")
+            maximum = value_range.get("max")
+            if isinstance(minimum, (int, float)) and coerced_value < minimum:
+                continue
+            if isinstance(maximum, (int, float)) and coerced_value > maximum:
+                continue
 
         item_text = _normalize_text(
             " ".join(
@@ -1757,7 +1801,10 @@ def _select_set_value_property(
         key=lambda candidate: candidate[0],
         reverse=True,
     )[0]
-    return {"iid": item["iid"], "value": coerced_value, "item": item}
+    result = {"iid": item["iid"], "value": coerced_value, "item": item}
+    if has_relative_delta:
+        result["relative_delta"] = float(relative_delta)
+    return result
 
 
 def _select_value_list_property_for_text(
@@ -1829,12 +1876,43 @@ def _value_list_option_score(value_query: str, option_text: str) -> int:
 
 
 def _coerce_numeric_control_value(value: int | float, item: dict[str, Any]) -> int | float | None:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return None
     value_format = str(item.get("format") or "")
     if value_format.startswith(("int", "uint")):
         return int(round(float(value)))
     if value_format in ("float", "double"):
         return float(value)
     return None
+
+
+def _apply_relative_numeric_delta(
+    current: Any,
+    delta: float,
+    item: dict[str, Any],
+) -> int | float:
+    try:
+        target = float(current) + delta
+    except (TypeError, ValueError) as exc:
+        raise XiaomiMiotError(
+            "Cannot apply relative MIoT control without readable current value"
+        ) from exc
+
+    value_range = item.get("value_range") if isinstance(item.get("value_range"), dict) else {}
+    minimum = value_range.get("min")
+    maximum = value_range.get("max")
+    step = value_range.get("step")
+    if isinstance(minimum, (int, float)) and isinstance(step, (int, float)) and step > 0:
+        target = float(minimum) + round((target - float(minimum)) / float(step)) * float(step)
+    if isinstance(minimum, (int, float)):
+        target = max(float(minimum), target)
+    if isinstance(maximum, (int, float)):
+        target = min(float(maximum), target)
+
+    value_format = str(item.get("format") or "")
+    if value_format.startswith(("int", "uint")):
+        return int(round(target))
+    return int(target) if target.is_integer() else target
 
 
 def _select_value_list_property(items: dict[str, Any], action: str) -> dict[str, Any] | None:
@@ -2383,6 +2461,22 @@ def _infer_control_value(request: str) -> Any:
     return None
 
 
+def _infer_relative_control_delta(request: str) -> float | None:
+    text = _normalize_text(request)
+    decrease_terms = ("降低", "降", "调低", "调小", "低一点", "小一点")
+    increase_terms = ("升高", "提高", "调高", "调大", "高一点", "大一点")
+    sign = -1 if any(term in text for term in decrease_terms) else 0
+    if sign == 0 and any(term in text for term in increase_terms):
+        sign = 1
+    if sign == 0:
+        return None
+
+    number_match = re.search(r"(\d+(?:\.\d+)?)\s*(?:度|℃|%|百分比)?", str(request or ""))
+    if number_match is None:
+        return None
+    return sign * float(number_match.group(1))
+
+
 def _infer_control_property_query(request: str, value: Any, action: str) -> str:
     text = _normalize_text(request)
     if isinstance(value, str):
@@ -2757,6 +2851,15 @@ def _optional_bool(value: Any, default: bool) -> bool:
         if lowered in ("false", "0", "no", "off"):
             return False
     return bool(value)
+
+
+def _optional_float(value: Any) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _safe_int(value: Any, default: int) -> int:

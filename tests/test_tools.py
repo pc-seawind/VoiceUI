@@ -551,6 +551,71 @@ class ToolsTests(unittest.TestCase):
         self.assertEqual(tool_calls[1]["device_class"], "aircondition")
         self.assertEqual(tool_calls[1]["action"], "turn_off")
 
+    def test_tool_runner_preserves_ambiguous_miot_temperature_adjustment(self) -> None:
+        tool_calls: list[dict] = []
+
+        def control_device(arguments: dict) -> dict:
+            tool_calls.append(dict(arguments))
+            return {
+                "status": "verified",
+                "action": arguments["action"],
+                "device": {
+                    "name": arguments["device"],
+                    "room_name": arguments["area"],
+                    "device_class": arguments["device_class"],
+                },
+                "target_value": 25.5,
+            }
+
+        runner = VoiceToolRunner(
+            chat=NoToolChat(),
+            tools=[
+                ToolDefinition(
+                    name="xiaomi_miot_control_device",
+                    description="Control Xiaomi device",
+                    parameters={"type": "object", "properties": {}},
+                    handler=control_device,
+                )
+            ],
+        )
+        runner._last_miot_ambiguity = {  # pylint: disable=protected-access
+            "candidates": [
+                {
+                    "name": "书房空调",
+                    "room_name": "书房",
+                    "device_class": "aircondition",
+                },
+                {
+                    "name": "客厅空调",
+                    "room_name": "客厅",
+                    "device_class": "aircondition",
+                },
+            ],
+            "query": {
+                "request": "空调温度降低0.5度",
+                "device": "空调",
+                "device_class": "aircondition",
+                "action": "set_value",
+                "property": "temperature",
+                "value": 0.5,
+                "relative_delta": -0.5,
+            },
+            "created_at": time.monotonic(),
+            "ttl_seconds": 30,
+        }
+
+        response = runner.complete([ChatMessage(role="user", content="书房的空调。")])
+
+        self.assertEqual(response, "好的，书房空调已设置。")
+        self.assertEqual(tool_calls[0]["request"], "书房的空调。")
+        self.assertEqual(tool_calls[0]["area"], "书房")
+        self.assertEqual(tool_calls[0]["device"], "书房空调")
+        self.assertEqual(tool_calls[0]["device_class"], "aircondition")
+        self.assertEqual(tool_calls[0]["action"], "set_value")
+        self.assertEqual(tool_calls[0]["property"], "temperature")
+        self.assertEqual(tool_calls[0]["value"], 0.5)
+        self.assertEqual(tool_calls[0]["relative_delta"], -0.5)
+
     def test_tool_runner_ignores_expired_ambiguous_miot_context(self) -> None:
         chat = MiotAmbiguousToolChat()
         tool_calls: list[dict] = []

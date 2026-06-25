@@ -850,6 +850,9 @@ class VoiceToolRunner:
         }
         if tool_name == "xiaomi_miot_control_device":
             arguments["action"] = effective_action
+            for key in ("property", "value", "relative_delta"):
+                if key in query and query.get(key) is not None:
+                    arguments[key] = query[key]
         if selected_candidate is not None:
             if selected_candidate.get("name"):
                 arguments["device"] = str(selected_candidate["name"])
@@ -1730,9 +1733,20 @@ def create_xiaomi_miot_control_device_tool(miot: XiaomiMiotController) -> ToolDe
                     "type": "string",
                     "description": "Desired action, e.g. 打开, 关闭, turn_on, turn_off.",
                 },
+                "property": {
+                    "type": "string",
+                    "description": "Optional target property hint, e.g. temperature or brightness.",
+                },
                 "value": {
                     "type": ["string", "number", "boolean", "array", "object"],
                     "description": "Optional explicit target value. Omit for ordinary on/off.",
+                },
+                "relative_delta": {
+                    "type": "number",
+                    "description": (
+                        "Optional signed relative numeric change, e.g. -0.5 for lowering "
+                        "a target temperature by 0.5 degrees."
+                    ),
                 },
                 "dry_run": {
                     "type": "boolean",

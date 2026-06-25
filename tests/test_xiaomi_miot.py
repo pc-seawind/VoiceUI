@@ -499,6 +499,62 @@ class XiaomiMiotTests(unittest.TestCase):
         self.assertEqual(result["target_value"], 26)
         send_ctrl.assert_called_once_with("did-ac", "prop.0.2.2", 26, verify=True)
 
+    def test_control_device_lowers_temperature_relatively(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            client = XiaomiMiotClient(
+                XiaomiMiotConfig(
+                    token_file=str(Path(temp_dir) / "token.json"),
+                    uuid_file=str(Path(temp_dir) / "uuid"),
+                    cache_dir=str(Path(temp_dir) / "cache"),
+                    control_verify_delay_seconds=0,
+                ),
+                token=XiaomiMiotToken(access_token="access-secret"),
+            )
+        devices = {
+            "did-ac": {
+                "did": "did-ac",
+                "name": "客厅空调",
+                "room_name": "客厅",
+                "device_class": "aircondition",
+                "online": True,
+                "urn": "urn:test",
+            }
+        }
+        spec = {
+            "items": {
+                "prop.0.2.4": {
+                    "iid": "prop.0.2.4",
+                    "kind": "property",
+                    "name": "target-temperature",
+                    "description": "Air Conditioner - Target Temperature",
+                    "service": "Air Conditioner",
+                    "format": "float",
+                    "readable": True,
+                    "writeable": True,
+                    "unit": "celsius",
+                    "value_range": {"min": 16, "max": 31, "step": 0.5},
+                }
+            }
+        }
+
+        with patch.object(client, "get_devices", return_value=devices):
+            with patch.object(client, "get_device_spec", return_value=spec):
+                with patch.object(client, "send_get_rpc", return_value={"value": 26.0}):
+                    with patch.object(client, "send_ctrl_rpc") as send_ctrl:
+                        send_ctrl.return_value = {
+                            "status": "verified",
+                            "did": "did-ac",
+                            "iid": "prop.0.2.4",
+                            "readback_value": 25.5,
+                        }
+                        result = client.control_device(request="把客厅空调温度降低0.5度")
+
+        self.assertEqual(result["status"], "verified")
+        self.assertEqual(result["action"], "set_value")
+        self.assertEqual(result["previous_value"], 26.0)
+        self.assertEqual(result["target_value"], 25.5)
+        send_ctrl.assert_called_once_with("did-ac", "prop.0.2.4", 25.5, verify=True)
+
     def test_control_device_sets_brightness_value(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             client = XiaomiMiotClient(
