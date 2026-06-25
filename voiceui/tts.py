@@ -16,7 +16,12 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 
 from voiceui.aliyun import get_aliyun_nls_token
-from voiceui.audio import apply_pcm16_gain_db, resolve_sounddevice_device, write_pcm16_wav
+from voiceui.audio import (
+    apply_pcm16_gain_db,
+    apply_pcm16_gain_db_limited,
+    resolve_sounddevice_device,
+    write_pcm16_wav,
+)
 
 try:
     import sounddevice as _sounddevice  # type: ignore[import-untyped]
@@ -1403,11 +1408,10 @@ def _play_pcm_stream(
                         resampler=resampler,
                     )
                     converter_logged = True
-                if playback_gain_db:
-                    playable_chunk = apply_pcm16_gain_db(playable_chunk, playback_gain_db)
                 if limiter_enabled:
-                    playable_chunk, peak, gain = _limit_pcm16_audio(
+                    playable_chunk, peak, gain = apply_pcm16_gain_db_limited(
                         playable_chunk,
+                        playback_gain_db,
                         limiter_threshold,
                     )
                     if gain < 0.999 and not limiter_logged:
@@ -1420,6 +1424,8 @@ def _play_pcm_stream(
                             gain=f"{gain:.3f}",
                         )
                         limiter_logged = True
+                elif playback_gain_db:
+                    playable_chunk = apply_pcm16_gain_db(playable_chunk, playback_gain_db)
                 if stream is None:
                     stream = sd.RawOutputStream(
                         samplerate=selected_rate,

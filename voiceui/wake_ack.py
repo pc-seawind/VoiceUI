@@ -4,9 +4,13 @@ import wave
 from importlib import resources
 from pathlib import Path
 
-from voiceui.audio import apply_pcm16_gain_db, resolve_sounddevice_device
+from voiceui.audio import (
+    apply_pcm16_gain_db,
+    apply_pcm16_gain_db_limited,
+    resolve_sounddevice_device,
+)
 from voiceui.audio_dump import current_audio_dump_manager
-from voiceui.logs import log_event
+from voiceui.logs import log_continuous, log_event
 from voiceui.models import WakeAckConfig
 
 _DEFAULT_ACK_RESOURCE = "wake_ack_wo_zai.wav"
@@ -36,6 +40,8 @@ class WavWakeAckPlayer(WakeAckPlayer):
             channels=channels,
             device=self._device(),
             playback_gain_db=self.config.playback_gain_db,
+            limiter_enabled=self.config.limiter_enabled,
+            limiter_threshold=self.config.limiter_threshold,
         )
 
     def _device(self) -> str | int | None:
@@ -81,6 +87,8 @@ def _play_pcm16(
     channels: int,
     device: str | int | None = None,
     playback_gain_db: float = 0.0,
+    limiter_enabled: bool = True,
+    limiter_threshold: float = 0.92,
 ) -> None:
     try:
         import sounddevice as sd  # type: ignore[import-untyped]
@@ -110,7 +118,22 @@ def _play_pcm16(
             source_channels=channels,
             target_channels=playback_channels,
         )
-    if playback_gain_db:
+    if limiter_enabled:
+        pcm, peak, gain = apply_pcm16_gain_db_limited(
+            pcm,
+            playback_gain_db,
+            limiter_threshold,
+        )
+        if gain < 0.999:
+            log_continuous(
+                "wake_ack",
+                "limiter",
+                log_id="wake_ack.limiter",
+                peak=f"{peak:.3f}",
+                threshold=f"{float(limiter_threshold):.3f}",
+                gain=f"{gain:.3f}",
+            )
+    elif playback_gain_db:
         pcm = apply_pcm16_gain_db(pcm, playback_gain_db)
     if playback_sample_rate != sample_rate or playback_channels != channels:
         log_event(

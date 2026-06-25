@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import array
 import math
 import re
+import sys
 import threading
 import time
 import wave
@@ -396,6 +398,58 @@ def apply_pcm16_gain_db(pcm: bytes, gain_db: float) -> bytes:
     if len(pcm) % 2:
         output[-1] = pcm[-1]
     return bytes(output)
+
+
+def apply_pcm16_gain_db_limited(
+    pcm: bytes,
+    gain_db: float = 0.0,
+    threshold: float = 0.92,
+) -> tuple[bytes, float, float]:
+    """Apply gain and peak limiting before the final int16 clip.
+
+    Returns (processed_pcm, pre_limiter_peak, limiter_gain).  The peak is
+    normalized against int16 full scale after the requested gain, before the
+    limiter gain is applied.  Unlike apply_pcm16_gain_db(), this avoids
+    clipping first and trying to limit an already flattened waveform later.
+    """
+
+    if not pcm:
+        return pcm, 0.0, 1.0
+
+    playable_len = len(pcm) - (len(pcm) % 2)
+    if playable_len <= 0:
+        return pcm, 0.0, 1.0
+
+    samples = array.array("h")
+    samples.frombytes(pcm[:playable_len])
+    if sys.byteorder != "little":
+        samples.byteswap()
+    if not samples:
+        return pcm, 0.0, 1.0
+
+    gain_multiplier = math.pow(10.0, gain_db / 20.0) if gain_db else 1.0
+    scaled_peak = max((abs(sample * gain_multiplier) for sample in samples), default=0.0)
+    if scaled_peak <= 0.0:
+        return pcm, 0.0, 1.0
+
+    limit = _normalized_pcm16_limiter_threshold(threshold)
+    limit_sample = max(1, int(round(32767 * limit)))
+    limiter_gain = min(1.0, limit_sample / scaled_peak)
+    total_gain = gain_multiplier * limiter_gain
+
+    if gain_db == 0 and limiter_gain >= 0.999999:
+        return pcm, scaled_peak / 32768.0, 1.0
+
+    for index, sample in enumerate(samples):
+        processed = int(round(sample * total_gain))
+        samples[index] = max(-32768, min(32767, processed))
+    if sys.byteorder != "little":
+        samples.byteswap()
+    return samples.tobytes() + pcm[playable_len:], scaled_peak / 32768.0, limiter_gain
+
+
+def _normalized_pcm16_limiter_threshold(threshold: float) -> float:
+    return max(0.05, min(1.0, float(threshold)))
 
 
 def write_pcm16_wav(

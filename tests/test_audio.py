@@ -7,6 +7,7 @@ from pathlib import Path
 from voiceui.audio import (
     RawAudioRecording,
     apply_pcm16_gain_db,
+    apply_pcm16_gain_db_limited,
     pcm16_rms,
     read_pcm16_wav,
     resolve_sounddevice_device,
@@ -138,6 +139,18 @@ class AudioTests(unittest.TestCase):
         pcm = b"\x01\x00\x02\x00"
 
         self.assertIs(apply_pcm16_gain_db(pcm, 0.0), pcm)
+
+    def test_apply_pcm16_gain_db_limited_applies_gain_before_final_clip(self) -> None:
+        samples = [20000, -20000, 1000]
+        pcm = b"".join(sample.to_bytes(2, "little", signed=True) for sample in samples)
+
+        limited, peak, gain = apply_pcm16_gain_db_limited(pcm, 6.0, 0.92)
+
+        decoded = _decode_pcm16(limited)
+        self.assertGreater(peak, 1.0)
+        self.assertLess(gain, 1.0)
+        self.assertLessEqual(max(abs(sample) for sample in decoded), 30146)
+        self.assertLess(abs(decoded[2]), 1600)
 
     def test_write_and_read_pcm16_wav(self) -> None:
         samples = [100, -100]

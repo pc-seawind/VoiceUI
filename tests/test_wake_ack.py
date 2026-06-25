@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import sys
+import types
 import unittest
 import wave
+from unittest.mock import patch
 
 from voiceui.models import WakeAckConfig
 from voiceui.wake_ack import (
     DisabledWakeAckPlayer,
     WavWakeAckPlayer,
     _convert_pcm16_channels,
+    _play_pcm16,
     _resample_pcm16,
     _select_output_format,
     create_wake_ack_player,
@@ -78,6 +82,50 @@ class WakeAckTests(unittest.TestCase):
         )
 
         self.assertEqual(converted, b"\x01\x00\x01\x00\x02\x00\x02\x00")
+
+    def test_play_pcm16_applies_limiter_safe_gain(self) -> None:
+        written: list[bytes] = []
+
+        class FakeStream:
+            def __init__(self, **kwargs):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def write(self, data: bytes):
+                written.append(data)
+
+        fake_sd = types.SimpleNamespace(
+            RawOutputStream=FakeStream,
+            check_output_settings=lambda **_kwargs: None,
+            query_devices=lambda *_args, **_kwargs: {
+                "default_samplerate": 24000,
+                "max_output_channels": 1,
+            },
+        )
+        samples = [17344, -17344, 1000]
+        pcm = b"".join(sample.to_bytes(2, "little", signed=True) for sample in samples)
+
+        with patch.dict(sys.modules, {"sounddevice": fake_sd}):
+            _play_pcm16(
+                pcm,
+                sample_rate=24000,
+                channels=1,
+                playback_gain_db=12.0,
+                limiter_enabled=True,
+                limiter_threshold=0.92,
+            )
+
+        played = [
+            int.from_bytes(written[0][index : index + 2], "little", signed=True)
+            for index in range(0, len(written[0]), 2)
+        ]
+        self.assertLessEqual(max(abs(sample) for sample in played), 30146)
+        self.assertLess(abs(played[2]), 2000)
 
 
 if __name__ == "__main__":

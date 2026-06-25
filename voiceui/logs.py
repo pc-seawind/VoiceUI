@@ -109,6 +109,7 @@ LOG_SPECS: tuple[LogSpec, ...] = (
     LogSpec("wake.debug_enabled", "event", "wake", "debug_enabled", False),
     LogSpec("wake.detected", "event", "wake", "detected"),
     LogSpec("wake.detected_debug", "event", "wake", "detected_debug", False),
+    LogSpec("wake_ack.limiter", "continuous", "wake_ack", "limiter", False),
     LogSpec("wake.loading", "event", "wake", "loading"),
     LogSpec("wake.monitor_done", "event", "wake", "monitor_done"),
     LogSpec("wake.warm_up_error", "event", "wake", "warm_up_error"),

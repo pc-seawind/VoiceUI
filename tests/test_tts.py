@@ -652,5 +652,45 @@ class TtsTests(unittest.TestCase):
         amplified = int.from_bytes(written[0], "little", signed=True)
         self.assertGreater(amplified, 1900)
 
+    def test_play_pcm_stream_limiter_safe_gain_avoids_flattened_peak(self) -> None:
+        written: list[bytes] = []
+
+        class FakeStream:
+            def __init__(self, **kwargs):
+                pass
+
+            def start(self):
+                return None
+
+            def write(self, data: bytes):
+                written.append(data)
+
+            def stop(self):
+                return None
+
+            def close(self):
+                return None
+
+        samples = [20000, -20000, 1000]
+        pcm = b"".join(sample.to_bytes(2, "little", signed=True) for sample in samples)
+
+        with _install_fake_sounddevice(FakeStream):
+            with contextlib.redirect_stdout(io.StringIO()):
+                _play_pcm_stream(
+                    iter([pcm]),
+                    sample_rate=24000,
+                    source_channels=1,
+                    playback_gain_db=6.0,
+                    limiter_enabled=True,
+                    limiter_threshold=0.92,
+                )
+
+        played = [
+            int.from_bytes(written[0][index : index + 2], "little", signed=True)
+            for index in range(0, len(written[0]), 2)
+        ]
+        self.assertLessEqual(max(abs(sample) for sample in played), 30146)
+        self.assertLess(abs(played[2]), 1600)
+
 if __name__ == "__main__":
     unittest.main()

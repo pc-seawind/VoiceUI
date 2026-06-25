@@ -86,6 +86,8 @@ class WakeAckConfig:
     wav_path: str = ""
     playback_device: str | int | None = None
     playback_gain_db: float = 0.0
+    limiter_enabled: bool = True
+    limiter_threshold: float = 0.92
 
 
 @dataclass(slots=True)
