@@ -35,20 +35,21 @@ wake_ack:
   enabled: true
   wav_path: default
   playback_device: "reSpeaker XVF3800 4-Mic Array: USB Audio"
-  playback_gain_db: 12.0
+  # Keep the local wake acknowledgement at source level. Room loudness should
+  # come from the system/output mixer rather than hot digital gain.
+  playback_gain_db: 0.0
 
 vad:
-  engine: energy
-  # Service tuning: channel-0 speech during live wake tests was around RMS
-  # 2400-4000, so 6000 timed out after wake. Start lower and retune with
-  # --calibrate-vad in the final room if false starts appear.
-  threshold: 1800.0
+  # Match the Windows production wake config: neural VAD with enough pre-roll
+  # to preserve speech that starts immediately after the wake word/ack.
+  engine: silero
+  threshold: 0.6
   min_speech_ms: 250
   silence_ms: 800
   trailing_silence_trim_ms: 500
   max_speech_ms: 15000
-  pre_roll_ms: 240
-  frame_ms: 20
+  pre_roll_ms: 640
+  frame_ms: 32
   debug: true
 
 stt:
@@ -82,7 +83,11 @@ llm:
     with at most 1-2 short sentences. Do not use Markdown, numbered lists, or
     bullet lists. If the input sounds unclear, like background speech, or
     semantically incomplete, ask one brief clarification question instead of
-    explaining.
+    explaining. Do not claim something is latest, official, or market analysis
+    unless a tool result provides it. For routine Xiaomi HomeKit commands,
+    execute directly when exactly one device matches. Ask for confirmation only
+    when the target is ambiguous or the action is sensitive, such as locks or
+    cooking appliances.
 
 tts:
   provider: aliyun_nls
@@ -100,13 +105,11 @@ tts:
   # Full streaming path: LLM chunks feed stream-input TTS and playback is
   # frame-sized with write/backpressure metrics.
   stream: true
-  # Use full cloud-side TTS volume, then control room loudness with system volume.
-  volume: 100
+  # Match Windows cloud-side volume. Control room loudness with system volume.
+  volume: 50
   speech_rate: 0
   pitch_rate: 0
   playback_device: "reSpeaker XVF3800 4-Mic Array: USB Audio"
-  # The XVF3800 playback path is much quieter than direct sine-wave tests.
-  playback_gain_db: 6.0
   limiter_enabled: true
   limiter_threshold: 0.92
 
@@ -114,10 +117,10 @@ conversation:
   # After a wake word, stay in conversation mode and listen for follow-up
   # speech on the command/AEC channel before returning to wake monitoring.
   follow_up_seconds: 10
-  wake_speech_start_timeout_seconds: 5
+  wake_speech_start_timeout_seconds: 8
   max_turns: 12
-  max_spoken_reply_chars: 28
-  barge_in_enabled: false
+  max_spoken_reply_chars: 80
+  barge_in_enabled: true
 
 home_assistant:
   enabled: false
@@ -132,15 +135,39 @@ tools:
   allow_weather: true
   default_weather_location: 北京昌平
   allow_volume: true
-  allow_music: false
+  allow_music: true
   allow_miot: true
-  allow_search: false
+  allow_search: true
 
 music:
-  provider: disabled
+  provider: meting
+  endpoint: https://meting.mikus.ink/api
+  server: netease
+  max_results: 5
   playback_device: "reSpeaker XVF3800 4-Mic Array: USB Audio"
   playback_sample_rate: 16000
   playback_channels: 2
+  playback_volume: 1.0
+  ducking_volume_factor: 0.2
+  limiter_enabled: true
+  limiter_threshold: 0.92
+
+search:
+  provider: auto
+  tavily_endpoint: https://api.tavily.com/search
+  tavily_api_key_env: TAVILY_API_KEY
+  tavily_search_depth: basic
+  tavily_topic: general
+  baidu_ai_enabled: true
+  baidu_ai_endpoint: https://qianfan.baidubce.com/v2/ai_search/chat/completions
+  baidu_ai_api_key_env: QIANFAN_API_KEY
+  baidu_ai_model: deepseek-v3
+  baidu_ai_search_mode: required
+  baidu_ai_deep_search: false
+  baidu_ai_fallback_to_html: true
+  baidu_endpoint: https://www.baidu.com/baidu
+  timeout_seconds: 15
+  max_results: 5
 
 xiaomi_miot:
   enabled: true
@@ -157,10 +184,10 @@ debug:
   output_dir: debug_sessions
   save_audio: false
   save_metadata: true
-  system_input_dump_enabled: false
+  system_input_dump_enabled: true
   system_input_dump_segment_seconds: 30
   session_scope: run
-  voice_path_dump_enabled: false
+  voice_path_dump_enabled: true
 
 web:
   enabled: true
@@ -184,3 +211,4 @@ logging:
   continuous:
     wake.score: false
     tts.limiter: true
+    music.limiter: true

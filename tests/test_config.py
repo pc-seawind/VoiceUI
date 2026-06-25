@@ -264,28 +264,84 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.wake.model, "alexa")
         self.assertEqual(config.wake.max_wait_seconds, 0)
         self.assertTrue(config.wake_ack.enabled)
-        self.assertEqual(config.vad.engine, "energy")
-        self.assertEqual(config.vad.threshold, 1800.0)
+        self.assertEqual(config.vad.engine, "silero")
+        self.assertEqual(config.vad.threshold, 0.6)
+        self.assertEqual(config.vad.pre_roll_ms, 640)
+        self.assertEqual(config.vad.frame_ms, 32)
         self.assertEqual(config.stt.provider, "aliyun_nls")
         self.assertTrue(config.stt.streaming)
         self.assertEqual(config.llm.provider, "bailian")
         self.assertEqual(config.tts.provider, "aliyun_nls")
         self.assertTrue(config.tts.stream)
-        self.assertEqual(config.tts.volume, 100)
-        self.assertEqual(config.tts.playback_gain_db, 6.0)
-        self.assertEqual(config.wake_ack.playback_gain_db, 12.0)
+        self.assertEqual(config.tts.volume, 50)
+        self.assertEqual(config.tts.playback_gain_db, 0.0)
+        self.assertEqual(config.wake_ack.playback_gain_db, 0.0)
         self.assertEqual(config.conversation.follow_up_seconds, 10)
-        self.assertEqual(config.conversation.wake_speech_start_timeout_seconds, 5)
-        self.assertEqual(config.conversation.max_spoken_reply_chars, 28)
+        self.assertEqual(config.conversation.wake_speech_start_timeout_seconds, 8)
+        self.assertEqual(config.conversation.max_spoken_reply_chars, 80)
+        self.assertTrue(config.conversation.barge_in_enabled)
         self.assertTrue(config.tools.enabled)
         self.assertTrue(config.tools.allow_miot)
+        self.assertTrue(config.tools.allow_music)
+        self.assertTrue(config.tools.allow_search)
+        self.assertEqual(config.music.provider, "meting")
+        self.assertEqual(config.music.playback_device, LINUX_XVF_DEVICE)
+        self.assertEqual(config.music.playback_sample_rate, 16000)
+        self.assertEqual(config.music.playback_channels, 2)
+        self.assertEqual(config.search.provider, "auto")
+        self.assertTrue(config.search.baidu_ai_enabled)
         self.assertTrue(config.xiaomi_miot.enabled)
         self.assertEqual(config.xiaomi_miot.token_file, ".voiceui/miot_token.json")
         self.assertTrue(config.xiaomi_miot.control_verify)
         self.assertEqual(config.tts.playback_device, LINUX_XVF_DEVICE)
-        self.assertFalse(config.conversation.barge_in_enabled)
+        self.assertTrue(config.debug.system_input_dump_enabled)
+        self.assertTrue(config.debug.voice_path_dump_enabled)
         self.assertFalse(config.logging.continuous["wake.score"])
+        self.assertTrue(config.logging.continuous["music.limiter"])
         self.assertEqual(config.debug.session_scope, "run")
+
+    def test_linux_auto_wake_config_keeps_production_parity(self) -> None:
+        linux_config = load_config(resolve_config_path("auto", platform="linux"))
+        windows_config = load_config(resolve_config_path("auto", platform="win32"))
+
+        self.assertEqual(Path(LINUX_AUTO_CONFIG_PATH), Path("config.demo.linux.wake.aliyun.yaml"))
+        self.assertEqual(linux_config.input.mode, "audio")
+        self.assertEqual(linux_config.wake.engine, windows_config.wake.engine)
+        self.assertEqual(
+            linux_config.wake.inference_framework,
+            windows_config.wake.inference_framework,
+        )
+        self.assertTrue(linux_config.wake_ack.enabled)
+
+        self.assertEqual(linux_config.vad.engine, windows_config.vad.engine)
+        self.assertEqual(linux_config.vad.threshold, windows_config.vad.threshold)
+        self.assertEqual(linux_config.vad.pre_roll_ms, windows_config.vad.pre_roll_ms)
+        self.assertEqual(linux_config.vad.frame_ms, windows_config.vad.frame_ms)
+
+        self.assertGreater(linux_config.conversation.follow_up_seconds, 0)
+        self.assertGreater(linux_config.conversation.max_turns, 1)
+        self.assertTrue(linux_config.conversation.barge_in_enabled)
+        self.assertEqual(
+            linux_config.conversation.wake_speech_start_timeout_seconds,
+            windows_config.conversation.wake_speech_start_timeout_seconds,
+        )
+        self.assertEqual(
+            linux_config.conversation.max_spoken_reply_chars,
+            windows_config.conversation.max_spoken_reply_chars,
+        )
+
+        self.assertTrue(linux_config.tools.enabled)
+        self.assertTrue(linux_config.tools.allow_music)
+        self.assertTrue(linux_config.tools.allow_search)
+        self.assertEqual(linux_config.music.provider, windows_config.music.provider)
+        self.assertEqual(linux_config.search.provider, windows_config.search.provider)
+
+        self.assertIn("Do not claim something is latest", linux_config.llm.system_prompt)
+        self.assertIn("routine Xiaomi HomeKit commands", linux_config.llm.system_prompt)
+        self.assertIn("Ask for confirmation only", linux_config.llm.system_prompt)
+
+        self.assertTrue(linux_config.debug.system_input_dump_enabled)
+        self.assertTrue(linux_config.debug.voice_path_dump_enabled)
 
     def test_demo_configs_load(self) -> None:
         mock_config = load_config("config.demo.mock.yaml")

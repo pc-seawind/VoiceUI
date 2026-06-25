@@ -147,10 +147,16 @@ python -m voiceui --config config.demo.linux.wake.mock.yaml --wake-test
 `config.demo.linux.aliyun.yaml` keeps the same ALSA device and energy VAD, then
 switches STT/TTS to Aliyun NLS using `ALIYUN_NLS_APPKEY`,
 `ALIYUN_AccessKeyId`, and `ALIYUN_AccessKeySecret`, and uses Bailian as the real
-LLM via `BAILIAN_API_KEY`. `config.demo.linux.wake.aliyun.yaml` adds
-openWakeWord on top of that and is the Linux long-running service candidate:
+LLM via `BAILIAN_API_KEY`. It is a single-turn smoke config.
+`config.demo.linux.wake.aliyun.yaml` is the Linux long-running service
+candidate: openWakeWord, wake acknowledgement, Silero VAD with 640 ms pre-roll,
+multi-turn follow-up, barge-in, search/music tools, and the same smart-home
+safety prompt as the Windows production demo. Install the audio, wake, Aliyun,
+and smart-home extras before running it because those backends are optional
+dependencies:
 
 ```bash
+python -m pip install -e ".[demo,wake,aliyun,miot]"
 voiceui-service --config config.demo.linux.wake.aliyun.yaml
 ```
 
@@ -530,8 +536,8 @@ python -m voiceui --config config.demo.wake.aliyun.yaml
 ```
 
 Flow: say "alexa", wait for the local "我在" acknowledgement, then speak.
-This config uses Aliyun NLS for ASR and TTS, keeps Mify for LLM, and keeps
-`conversation.follow_up_seconds: 10` for follow-up turns without another wake
+This config uses Aliyun NLS for ASR/TTS, Bailian for LLM, and keeps
+`conversation.follow_up_seconds` enabled for follow-up turns without another wake
 word. It also enables `conversation.barge_in_enabled: true`, so you can speak
 over a TTS answer to interrupt it and start the next turn.
 The local wake acknowledgement plays in the background; VAD starts immediately
