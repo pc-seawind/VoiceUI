@@ -520,9 +520,10 @@ class XiaomiMiotClient:
         matches: list[tuple[int, dict[str, Any]]],
         command: dict[str, Any],
     ) -> list[tuple[int, dict[str, Any]]] | None:
-        target_state = _target_power_state_for_control(command)
-        if target_state is None:
+        state_match = _power_state_match_for_control(command)
+        if state_match is None:
             return None
+        target_state, strict = state_match
 
         known_matches: list[tuple[int, dict[str, Any]]] = []
         state_matches: list[tuple[int, dict[str, Any]]] = []
@@ -536,6 +537,8 @@ class XiaomiMiotClient:
             if state is target_state:
                 state_matches.append((score, device))
         if not known_matches:
+            return None
+        if not state_matches and not strict:
             return None
         return state_matches
 
@@ -2251,17 +2254,56 @@ def _state_filter_for_group_control(command: dict[str, Any]) -> bool | None:
 
 
 def _target_power_state_for_control(command: dict[str, Any]) -> bool | None:
+    state_match = _power_state_match_for_control(command)
+    if state_match is None:
+        return None
+    return state_match[0]
+
+
+def _power_state_match_for_control(command: dict[str, Any]) -> tuple[bool, bool] | None:
     action = str(command.get("action") or "")
     command_text = _normalize_text(
         " ".join(str(command.get(key) or "") for key in ("request", "device"))
     )
     if any(term in command_text for term in ("全部", "所有", "全都", "每个", "all")):
         return None
+    if any(term in command_text for term in ("开着", "亮着", "没关", "没有关", "还开", "未关")):
+        return True, True
+    if any(term in command_text for term in ("关着", "没开", "没有开", "还关", "未开")):
+        return False, True
     if action == "turn_off":
-        return True
+        return True, True
     if action == "turn_on":
-        return False
+        return False, True
+    if _should_prefer_powered_on_device_for_control(command):
+        return True, False
     return None
+
+
+def _should_prefer_powered_on_device_for_control(command: dict[str, Any]) -> bool:
+    if str(command.get("action") or "") != "set_value":
+        return False
+    device_class = str(command.get("device_class") or "")
+    device_text = _normalize_text(str(command.get("device") or ""))
+    if device_class not in {"aircondition", "heater"} and not any(
+        term in device_text for term in ("空调", "冷气", "暖气", "heater", "aircondition")
+    ):
+        return False
+    property_text = _normalize_text(
+        " ".join(str(command.get(key) or "") for key in ("request", "property"))
+    )
+    return any(
+        term in property_text
+        for term in (
+            "温度",
+            "temperature",
+            "模式",
+            "mode",
+            "风速",
+            "风量",
+            "fan",
+        )
+    )
 
 
 def _target_power_state_description(command: dict[str, Any]) -> str:

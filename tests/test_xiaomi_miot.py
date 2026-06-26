@@ -611,6 +611,175 @@ class XiaomiMiotTests(unittest.TestCase):
         self.assertEqual(result["target_value"], 26.5)
         send_ctrl.assert_called_once_with("did-ac", "prop.0.2.4", 26.5, verify=True)
 
+    def test_control_device_auto_matches_single_powered_on_aircondition(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            client = XiaomiMiotClient(
+                XiaomiMiotConfig(
+                    token_file=str(Path(temp_dir) / "token.json"),
+                    uuid_file=str(Path(temp_dir) / "uuid"),
+                    cache_dir=str(Path(temp_dir) / "cache"),
+                    control_verify_delay_seconds=0,
+                ),
+                token=XiaomiMiotToken(access_token="access-secret"),
+            )
+        devices = {
+            "did-master": {
+                "did": "did-master",
+                "name": "主卧空调",
+                "room_name": "主卧",
+                "device_class": "aircondition",
+                "online": True,
+                "urn": "urn:test",
+            },
+            "did-study": {
+                "did": "did-study",
+                "name": "书房空调",
+                "room_name": "书房",
+                "device_class": "aircondition",
+                "online": True,
+                "urn": "urn:test",
+            },
+        }
+        spec = {
+            "items": {
+                "prop.0.2.1": {
+                    "iid": "prop.0.2.1",
+                    "kind": "property",
+                    "name": "on",
+                    "description": "Air Conditioner - Power",
+                    "service": "Air Conditioner",
+                    "format": "bool",
+                    "readable": True,
+                    "writeable": True,
+                },
+                "prop.0.2.4": {
+                    "iid": "prop.0.2.4",
+                    "kind": "property",
+                    "name": "target-temperature",
+                    "description": "Air Conditioner - Target Temperature",
+                    "service": "Air Conditioner",
+                    "format": "float",
+                    "readable": True,
+                    "writeable": True,
+                    "unit": "celsius",
+                    "value_range": {"min": 16, "max": 31, "step": 0.5},
+                },
+            }
+        }
+
+        def get_rpc(did: str, iid: str) -> dict:
+            if iid == "prop.0.2.1":
+                return {"did": did, "iid": iid, "value": did == "did-study"}
+            if did == "did-study" and iid == "prop.0.2.4":
+                return {"did": did, "iid": iid, "value": 27.0}
+            raise AssertionError(f"unexpected get {did} {iid}")
+
+        with patch.object(client, "get_devices", return_value=devices):
+            with patch.object(client, "get_device_spec", return_value=spec):
+                with patch.object(client, "send_get_rpc", side_effect=get_rpc):
+                    with patch.object(client, "send_ctrl_rpc") as send_ctrl:
+                        send_ctrl.return_value = {
+                            "status": "verified",
+                            "did": "did-study",
+                            "iid": "prop.0.2.4",
+                            "readback_value": 26.5,
+                        }
+                        result = client.control_device(request="空调温度减0.5度")
+
+        self.assertEqual(result["status"], "verified")
+        self.assertEqual(result["device"]["name"], "书房空调")
+        self.assertEqual(result["previous_value"], 27.0)
+        self.assertEqual(result["target_value"], 26.5)
+        send_ctrl.assert_called_once_with("did-study", "prop.0.2.4", 26.5, verify=True)
+
+    def test_control_device_explicitly_matches_open_aircondition_followup(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            client = XiaomiMiotClient(
+                XiaomiMiotConfig(
+                    token_file=str(Path(temp_dir) / "token.json"),
+                    uuid_file=str(Path(temp_dir) / "uuid"),
+                    cache_dir=str(Path(temp_dir) / "cache"),
+                    control_verify_delay_seconds=0,
+                ),
+                token=XiaomiMiotToken(access_token="access-secret"),
+            )
+        devices = {
+            "did-master": {
+                "did": "did-master",
+                "name": "主卧空调",
+                "room_name": "主卧",
+                "device_class": "aircondition",
+                "online": True,
+                "urn": "urn:test",
+            },
+            "did-study": {
+                "did": "did-study",
+                "name": "书房空调",
+                "room_name": "书房",
+                "device_class": "aircondition",
+                "online": True,
+                "urn": "urn:test",
+            },
+        }
+        spec = {
+            "items": {
+                "prop.0.2.1": {
+                    "iid": "prop.0.2.1",
+                    "kind": "property",
+                    "name": "on",
+                    "description": "Air Conditioner - Power",
+                    "service": "Air Conditioner",
+                    "format": "bool",
+                    "readable": True,
+                    "writeable": True,
+                },
+                "prop.0.2.4": {
+                    "iid": "prop.0.2.4",
+                    "kind": "property",
+                    "name": "target-temperature",
+                    "description": "Air Conditioner - Target Temperature",
+                    "service": "Air Conditioner",
+                    "format": "float",
+                    "readable": True,
+                    "writeable": True,
+                    "unit": "celsius",
+                    "value_range": {"min": 16, "max": 31, "step": 0.5},
+                },
+            }
+        }
+
+        def get_rpc(did: str, iid: str) -> dict:
+            if iid == "prop.0.2.1":
+                return {"did": did, "iid": iid, "value": did == "did-study"}
+            if did == "did-study" and iid == "prop.0.2.4":
+                return {"did": did, "iid": iid, "value": 27.0}
+            raise AssertionError(f"unexpected get {did} {iid}")
+
+        with patch.object(client, "get_devices", return_value=devices):
+            with patch.object(client, "get_device_spec", return_value=spec):
+                with patch.object(client, "send_get_rpc", side_effect=get_rpc):
+                    with patch.object(client, "send_ctrl_rpc") as send_ctrl:
+                        send_ctrl.return_value = {
+                            "status": "verified",
+                            "did": "did-study",
+                            "iid": "prop.0.2.4",
+                            "readback_value": 26.5,
+                        }
+                        result = client.control_device(
+                            request="开着的那个",
+                            device="aircondition",
+                            device_class="aircondition",
+                            action="set_value",
+                            property_query="temperature",
+                            relative_delta=-0.5,
+                        )
+
+        self.assertEqual(result["status"], "verified")
+        self.assertEqual(result["device"]["name"], "书房空调")
+        self.assertEqual(result["previous_value"], 27.0)
+        self.assertEqual(result["target_value"], 26.5)
+        send_ctrl.assert_called_once_with("did-study", "prop.0.2.4", 26.5, verify=True)
+
     def test_control_device_sets_brightness_value(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             client = XiaomiMiotClient(

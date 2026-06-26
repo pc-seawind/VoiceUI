@@ -395,12 +395,17 @@ class VoiceToolRunner:
         )
         if _select_miot_ambiguity_candidate(text, candidates) is not None:
             return True
+        query = ambiguity.get("query") if isinstance(ambiguity.get("query"), dict) else {}
+        remembered_action = str(query.get("action") or "")
+        if remembered_action and _is_miot_state_followup_reference(text):
+            return True
         action = _infer_miot_action_from_text(text)
         return bool(
             action
             and (
                 _is_miot_followup_reference(text)
                 or _is_miot_group_followup_reference(text)
+                or _is_miot_state_followup_reference(text)
             )
         )
 
@@ -839,13 +844,15 @@ class VoiceToolRunner:
         effective_action = action or str(query.get("action") or "")
         if tool_name == "xiaomi_miot_control_device" and not effective_action:
             return None
-        if not action and selected_candidate is None:
+        state_followup = _is_miot_state_followup_reference(request)
+        if not action and selected_candidate is None and not state_followup:
             return None
         if (
             action
             and selected_candidate is None
             and not _is_miot_followup_reference(request)
             and not _is_miot_group_followup_reference(request)
+            and not state_followup
         ):
             return None
 
@@ -2318,6 +2325,28 @@ def _is_miot_group_followup_reference(text: str) -> bool:
             "\u51b7\u6c14\u90fd",
             "\u7a97\u5e18\u90fd",
             "\u8bbe\u5907\u90fd",
+        )
+    )
+
+
+def _is_miot_state_followup_reference(text: str) -> bool:
+    normalized = _normalize_miot_reference(text)
+    if not normalized:
+        return False
+    return any(
+        term in normalized
+        for term in (
+            "开着",
+            "亮着",
+            "关着",
+            "没关",
+            "没有关",
+            "还开",
+            "未关",
+            "没开",
+            "没有开",
+            "还关",
+            "未开",
         )
     )
 
