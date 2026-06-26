@@ -495,7 +495,9 @@ class VoiceToolRunner:
                 )
             )
             tool_results: list[dict[str, Any]] = []
+            last_text = _last_user_text(messages)
             for call in response.tool_calls:
+                call = _repair_miot_control_call(call, last_text)
                 result = self._execute_tool_call(call)
                 tool_results.append(result)
                 working_messages.append(
@@ -587,7 +589,9 @@ class VoiceToolRunner:
                 )
             )
             tool_results: list[dict[str, Any]] = []
+            last_text = _last_user_text(messages)
             for call in response.tool_calls:
+                call = _repair_miot_control_call(call, last_text)
                 result = self._execute_tool_call(call)
                 tool_results.append(result)
                 working_messages.append(
@@ -1037,6 +1041,27 @@ def _miot_target_from_payload(payload: dict[str, Any]) -> dict[str, Any] | None:
         "device": dict(device),
         "action": action,
     }
+
+
+def _repair_miot_control_call(call: ToolCall, last_user_text: str) -> ToolCall:
+    if call.name != "xiaomi_miot_control_device":
+        return call
+    if not _looks_like_miot_control_text(last_user_text):
+        return call
+
+    arguments = dict(call.arguments or {})
+    changed = False
+    if not str(arguments.get("request") or "").strip():
+        arguments["request"] = last_user_text
+        changed = True
+    if not str(arguments.get("action") or "").strip():
+        action = _infer_miot_action_from_text(last_user_text)
+        if action:
+            arguments["action"] = action
+            changed = True
+    if not changed:
+        return call
+    return ToolCall(id=call.id, name=call.name, arguments=arguments, raw=call.raw)
 
 
 def create_tool_runner(

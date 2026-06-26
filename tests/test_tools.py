@@ -93,6 +93,38 @@ class RepeatingToolChat(ChatClient):
         )
 
 
+class BlankMiotControlToolChat(ChatClient):
+    def __init__(self):
+        self.calls: list[tuple[list[ChatMessage], list[dict]]] = []
+
+    def complete(self, messages: list[ChatMessage]) -> str:
+        return "unused"
+
+    def complete_with_tools(
+        self,
+        messages: list[ChatMessage],
+        tools: list[dict],
+    ) -> ToolChatResponse:
+        self.calls.append((list(messages), tools))
+        return ToolChatResponse(
+            tool_calls=[
+                ToolCall(
+                    id="call_1",
+                    name="xiaomi_miot_control_device",
+                    arguments={},
+                    raw={
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "xiaomi_miot_control_device",
+                            "arguments": "{}",
+                        },
+                    },
+                )
+            ]
+        )
+
+
 class MiotFirstToolThenNoToolChat(ChatClient):
     def __init__(self):
         self.calls: list[tuple[list[ChatMessage], list[dict]]] = []
@@ -615,6 +647,42 @@ class ToolsTests(unittest.TestCase):
         self.assertEqual(tool_calls[0]["property"], "temperature")
         self.assertEqual(tool_calls[0]["value"], 0.5)
         self.assertEqual(tool_calls[0]["relative_delta"], -0.5)
+
+    def test_tool_runner_repairs_blank_miot_control_arguments(self) -> None:
+        chat = BlankMiotControlToolChat()
+        tool_calls: list[dict] = []
+
+        def control_device(arguments: dict) -> dict:
+            tool_calls.append(dict(arguments))
+            return {
+                "status": "verified",
+                "action": arguments["action"],
+                "device": {
+                    "name": "书房空调",
+                    "room_name": "书房",
+                    "device_class": "aircondition",
+                },
+                "target_value": 26.5,
+            }
+
+        runner = VoiceToolRunner(
+            chat=chat,
+            tools=[
+                ToolDefinition(
+                    name="xiaomi_miot_control_device",
+                    description="Control Xiaomi device",
+                    parameters={"type": "object", "properties": {}},
+                    handler=control_device,
+                )
+            ],
+        )
+
+        response = runner.complete([ChatMessage(role="user", content="书房的空调温度减0.5度。")])
+
+        self.assertEqual(response, "好的，书房空调已设置。")
+        self.assertEqual(len(chat.calls), 1)
+        self.assertEqual(tool_calls[0]["request"], "书房的空调温度减0.5度。")
+        self.assertEqual(tool_calls[0]["action"], "set_value")
 
     def test_tool_runner_ignores_expired_ambiguous_miot_context(self) -> None:
         chat = MiotAmbiguousToolChat()

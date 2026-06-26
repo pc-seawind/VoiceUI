@@ -2463,8 +2463,8 @@ def _infer_control_value(request: str) -> Any:
 
 def _infer_relative_control_delta(request: str) -> float | None:
     text = _normalize_text(request)
-    decrease_terms = ("降低", "降", "调低", "调小", "低一点", "小一点")
-    increase_terms = ("升高", "提高", "调高", "调大", "高一点", "大一点")
+    decrease_terms = ("降低", "降", "减少", "减", "调低", "调小", "低一点", "小一点")
+    increase_terms = ("升高", "提高", "增加", "调高", "调大", "高一点", "大一点")
     sign = -1 if any(term in text for term in decrease_terms) else 0
     if sign == 0 and any(term in text for term in increase_terms):
         sign = 1
