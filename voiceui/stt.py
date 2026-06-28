@@ -17,6 +17,7 @@ from voiceui.logs import log_event
 from voiceui.models import SttConfig, Utterance
 
 _ALIYUN_SAMPLE_RATE = 16000
+_ALIYUN_TOKEN_REFRESH_SECONDS = 20 * 60 * 60
 
 
 class StreamingSpeechToTextSession:
@@ -173,6 +174,7 @@ class AliyunNlsSpeechToText(SpeechToText):
     def __init__(self, config: SttConfig):
         self.config = config
         self._token: str | None = None
+        self._token_acquired_at: float | None = None
 
     def warm_up(self) -> bool:
         if self.config.provider != "aliyun_nls":
@@ -255,9 +257,35 @@ class AliyunNlsSpeechToText(SpeechToText):
         access_key_secret = require_api_key(
             self.config.access_key_secret_env or "ALIYUN_AccessKeySecret"
         )
-        if self._token is None:
+        if self._token is None or self._token_is_stale():
             self._token = _get_aliyun_nls_token(access_key_id, access_key_secret)
+            self._token_acquired_at = time.monotonic()
         return self._token
+
+    def refresh_token(self, *, reason: str = "manual") -> str:
+        previous_age_seconds = self._token_age_seconds()
+        self._token = None
+        self._token_acquired_at = None
+        token = self._token_or_create()
+        log_event(
+            "stt",
+            "aliyun_token_refreshed",
+            log_id="stt.aliyun_token_refreshed",
+            reason=reason,
+            previous_age_seconds=(
+                int(previous_age_seconds) if previous_age_seconds is not None else 0
+            ),
+        )
+        return token
+
+    def _token_is_stale(self) -> bool:
+        age_seconds = self._token_age_seconds()
+        return age_seconds is None or age_seconds >= _ALIYUN_TOKEN_REFRESH_SECONDS
+
+    def _token_age_seconds(self) -> float | None:
+        if self._token_acquired_at is None:
+            return None
+        return time.monotonic() - self._token_acquired_at
 
 
 def create_stt(config: SttConfig) -> SpeechToText:

@@ -38,6 +38,8 @@ from voiceui.wake_ack import (
     _select_output_format,
 )
 
+_ALIYUN_TOKEN_REFRESH_SECONDS = 20 * 60 * 60
+
 
 class TextToSpeech:
     def warm_up(self) -> bool:
@@ -376,6 +378,7 @@ class AliyunNlsTextToSpeech(TextToSpeech):
     def __init__(self, config: TtsConfig):
         self.config = config
         self._token: str | None = None
+        self._token_acquired_at: float | None = None
 
     def warm_up(self) -> bool:
         require_api_key(self.config.app_key_env or "ALIYUN_NLS_APPKEY")
@@ -607,7 +610,7 @@ class AliyunNlsTextToSpeech(TextToSpeech):
         return "".join(full_text_parts).strip()
 
     def _token_or_create(self) -> str:
-        if self._token is None:
+        if self._token is None or self._token_is_stale():
             access_key_id = require_api_key(
                 self.config.access_key_id_env or "ALIYUN_AccessKeyId"
             )
@@ -615,7 +618,13 @@ class AliyunNlsTextToSpeech(TextToSpeech):
                 self.config.access_key_secret_env or "ALIYUN_AccessKeySecret"
             )
             self._token = get_aliyun_nls_token(access_key_id, access_key_secret)
+            self._token_acquired_at = time.monotonic()
         return self._token
+
+    def _token_is_stale(self) -> bool:
+        if self._token_acquired_at is None:
+            return True
+        return time.monotonic() - self._token_acquired_at >= _ALIYUN_TOKEN_REFRESH_SECONDS
 
 
 class PiperHttpTextToSpeech(TextToSpeech):

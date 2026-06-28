@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from voiceui.models import SttConfig, Utterance
 from voiceui.stt import (
+    _ALIYUN_TOKEN_REFRESH_SECONDS,
     AliyunNlsSpeechToText,
     MimoAudioUnderstandingSpeechToText,
     _ensure_pcm16_sample_rate,
@@ -125,6 +126,45 @@ class SttTests(unittest.TestCase):
 
         silence_bytes = b"\x00\x00" * 1600
         self.assertEqual(recognizer.call_args.kwargs["pcm"], silence_bytes + utterance.pcm)
+
+    def test_aliyun_stt_refreshes_stale_cached_token(self) -> None:
+        config = SttConfig(
+            provider="aliyun_nls",
+            endpoint="wss://nls-gateway-cn-shanghai.aliyuncs.com/ws/v1",
+            access_key_id_env="ALIYUN_AccessKeyId",
+            access_key_secret_env="ALIYUN_AccessKeySecret",
+            app_key_env="ALIYUN_NLS_APPKEY",
+            timeout_seconds=20,
+        )
+        stt = AliyunNlsSpeechToText(config)
+        stt._token = "old-token"
+        stt._token_acquired_at = 0.0
+        utterance = Utterance(pcm=b"\x00\x00" * 160, sample_rate=16000, duration_ms=10)
+
+        with patch.dict(
+            "os.environ",
+            {
+                "ALIYUN_AccessKeyId": "ak",
+                "ALIYUN_AccessKeySecret": "secret",
+                "ALIYUN_NLS_APPKEY": "appkey",
+            },
+        ):
+            with patch(
+                "voiceui.stt.time.monotonic",
+                return_value=_ALIYUN_TOKEN_REFRESH_SECONDS + 1,
+            ):
+                with patch(
+                    "voiceui.stt._get_aliyun_nls_token",
+                    return_value="new-token",
+                ) as get_token:
+                    with patch(
+                        "voiceui.stt._run_aliyun_speech_recognizer", return_value="你好"
+                    ) as recognizer:
+                        transcript = stt.transcribe(utterance)
+
+        self.assertEqual(transcript, "你好")
+        get_token.assert_called_once_with("ak", "secret")
+        self.assertEqual(recognizer.call_args.kwargs["token"], "new-token")
 
     def test_aliyun_streaming_stt_can_be_disabled(self) -> None:
         config = SttConfig(provider="aliyun_nls", streaming=False)

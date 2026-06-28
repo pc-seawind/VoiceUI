@@ -285,6 +285,7 @@ class TtsTests(unittest.TestCase):
         )
         tts = AliyunNlsTextToSpeech(config)
         tts._token = "token"
+        tts._token_acquired_at = time.monotonic()
         consumed_text: list[str] = []
 
         def stream_tts(**kwargs):
@@ -607,6 +608,7 @@ class TtsTests(unittest.TestCase):
         )
         tts = AliyunNlsTextToSpeech(config)
         tts._token = "token"
+        tts._token_acquired_at = time.monotonic()
 
         with patch.dict(sys.modules, {"nls": fake_nls}):
             with patch.dict("os.environ", {"ALIYUN_NLS_APPKEY": "appkey"}):

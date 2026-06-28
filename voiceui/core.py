@@ -2207,6 +2207,9 @@ class VoiceAssistant:
         )
         fallback_started = time.monotonic()
         try:
+            refresh_token = getattr(self.stt, "refresh_token", None)
+            if callable(refresh_token):
+                refresh_token(reason="streaming_empty_fallback")
             transcript = self.stt.transcribe(utterance)
         except Exception as exc:  # pylint: disable=broad-exception-caught
             log_event(
