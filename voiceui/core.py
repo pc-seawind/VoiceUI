@@ -1623,6 +1623,16 @@ class VoiceAssistant:
         finalize_started = time.monotonic()
         transcript = stream_handle.finish()
         stt_ms = int((time.monotonic() - finalize_started) * 1000)
+        if not transcript.strip():
+            fallback_started = time.monotonic()
+            transcript = self._fallback_transcribe_empty_stream(
+                utterance,
+                source="barge_in",
+                stream_total_latency_ms=stream_handle.total_latency_ms(),
+                sent_chunks=stream_handle.sent_chunks,
+                dropped_chunks=stream_handle.dropped_chunks,
+            )
+            stt_ms += int((time.monotonic() - fallback_started) * 1000)
         stt_total_ms = stream_handle.total_latency_ms()
         ready_ms = stream_handle.ready_latency_ms()
         params = {
@@ -2144,6 +2154,16 @@ class VoiceAssistant:
         finalize_started = time.monotonic()
         transcript = stream_handle.finish()
         stt_ms = int((time.monotonic() - finalize_started) * 1000)
+        if not transcript.strip():
+            fallback_started = time.monotonic()
+            transcript = self._fallback_transcribe_empty_stream(
+                utterance,
+                source="wake",
+                stream_total_latency_ms=stream_handle.total_latency_ms(),
+                sent_chunks=stream_handle.sent_chunks,
+                dropped_chunks=stream_handle.dropped_chunks,
+            )
+            stt_ms += int((time.monotonic() - fallback_started) * 1000)
         stt_total_ms = stream_handle.total_latency_ms()
         ready_ms = stream_handle.ready_latency_ms()
         params = {
@@ -2163,6 +2183,53 @@ class VoiceAssistant:
             **params,
         )
         return utterance, transcript, vad_ms, stt_ms, {"stt_total": stt_total_ms}
+
+    def _fallback_transcribe_empty_stream(
+        self,
+        utterance: Utterance,
+        *,
+        source: str,
+        stream_total_latency_ms: int,
+        sent_chunks: int,
+        dropped_chunks: int,
+    ) -> str:
+        log_event(
+            "stt",
+            "streaming_empty_fallback",
+            log_id="stt.streaming_empty_fallback",
+            source=source,
+            utterance_duration_ms=utterance.duration_ms,
+            utterance_bytes=len(utterance.pcm),
+            stream_total_latency_ms=stream_total_latency_ms,
+            sent_chunks=sent_chunks,
+            dropped_chunks=dropped_chunks,
+            ok="start",
+        )
+        fallback_started = time.monotonic()
+        try:
+            transcript = self.stt.transcribe(utterance)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            log_event(
+                "stt",
+                "streaming_empty_fallback",
+                log_id="stt.streaming_empty_fallback",
+                source=source,
+                latency_ms=int((time.monotonic() - fallback_started) * 1000),
+                ok=False,
+                error=exc,
+                text="",
+            )
+            return ""
+        log_event(
+            "stt",
+            "streaming_empty_fallback",
+            log_id="stt.streaming_empty_fallback",
+            source=source,
+            latency_ms=int((time.monotonic() - fallback_started) * 1000),
+            ok=True,
+            text=transcript,
+        )
+        return transcript
 
     def _wake_speech_start_timeout_seconds(self) -> float:
         return max(

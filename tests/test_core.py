@@ -1712,6 +1712,35 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(streaming_stt.fallback_calls, 0)
 
 
+    def test_audio_turn_falls_back_when_streaming_stt_returns_empty(self) -> None:
+        config = AssistantConfig(
+            input=InputConfig(mode="audio"),
+            wake=WakeConfig(engine="disabled"),
+            conversation=ConversationConfig(follow_up_seconds=0),
+            llm=LlmConfig(system_prompt="system"),
+        )
+        assistant = VoiceAssistant(config)
+        assistant.vad = FakeVad(
+            [Utterance(pcm=b"fallback text", sample_rate=16000, duration_ms=80)]
+        )
+        streaming_stt = FakeStreamingStt("")
+        assistant.stt = streaming_stt
+        assistant.chat = RecordingChat()
+        assistant.tts = FakeTts()
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            reply, transcript = assistant._run_audio_turn(
+                WakeEvent(engine="test", confidence=1.0, label="wake"),
+                wake_ms=0,
+            )
+
+        self.assertEqual(transcript, "fallback text")
+        self.assertEqual(reply.text, "reply 1")
+        self.assertEqual(streaming_stt.session.written, [b"fallback text"])
+        self.assertTrue(streaming_stt.session.finished)
+        self.assertEqual(streaming_stt.fallback_calls, 1)
+
+
 
     def test_streaming_frame_policy_matches_vad_timing(self) -> None:
         policy = _streaming_frame_policy(
@@ -1835,6 +1864,28 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(streaming_stt.session.written, [b"barge"])
         self.assertTrue(streaming_stt.session.finished)
         self.assertEqual(streaming_stt.fallback_calls, 0)
+
+    def test_barge_in_falls_back_when_streaming_stt_returns_empty(self) -> None:
+        config = AssistantConfig(
+            input=InputConfig(mode="audio"),
+            conversation=ConversationConfig(barge_in_enabled=True),
+        )
+        assistant = VoiceAssistant(config)
+        assistant.vad = FakeVad(
+            [Utterance(pcm=b"barge fallback", sample_rate=16000, duration_ms=80)]
+        )
+        streaming_stt = FakeStreamingStt("")
+        assistant.stt = streaming_stt
+        assistant.tts = BargeFirstTts()
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            utterance = assistant._speak_with_barge_in("reply")
+
+        self.assertIsInstance(utterance, Utterance)
+        self.assertEqual(assistant._pending_barge_transcript, "barge fallback")
+        self.assertEqual(streaming_stt.session.written, [b"barge fallback"])
+        self.assertTrue(streaming_stt.session.finished)
+        self.assertEqual(streaming_stt.fallback_calls, 1)
 
 
 if __name__ == "__main__":
