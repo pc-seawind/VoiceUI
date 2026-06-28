@@ -2320,15 +2320,33 @@ class VoiceAssistant:
         cron_scheduler = self._create_cron_scheduler()
         if cron_scheduler is not None:
             cron_scheduler.start()
+        last_error_key = ""
+        repeated_errors = 0
         try:
             while True:
                 try:
                     self.run_conversation(keep_audio_dump_running=True)
+                    last_error_key = ""
+                    repeated_errors = 0
                 except KeyboardInterrupt:
                     raise
                 except Exception as exc:
-                    log_event("error", "runtime", log_id="error.runtime", error=exc)
-                    time.sleep(1)
+                    error_key = f"{type(exc).__name__}:{exc}"
+                    if error_key == last_error_key:
+                        repeated_errors += 1
+                    else:
+                        last_error_key = error_key
+                        repeated_errors = 1
+                    sleep_seconds = _runtime_error_backoff_seconds(repeated_errors)
+                    log_event(
+                        "error",
+                        "runtime",
+                        log_id="error.runtime",
+                        error=exc,
+                        repeat_count=repeated_errors,
+                        retry_sleep_seconds=f"{sleep_seconds:.1f}",
+                    )
+                    time.sleep(sleep_seconds)
         finally:
             if cron_scheduler is not None:
                 cron_scheduler.stop()
@@ -2453,9 +2471,11 @@ def _classify_voice_input(transcript: str, source: str) -> tuple[str, str]:
     text = transcript.strip()
     if _is_unusable_transcript(text):
         return "reject", "unusable_text"
+    if source == "wake" and _looks_like_false_wake_complaint(text):
+        return "reject", "false_wake_complaint"
     strong_intent = _looks_like_strong_voice_intent(text)
     if source == "wake" and _looks_like_background_wake_text(text, strong_intent):
-        return "clarify", "wake_background_like"
+        return "reject", "wake_background_like"
     if source in {"barge_in", "follow_up"}:
         if _looks_like_contextual_correction(text):
             return "accept", "contextual_correction"
@@ -2464,7 +2484,9 @@ def _classify_voice_input(transcript: str, source: str) -> tuple[str, str]:
     if _looks_like_direct_voice_intent(text):
         return "accept", "direct_intent"
     if source == "wake":
-        return "accept", "wake_light_gate"
+        return "reject", "wake_no_direct_intent"
+    if source == "barge_in":
+        return "reject", "ambiguous_barge_in"
     if len(text) <= 24:
         return "clarify", "ambiguous_short"
     return "clarify", "ambiguous_follow_up"
@@ -2518,6 +2540,29 @@ def _is_self_echo_match(transcript: str, spoken: str, matched_chars: int) -> boo
     if text_len <= 8 and spoken.startswith(transcript[:4]):
         return matched_chars >= 4
     return False
+
+
+def _looks_like_false_wake_complaint(text: str) -> bool:
+    normalized = text.lower().replace(" ", "")
+    return any(
+        term in normalized
+        for term in (
+            "谁叫你了",
+            "谁喊你了",
+            "没叫你",
+            "没有叫你",
+            "没喊你",
+            "没有喊你",
+            "不是叫你",
+            "不是喊你",
+        )
+    )
+
+
+def _runtime_error_backoff_seconds(repeat_count: int) -> float:
+    if repeat_count <= 1:
+        return 1.0
+    return min(60.0, float(2 ** min(repeat_count - 1, 6)))
 
 
 def _common_prefix_chars(left: str, right: str) -> int:
@@ -2582,6 +2627,12 @@ def _looks_like_end_conversation_command(text: str) -> bool:
 
 def _looks_like_direct_voice_intent(text: str) -> bool:
     normalized = text.lower().replace(" ", "")
+    if (
+        normalized.isascii()
+        and any(char.isalpha() for char in normalized)
+        and len(normalized) <= 32
+    ):
+        return True
     if _looks_like_iot_voice_intent(normalized):
         return True
     if _looks_like_weather_query(normalized) or _looks_like_time_query(normalized):

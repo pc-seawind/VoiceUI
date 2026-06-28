@@ -1369,7 +1369,7 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(len(assistant.chat.calls), 1)
         self.assertEqual(assistant.tts.spoken, ["reply 1"])
 
-    def test_barge_in_ambiguous_short_text_clarifies_without_session_pollution(self) -> None:
+    def test_barge_in_ambiguous_short_text_rejects_silently_without_session_pollution(self) -> None:
         config = AssistantConfig(
             input=InputConfig(mode="audio"),
             wake=WakeConfig(engine="disabled"),
@@ -1400,16 +1400,13 @@ class CoreTests(unittest.TestCase):
             reply = assistant.run_conversation()
 
         self.assertEqual(reply.routed_to, "input_gate")
-        self.assertEqual(reply.text, "我没太听清，你是想找临时用工渠道吗？")
+        self.assertEqual(reply.text, "我没听清。")
         self.assertEqual(len(assistant.chat.calls), 1)
         self.assertEqual(
             [message.content for message in assistant.session.messages],
             ["system", "first", "reply 1"],
         )
-        self.assertEqual(
-            assistant.tts.spoken,
-            ["reply 1", "我没太听清，你是想找临时用工渠道吗？"],
-        )
+        self.assertEqual(assistant.tts.spoken, ["reply 1"])
 
     def test_follow_up_miot_pending_reference_bypasses_short_clarification(self) -> None:
         config = AssistantConfig(
@@ -1450,9 +1447,43 @@ class CoreTests(unittest.TestCase):
                 "wake",
             )
 
-        self.assertEqual(decision, "clarify")
+        self.assertEqual(decision, "reject")
         self.assertEqual(reason, "wake_background_like")
-        self.assertEqual(response, "我没太听清，请再说一遍。")
+        self.assertEqual(response, "")
+
+    def test_wake_without_direct_intent_is_rejected_before_llm(self) -> None:
+        config = AssistantConfig(
+            input=InputConfig(mode="audio"),
+            wake=WakeConfig(engine="disabled"),
+            conversation=ConversationConfig(follow_up_seconds=1),
+            llm=LlmConfig(system_prompt="system"),
+        )
+        assistant = VoiceAssistant(config)
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            decision, reason, response = assistant._gate_voice_transcript(  # pylint: disable=protected-access
+                "等我掉下去之后再说。",
+                "wake",
+            )
+
+        self.assertEqual((decision, reason, response), ("reject", "wake_no_direct_intent", ""))
+
+    def test_wake_false_wake_complaint_is_rejected_before_direct_question(self) -> None:
+        config = AssistantConfig(
+            input=InputConfig(mode="audio"),
+            wake=WakeConfig(engine="disabled"),
+            conversation=ConversationConfig(follow_up_seconds=1),
+            llm=LlmConfig(system_prompt="system"),
+        )
+        assistant = VoiceAssistant(config)
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            decision, reason, response = assistant._gate_voice_transcript(  # pylint: disable=protected-access
+                "谁叫你了？",
+                "wake",
+            )
+
+        self.assertEqual((decision, reason, response), ("reject", "false_wake_complaint", ""))
 
     def test_follow_up_background_question_terms_reject_before_direct_intent(self) -> None:
         config = AssistantConfig(
@@ -1509,7 +1540,7 @@ class CoreTests(unittest.TestCase):
 
         self.assertEqual((decision, reason, response), ("accept", "direct_intent", ""))
 
-    def test_input_gate_clarification_rejects_self_echo_barge_in(self) -> None:
+    def test_barge_in_ambiguous_text_does_not_clarify_or_trigger_echo_chain(self) -> None:
         config = AssistantConfig(
             input=InputConfig(mode="audio"),
             wake=WakeConfig(engine="disabled"),
@@ -1542,11 +1573,10 @@ class CoreTests(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()):
             reply = assistant.run_conversation()
 
-        clarification = "我没太听清，你是想找临时用工渠道吗？"
         self.assertEqual(reply.routed_to, "input_gate")
         self.assertEqual(reply.text, "我没听清。")
-        self.assertEqual(assistant.tts.spoken, ["reply 1", clarification])
-        self.assertEqual(fake_vad.items, [])
+        self.assertEqual(assistant.tts.spoken, ["reply 1"])
+        self.assertEqual(fake_vad.items, [self_echo])
         self.assertIsNone(assistant._pending_barge_utterance)
 
     def test_barge_in_echo_of_normal_reply_is_rejected_without_llm(self) -> None:

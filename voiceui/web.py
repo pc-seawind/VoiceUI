@@ -2,6 +2,7 @@ from __future__ import annotations
 
 # ruff: noqa: E501 - embedded single-file HTML/CSS/JS intentionally keeps long lines.
 import argparse
+import errno
 import json
 import mimetypes
 import sys
@@ -77,7 +78,24 @@ class VoiceUiWebConsole:
         class Handler(_VoiceUiWebHandler):
             console = owner
 
-        server = ThreadingHTTPServer((self.settings.host, self.settings.port), Handler)
+        try:
+            server = ThreadingHTTPServer((self.settings.host, self.settings.port), Handler)
+        except OSError as exc:
+            log_event(
+                "web",
+                "error",
+                log_id="web.error",
+                host=self.settings.host,
+                port=self.settings.port,
+                error=str(exc),
+            )
+            if exc.errno == errno.EADDRINUSE:
+                raise RuntimeError(
+                    "VoiceUI web console port is already in use: "
+                    f"{self.settings.host}:{self.settings.port}. "
+                    "Stop the existing service or pass --web-port to use another port."
+                ) from exc
+            raise
         self._server = server
         self._thread = threading.Thread(
             target=server.serve_forever,

@@ -89,6 +89,7 @@ LOG_SPECS: tuple[LogSpec, ...] = (
     LogSpec("stt.warmed_up", "event", "stt", "warmed_up"),
     LogSpec("tool.executed", "event", "tool", "executed"),
     LogSpec("tools.llm_round", "event", "tools", "llm_round"),
+    LogSpec("tools.missing_required_tool_call", "event", "tools", "missing_required_tool_call"),
     LogSpec("tools.progress_prompt", "event", "tools", "progress_prompt"),
     LogSpec("tts.completed", "event", "tts", "completed"),
     LogSpec("tts.converted", "event", "tts", "converted"),
@@ -474,6 +475,8 @@ def _write_text_record_from_params(
 ) -> None:
     if module not in _TEXT_RECORD_MODULES:
         return
+    if _should_skip_text_record(module, event, params):
+        return
     for key in _TEXT_HIGHLIGHT_KEYS:
         if key in params:
             _write_text_record(
@@ -485,6 +488,19 @@ def _write_text_record_from_params(
                 params={name: value for name, value in params.items() if name != key},
             )
             return
+
+
+def _should_skip_text_record(module: str, event: str, params: dict[str, Any]) -> bool:
+    # Barge-in streaming STT is first logged by the monitor thread with
+    # source=barge_in.  When the queued barge-in utterance is processed as the
+    # next turn, _run_audio_turn logs the same transcript again as
+    # source=barge_in_stream for runtime timing visibility.  Keep that second
+    # runtime log, but do not write a duplicate user-visible conversation row.
+    return (
+        module == "stt"
+        and event == "completed"
+        and str(params.get("source") or "") == "barge_in_stream"
+    )
 
 
 def _write_text_record(

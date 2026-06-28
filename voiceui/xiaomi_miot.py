@@ -338,7 +338,13 @@ class XiaomiMiotClient:
             target_device = dict(best_matches[0][1])
 
         if not target_device.get("online", True):
-            _log_miot_resolver(command, "offline", 1, reason="target_offline")
+            _log_miot_resolver(
+                command,
+                "offline",
+                1,
+                reason="target_offline",
+                target_device=target_device,
+            )
             return {
                 "status": "offline",
                 "decision": "unsupported",
@@ -349,7 +355,13 @@ class XiaomiMiotClient:
         spec = self.get_device_spec(str(target_device["did"]))
         control = _select_control_item(spec, command)
         if control is None:
-            _log_miot_resolver(command, "unsupported", 1, reason="no_control_item")
+            _log_miot_resolver(
+                command,
+                "unsupported",
+                1,
+                reason="no_control_item",
+                target_device=target_device,
+            )
             return {
                 "status": "unsupported",
                 "decision": "unsupported",
@@ -358,9 +370,38 @@ class XiaomiMiotClient:
                 "device": _public_device(target_device),
                 "query": command,
             }
-        control = self._resolve_relative_control_value(str(target_device["did"]), control)
+        try:
+            control = self._resolve_relative_control_value(str(target_device["did"]), control)
+        except RuntimeError as exc:
+            _log_miot_resolver(
+                command,
+                "failed",
+                1,
+                reason="relative_value_read_failed",
+                target_device=target_device,
+                item=control.get("item") if isinstance(control.get("item"), dict) else None,
+                error=str(exc),
+            )
+            return {
+                "ok": False,
+                "status": "failed",
+                "decision": "failed",
+                "message": "读取设备当前状态失败，无法计算相对调节值。",
+                "error": str(exc),
+                "device": _public_device(target_device),
+                "action": command.get("action"),
+                "item": control["item"],
+                "query": command,
+            }
         if dry_run:
-            _log_miot_resolver(command, "resolved", 1, reason="dry_run")
+            _log_miot_resolver(
+                command,
+                "resolved",
+                1,
+                reason="dry_run",
+                target_device=target_device,
+                item=control.get("item") if isinstance(control.get("item"), dict) else None,
+            )
             return {
                 "status": "resolved",
                 "decision": "resolved",
@@ -372,13 +413,44 @@ class XiaomiMiotClient:
                 "item": control["item"],
             }
 
-        result = self.send_ctrl_rpc(
-            str(target_device["did"]),
-            str(control["iid"]),
-            control["value"],
-            verify=True,
+        try:
+            result = self.send_ctrl_rpc(
+                str(target_device["did"]),
+                str(control["iid"]),
+                control["value"],
+                verify=True,
+            )
+        except RuntimeError as exc:
+            _log_miot_resolver(
+                command,
+                "failed",
+                1,
+                reason="control_rpc_failed",
+                target_device=target_device,
+                item=control.get("item") if isinstance(control.get("item"), dict) else None,
+                error=str(exc),
+            )
+            return {
+                "ok": False,
+                "status": "failed",
+                "decision": "failed",
+                "message": "设备控制请求失败，请检查设备是否在线、权限或属性映射。",
+                "error": str(exc),
+                "device": _public_device(target_device),
+                "target_value": control["value"],
+                "previous_value": control.get("previous_value"),
+                "action": command.get("action"),
+                "item": control["item"],
+                "query": command,
+            }
+        _log_miot_resolver(
+            command,
+            "executed",
+            1,
+            reason="single_match",
+            target_device=target_device,
+            item=control.get("item") if isinstance(control.get("item"), dict) else None,
         )
-        _log_miot_resolver(command, "executed", 1, reason="single_match")
         return {
             **result,
             "decision": "executed",
@@ -2416,6 +2488,9 @@ def _log_miot_resolver(
     reason: str,
     success_count: int | None = None,
     failure_count: int | None = None,
+    target_device: dict[str, Any] | None = None,
+    item: dict[str, Any] | None = None,
+    error: str | None = None,
 ) -> None:
     params: dict[str, Any] = {
         "decision": decision,
@@ -2430,7 +2505,18 @@ def _log_miot_resolver(
         params["success_count"] = success_count
     if failure_count is not None:
         params["failure_count"] = failure_count
+    if target_device is not None:
+        params["matched_device"] = _public_device(target_device)
+    if item is not None:
+        params["selected_item"] = _miot_item_log_summary(item)
+    if error:
+        params["error"] = error
     log_event("miot", "resolver", log_id="miot.resolver", **params)
+
+
+def _miot_item_log_summary(item: dict[str, Any]) -> dict[str, Any]:
+    keys = ("iid", "siid", "piid", "aiid", "name", "description", "unit", "format")
+    return {key: item[key] for key in keys if key in item and item[key] != ""}
 
 
 def _format_property_read_response(

@@ -22,9 +22,9 @@ audio:
 wake:
   engine: openwakeword
   model: alexa
-  # Local wake-monitor trials on the XVF3800 raw channel peaked around 0.5 for
-  # "alexa", so keep the bring-up threshold lower than the default 0.5.
-  threshold: 0.3
+  # Keep production wake less sensitive on the XVF3800 raw channel.  If a room
+  # is noisy, tune within 0.45-0.55 instead of dropping back to bring-up levels.
+  threshold: 0.5
   max_wait_seconds: 0
   inference_framework: onnx
   debug: true

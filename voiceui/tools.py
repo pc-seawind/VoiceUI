@@ -712,6 +712,7 @@ class VoiceToolRunner:
                 name=call.name,
                 latency_ms=0,
                 ok=False,
+                error=f"Unknown tool: {call.name}",
             )
             return {
                 "ok": False,
@@ -722,20 +723,21 @@ class VoiceToolRunner:
         try:
             result = tool.handler(call.arguments)
             latency_ms = int((time.monotonic() - started) * 1000)
-            log_event(
-                "tool",
-                "executed",
-                log_id="tool.executed",
-                name=call.name,
-                latency_ms=latency_ms,
-                ok=True,
-            )
             if isinstance(result, dict):
                 payload = {"ok": True, **result} if "ok" not in result else dict(result)
             else:
                 payload = {"ok": True, "result": result}
             payload.setdefault("latency_ms", latency_ms)
             payload = self._with_tool_direct_response(call.name, payload)
+            log_event(
+                "tool",
+                "executed",
+                log_id="tool.executed",
+                name=call.name,
+                latency_ms=latency_ms,
+                ok=bool(payload.get("ok", True)),
+                **_tool_log_summary(call, payload),
+            )
             if remember:
                 self._remember_miot_control(call.name, payload)
             return payload
@@ -748,6 +750,8 @@ class VoiceToolRunner:
                 name=call.name,
                 latency_ms=latency_ms,
                 ok=False,
+                error=str(exc),
+                arguments=_tool_argument_summary(call.arguments),
             )
             return {"ok": False, "error": str(exc)}
 
@@ -2003,6 +2007,65 @@ def _assistant_tool_call_payload(call: ToolCall) -> dict[str, Any]:
             "arguments": _to_json_text(call.arguments),
         },
     }
+
+
+def _tool_log_summary(call: ToolCall, payload: dict[str, Any]) -> dict[str, Any]:
+    summary: dict[str, Any] = {
+        "status": str(payload.get("status") or ""),
+        "decision": str(payload.get("decision") or ""),
+    }
+    if not bool(payload.get("ok", True)):
+        summary["error"] = str(payload.get("error") or payload.get("message") or "")
+    if call.name.startswith("xiaomi_miot"):
+        summary["arguments"] = _tool_argument_summary(call.arguments)
+        query = payload.get("query")
+        if isinstance(query, dict):
+            summary["query"] = _tool_argument_summary(query)
+        device = payload.get("device")
+        if isinstance(device, dict):
+            summary["device"] = _miot_device_log_summary(device)
+        item = payload.get("item") or payload.get("property")
+        if isinstance(item, dict):
+            summary["item"] = _miot_item_log_summary(item)
+        if "target_value" in payload:
+            summary["target_value"] = payload.get("target_value")
+        if "previous_value" in payload:
+            summary["previous_value"] = payload.get("previous_value")
+        if "readback_value" in payload:
+            summary["readback_value"] = payload.get("readback_value")
+        failures = payload.get("failures")
+        if isinstance(failures, list) and failures:
+            summary["failure_count"] = len(failures)
+            summary["failures"] = failures[:3]
+    return {key: value for key, value in summary.items() if value not in ("", None)}
+
+
+def _tool_argument_summary(arguments: dict[str, Any]) -> dict[str, Any]:
+    keys = (
+        "request",
+        "area",
+        "device",
+        "device_class",
+        "action",
+        "property",
+        "property_query",
+        "value",
+        "relative_delta",
+        "did",
+        "iid",
+        "dry_run",
+    )
+    return {key: arguments[key] for key in keys if key in arguments and arguments[key] != ""}
+
+
+def _miot_device_log_summary(device: dict[str, Any]) -> dict[str, Any]:
+    keys = ("name", "did", "room", "room_name", "model", "online")
+    return {key: device[key] for key in keys if key in device and device[key] != ""}
+
+
+def _miot_item_log_summary(item: dict[str, Any]) -> dict[str, Any]:
+    keys = ("iid", "siid", "piid", "aiid", "name", "description", "unit", "format")
+    return {key: item[key] for key in keys if key in item and item[key] != ""}
 
 
 def _with_tool_use_instructions(messages: list[ChatMessage]) -> list[ChatMessage]:

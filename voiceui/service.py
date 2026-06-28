@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import sys
+import tempfile
 from pathlib import Path
 
 from voiceui.config import AUTO_CONFIG, load_config
@@ -66,6 +68,7 @@ def main(argv: list[str] | None = None) -> int:
 
     assistant: VoiceAssistant | None = None
     web_console: VoiceUiWebConsole | None = None
+    instance_lock: ServiceInstanceLock | None = None
     try:
         load_dotenv()
         config = load_config(args.config)
@@ -84,6 +87,16 @@ def main(argv: list[str] | None = None) -> int:
             config.web.port = args.web_port
         configure_logging(config.logging)
         configure_log_files(stdout_mode=_SERVICE_STDOUT_MODE)
+        instance_lock = ServiceInstanceLock(_service_instance_lock_path())
+        if not instance_lock.acquire():
+            log_event(
+                "service",
+                "error",
+                log_id="service.error",
+                error="another VoiceUI service instance is already running",
+                lock_path=instance_lock.path,
+            )
+            return 2
 
         assistant = VoiceAssistant(config)
         if config.web.enabled:
@@ -125,6 +138,9 @@ def main(argv: list[str] | None = None) -> int:
             _restore_service_log_files(assistant)
         log_event("service", "error", log_id="service.error", error=exc)
         return 2
+    finally:
+        if instance_lock is not None:
+            instance_lock.release()
 
 
 def _prepare_service_config(
@@ -157,6 +173,76 @@ def _restore_service_log_files(assistant: VoiceAssistant) -> None:
         text_record_dir=assistant.audio_dump.text_record_dir(),
         stdout_mode=_SERVICE_STDOUT_MODE,
     )
+
+
+class ServiceInstanceLock:
+    def __init__(self, path: Path):
+        self.path = path
+        self._file = None
+
+    def acquire(self) -> bool:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        file = self.path.open("a+", encoding="utf-8")
+        file.seek(0)
+        if not _try_lock_file(file):
+            file.close()
+            return False
+        file.seek(0)
+        file.truncate()
+        file.write(str(_current_process_id()))
+        file.flush()
+        self._file = file
+        return True
+
+    def release(self) -> None:
+        file = self._file
+        self._file = None
+        if file is None:
+            return
+        with contextlib.suppress(Exception):
+            _unlock_file(file)
+        file.close()
+
+
+def _service_instance_lock_path() -> Path:
+    return Path(tempfile.gettempdir()) / "voiceui-service.lock"
+
+
+def _current_process_id() -> int:
+    import os
+
+    return os.getpid()
+
+
+def _try_lock_file(file) -> bool:
+    try:
+        import fcntl
+
+        try:
+            fcntl.flock(file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return False
+        return True
+    except ImportError:
+        import msvcrt
+
+        try:
+            msvcrt.locking(file.fileno(), msvcrt.LK_NBLCK, 1)
+        except OSError:
+            return False
+        return True
+
+
+def _unlock_file(file) -> None:
+    try:
+        import fcntl
+
+        fcntl.flock(file.fileno(), fcntl.LOCK_UN)
+    except ImportError:
+        import msvcrt
+
+        file.seek(0)
+        msvcrt.locking(file.fileno(), msvcrt.LK_UNLCK, 1)
 
 
 if __name__ == "__main__":

@@ -6,7 +6,11 @@ from pathlib import Path
 
 from voiceui.config import AUTO_CONFIG
 from voiceui.models import AssistantConfig, DebugConfig, InputConfig
-from voiceui.service import _DEFAULT_SERVICE_CONFIG, _prepare_service_config
+from voiceui.service import (
+    _DEFAULT_SERVICE_CONFIG,
+    ServiceInstanceLock,
+    _prepare_service_config,
+)
 
 
 class ServiceTests(unittest.TestCase):
@@ -80,6 +84,19 @@ class ServiceTests(unittest.TestCase):
         self.assertTrue(config.debug.save_audio)
         self.assertTrue(config.debug.system_input_dump_enabled)
         self.assertFalse(config.debug.voice_path_dump_enabled)
+
+    def test_service_instance_lock_rejects_second_holder(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "voiceui.lock"
+            first = ServiceInstanceLock(path)
+            second = ServiceInstanceLock(path)
+            self.assertTrue(first.acquire())
+            try:
+                self.assertFalse(second.acquire())
+            finally:
+                first.release()
+            self.assertTrue(second.acquire())
+            second.release()
 
 
 if __name__ == "__main__":

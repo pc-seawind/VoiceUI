@@ -190,6 +190,34 @@ class LogTests(unittest.TestCase):
                 ],
             )
 
+    def test_barge_in_stream_replay_is_not_written_as_duplicate_text_record(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            configure_log_files(text_record_dir=temp_dir)
+
+            with redirect_stdout(io.StringIO()):
+                log_event(
+                    "stt",
+                    "completed",
+                    latency_ms=10,
+                    source="barge_in",
+                    text="停一下",
+                )
+                log_event(
+                    "stt",
+                    "completed",
+                    latency_ms=0,
+                    source="barge_in_stream",
+                    text="停一下",
+                )
+
+            files = list(Path(temp_dir).glob("voice_text_*.jsonl"))
+            self.assertEqual(len(files), 1)
+            records = [
+                json.loads(line)
+                for line in files[0].read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertEqual([record["text"] for record in records], ["停一下"])
+
 
 if __name__ == "__main__":
     unittest.main()
