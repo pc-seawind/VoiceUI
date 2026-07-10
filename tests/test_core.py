@@ -67,7 +67,9 @@ class FakeVad:
         stop_event: threading.Event | None = None,
         on_speech_start=None,
         on_speech_audio=None,
+        max_speech_ms: int | None = None,
     ) -> Utterance:
+        del max_speech_ms
         self.start_timeouts.append(start_timeout_seconds)
         if self.on_record is not None:
             self.on_record()
@@ -1368,6 +1370,44 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(reply.text, "我没听清。")
         self.assertEqual(len(assistant.chat.calls), 1)
         self.assertEqual(assistant.tts.spoken, ["reply 1"])
+
+    def test_follow_up_uses_shorter_max_speech_window(self) -> None:
+        config = AssistantConfig(
+            input=InputConfig(mode="audio"),
+            wake=WakeConfig(engine="disabled"),
+            conversation=ConversationConfig(
+                follow_up_seconds=8,
+                follow_up_max_speech_ms=10000,
+            ),
+            llm=LlmConfig(system_prompt="system"),
+        )
+        assistant = VoiceAssistant(config)
+        assistant.wake = FakeWake()
+        assistant.wake_ack = FakeWakeAck()
+        assistant.vad = FakeVad(
+            [
+                Utterance(pcm=b"first", sample_rate=16000, duration_ms=80),
+                SpeechStartTimeoutError,
+            ]
+        )
+        assistant.stt = FakeStt()
+        assistant.chat = RecordingChat()
+        assistant.tts = FakeTts()
+
+        seen_max_speech_ms: list[int | None] = []
+        original_record = assistant.vad.record
+
+        def record_with_max_capture(*args, **kwargs):
+            seen_max_speech_ms.append(kwargs.get("max_speech_ms"))
+            return original_record(*args, **kwargs)
+
+        assistant.vad.record = record_with_max_capture  # type: ignore[method-assign]
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            reply = assistant.run_conversation()
+
+        self.assertEqual(reply.text, "reply 1")
+        self.assertEqual(seen_max_speech_ms, [None, 10000])
 
     def test_barge_in_ambiguous_short_text_rejects_silently_without_session_pollution(self) -> None:
         config = AssistantConfig(

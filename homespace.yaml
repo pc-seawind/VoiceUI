@@ -15,8 +15,8 @@ description: "Voice assistant runtime with a web console for remote logs, debug 
 artifacts:
   - kind: script
     name: voiceui-web-console
-    cmd: /home/emox/work/projects/VoiceUI/.venv/bin/python -m voiceui.web --config auto --host 0.0.0.0 --port 8765
-    hint: "Start the VoiceUI web console on port 8765 for logs, debug sessions, conversation history, and text chat input."
+    cmd: powershell -NoProfile -ExecutionPolicy Bypass -Command "Set-Location 'D:\Workspace\Project\VoiceUI'; .\.venv\Scripts\python.exe -m voiceui.service --config auto"
+    hint: "Start the local VoiceUI service with the web console enabled by the default auto config on port 8765."
 # Example:
 # artifacts:
 #   - kind: script

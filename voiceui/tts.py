@@ -41,6 +41,13 @@ from voiceui.wake_ack import (
 _ALIYUN_TOKEN_REFRESH_SECONDS = 20 * 60 * 60
 
 
+def _positive_elapsed_ms(started: float) -> int:
+    elapsed = time.perf_counter() - started
+    if elapsed <= 0:
+        return 0
+    return max(1, int(elapsed * 1000))
+
+
 class TextToSpeech:
     def warm_up(self) -> bool:
         return False
@@ -1447,9 +1454,9 @@ def _play_pcm_stream(
                     if dump_start_ms is None:
                         dump_start_ms = dump_manager.elapsed_ms()
                     dump_chunks.append(playable_chunk)
-                write_started = time.monotonic()
+                write_started = time.perf_counter()
                 stream.write(playable_chunk)
-                write_ms = int((time.monotonic() - write_started) * 1000)
+                write_ms = _positive_elapsed_ms(write_started)
                 playback_write_blocked_ms += write_ms
                 playback_max_write_ms = max(playback_max_write_ms, write_ms)
                 written_chunks += 1

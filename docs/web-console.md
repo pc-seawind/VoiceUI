@@ -7,17 +7,18 @@ VoiceUI now has a small built-in web console for remote operation:
 - debug session / metadata / audio dump browsing
 - text chat input as a second input source alongside voice
 
-## Production service
+## Production Service
 
-The Linux wake demo config enables the console on `0.0.0.0:8765`:
+The Windows and Linux production wake demo configs enable the console on
+`0.0.0.0:8765` by default:
 
-```bash
-voiceui-service --config auto --web
+```powershell
+voiceui-service --config auto
 ```
 
-Or override the bind address explicitly:
+Override the bind address explicitly only when needed:
 
-```bash
+```powershell
 voiceui-service --config auto --web --web-host 0.0.0.0 --web-port 8765
 ```
 

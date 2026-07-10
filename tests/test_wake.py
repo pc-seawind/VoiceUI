@@ -68,6 +68,38 @@ class WakeTests(unittest.TestCase):
         self.assertEqual(fake_model.reset_calls, 1)
         self.assertEqual(fake_model.predict_calls, 1)
 
+    def test_openwakeword_requires_consecutive_trigger_hits(self) -> None:
+        class FakeAudio:
+            sample_rate = 16000
+
+            def chunks(self):
+                for _index in range(4):
+                    yield b"\x00\x00" * 1280
+
+        class FakeModel:
+            def __init__(self):
+                self.predict_calls = 0
+                self.scores = [0.9, 0.0, 0.8, 0.85]
+
+            def reset(self):
+                return None
+
+            def predict(self, _samples):
+                score = self.scores[self.predict_calls]
+                self.predict_calls += 1
+                return {"alexa": score}
+
+        detector = OpenWakeWordDetector(
+            WakeConfig(engine="openwakeword", threshold=0.5, trigger_level=2)
+        )
+        fake_model = FakeModel()
+        detector._model = fake_model
+
+        event = detector.wait(FakeAudio())
+
+        self.assertEqual(event.label, "alexa")
+        self.assertEqual(fake_model.predict_calls, 4)
+
     def test_wake_debug_does_not_print_score_without_continuous_switch(self) -> None:
         class FakeAudio:
             sample_rate = 16000

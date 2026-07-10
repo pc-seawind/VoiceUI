@@ -72,6 +72,7 @@ class WakeConfig:
     engine: Literal["disabled", "manual", "openwakeword", "sherpa_onnx"] = "disabled"
     model: str = "alexa"
     threshold: float = 0.5
+    trigger_level: int = 1
     max_wait_seconds: float = 0.0
     inference_framework: Literal["onnx", "tflite"] = "onnx"
     debug: bool = False
@@ -187,6 +188,7 @@ class TtsConfig:
 @dataclass(slots=True)
 class ConversationConfig:
     follow_up_seconds: int = 10
+    follow_up_max_speech_ms: int = 10000
     wake_speech_start_timeout_seconds: float = 8.0
     max_turns: int = 12
     barge_in_enabled: bool = False

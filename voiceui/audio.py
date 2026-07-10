@@ -149,16 +149,43 @@ class SoundDeviceAudioInput:
             ) from exc
 
         device = resolve_sounddevice_device(sd, self.config.device, kind="input")
-        frames = max(1, int(self.config.sample_rate * self.config.block_ms / 1000))
-        kwargs = {
-            "samplerate": self.config.sample_rate,
-            "channels": self.config.channels,
-            "dtype": "int16",
-            "blocksize": frames,
-        }
-        if device is not None:
-            kwargs["device"] = device
+        requested_error: Exception | None = None
+        for stream_sample_rate in _candidate_input_sample_rates(
+            sd,
+            device,
+            self.config.sample_rate,
+        ):
+            frames = max(1, int(stream_sample_rate * self.config.block_ms / 1000))
+            kwargs = {
+                "samplerate": stream_sample_rate,
+                "channels": self.config.channels,
+                "dtype": "int16",
+                "blocksize": frames,
+            }
+            if device is not None:
+                kwargs["device"] = device
+            try:
+                yield from self._chunks_from_stream(sd, kwargs, device, stream_sample_rate, frames)
+                return
+            except Exception as exc:
+                if stream_sample_rate == self.config.sample_rate:
+                    requested_error = exc
+                continue
+        if requested_error is not None:
+            raise requested_error
+        raise RuntimeError(
+            "Could not open audio input stream "
+            f"device={self.config.device!r} sample_rate={self.config.sample_rate}"
+        )
 
+    def _chunks_from_stream(
+        self,
+        sd,
+        kwargs: dict[str, object],
+        device: int | None,
+        stream_sample_rate: int,
+        frames: int,
+    ) -> Iterator[bytes]:
         stream_started = time.monotonic()
         with sd.RawInputStream(**kwargs) as stream:
             if is_log_enabled("audio.stream_opened", default_enabled=self.config.debug):
@@ -173,6 +200,7 @@ class SoundDeviceAudioInput:
                     channels=self.config.channels,
                     selected_channel=self.selected_channel,
                     sample_rate=self.sample_rate,
+                    stream_sample_rate=stream_sample_rate,
                     block_ms=self.block_ms,
                     latency_ms=latency_ms,
                 )
@@ -203,6 +231,12 @@ class SoundDeviceAudioInput:
                         channels=self.config.channels,
                         selected_channel=self.selected_channel,
                     )
+                if stream_sample_rate != self.sample_rate:
+                    chunk = resample_pcm16_mono(
+                        chunk,
+                        source_rate=stream_sample_rate,
+                        target_rate=self.sample_rate,
+                    )
                 chunk = apply_pcm16_gain_db(chunk, self.config.input_gain_db)
                 yield chunk
 
@@ -211,6 +245,21 @@ class SoundDeviceAudioInput:
             recordings = list(self._raw_recordings)
         for recording in recordings:
             recording.append(chunk)
+
+
+def _candidate_input_sample_rates(sd, device: int | None, requested_sample_rate: int) -> list[int]:
+    candidates = [requested_sample_rate]
+    try:
+        info = sd.query_devices(device, "input")
+        default_rate = int(round(float(info.get("default_samplerate") or 0)))
+        if default_rate > 0 and default_rate not in candidates:
+            candidates.append(default_rate)
+    except Exception:
+        pass
+    for sample_rate in (16000, 48000, 44100):
+        if sample_rate not in candidates:
+            candidates.append(sample_rate)
+    return candidates
 
 
 def create_audio_input(
@@ -450,6 +499,15 @@ def apply_pcm16_gain_db_limited(
 
 def _normalized_pcm16_limiter_threshold(threshold: float) -> float:
     return max(0.05, min(1.0, float(threshold)))
+
+
+def resample_pcm16_mono(pcm: bytes, *, source_rate: int, target_rate: int) -> bytes:
+    if source_rate == target_rate or not pcm:
+        return pcm
+    import audioop
+
+    converted, _state = audioop.ratecv(pcm, 2, 1, source_rate, target_rate, None)
+    return converted
 
 
 def write_pcm16_wav(

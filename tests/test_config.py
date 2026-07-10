@@ -49,6 +49,7 @@ class ConfigTests(unittest.TestCase):
         self.assertIsInstance(config.audio, AudioConfig)
         self.assertEqual(config.input.mode, "text")
         self.assertEqual(config.wake.debug_audio_seconds, 5.0)
+        self.assertEqual(config.wake.trigger_level, 1)
         self.assertIsInstance(config.cron, CronConfig)
         self.assertFalse(config.cron.enabled)
         self.assertIsInstance(config.logging, LoggingConfig)
@@ -65,6 +66,7 @@ class ConfigTests(unittest.TestCase):
         self.assertIn("闭嘴", config.conversation.voice_termination_phrases)
         self.assertEqual(config.conversation.voice_termination_reply, "")
         self.assertEqual(config.conversation.wake_speech_start_timeout_seconds, 8.0)
+        self.assertEqual(config.conversation.follow_up_max_speech_ms, 10000)
         self.assertEqual(config.conversation.max_spoken_reply_chars, 80)
         self.assertTrue(config.conversation.reminders_enabled)
         self.assertEqual(config.conversation.max_reminder_delay_seconds, 30 * 24 * 60 * 60)
@@ -102,9 +104,15 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(linux_config.audio.device, LINUX_XVF_DEVICE)
         self.assertEqual(linux_config.wake.engine, "openwakeword")
         self.assertEqual(linux_config.stt.provider, "aliyun_nls")
+        self.assertTrue(linux_config.web.enabled)
+        self.assertEqual(linux_config.web.host, "0.0.0.0")
+        self.assertEqual(linux_config.web.port, 8765)
         self.assertIn(windows_config.audio.device, XVF_INPUT_DEVICES)
         self.assertEqual(windows_config.wake.engine, "openwakeword")
         self.assertEqual(windows_config.stt.provider, "aliyun_nls")
+        self.assertTrue(windows_config.web.enabled)
+        self.assertEqual(windows_config.web.host, "0.0.0.0")
+        self.assertEqual(windows_config.web.port, 8765)
 
     def test_example_config_loads_nested_values(self) -> None:
         config = load_config("config.example.yaml")
@@ -262,6 +270,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.wake.engine, "openwakeword")
         self.assertEqual(config.wake.inference_framework, "onnx")
         self.assertEqual(config.wake.model, "alexa")
+        self.assertEqual(config.wake.trigger_level, 2)
         self.assertEqual(config.wake.max_wait_seconds, 0)
         self.assertTrue(config.wake_ack.enabled)
         self.assertEqual(config.vad.engine, "silero")
@@ -277,6 +286,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.tts.playback_gain_db, 0.0)
         self.assertEqual(config.wake_ack.playback_gain_db, 0.0)
         self.assertEqual(config.conversation.follow_up_seconds, 10)
+        self.assertEqual(config.conversation.follow_up_max_speech_ms, 10000)
         self.assertEqual(config.conversation.wake_speech_start_timeout_seconds, 8)
         self.assertEqual(config.conversation.max_spoken_reply_chars, 80)
         self.assertTrue(config.conversation.barge_in_enabled)
@@ -324,6 +334,10 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(
             linux_config.conversation.wake_speech_start_timeout_seconds,
             windows_config.conversation.wake_speech_start_timeout_seconds,
+        )
+        self.assertEqual(
+            linux_config.conversation.follow_up_max_speech_ms,
+            windows_config.conversation.follow_up_max_speech_ms,
         )
         self.assertEqual(
             linux_config.conversation.max_spoken_reply_chars,
@@ -456,6 +470,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(aliyun_wake_config.audio.device, XVF_INPUT_DEVICE)
         self.assertEqual(aliyun_wake_config.wake.model, "alexa")
         self.assertEqual(aliyun_wake_config.wake.threshold, 0.5)
+        self.assertEqual(aliyun_wake_config.wake.trigger_level, 2)
         self.assertTrue(aliyun_wake_config.wake.debug)
         self.assertTrue(aliyun_wake_config.wake_ack.enabled)
         self.assertEqual(

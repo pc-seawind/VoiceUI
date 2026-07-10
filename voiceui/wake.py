@@ -125,6 +125,9 @@ class OpenWakeWordDetector(WakeDetector):
         debug_interval = max(0.1, self.config.debug_interval_seconds)
         next_debug_at = started + debug_interval
         debug_window = _WakeDebugWindow()
+        trigger_level = max(1, int(self.config.trigger_level))
+        trigger_hits = 0
+        trigger_label = ""
         audio_buffer = _PcmRingBuffer(
             max_bytes=int(
                 audio.sample_rate * 2 * max(0.0, self.config.debug_audio_seconds)
@@ -174,6 +177,16 @@ class OpenWakeWordDetector(WakeDetector):
                     debug_window.reset()
                     next_debug_at = now + debug_interval
             if confidence >= self.config.threshold:
+                if label == trigger_label:
+                    trigger_hits += 1
+                else:
+                    trigger_label = label
+                    trigger_hits = 1
+            else:
+                trigger_label = ""
+                trigger_hits = 0
+
+            if trigger_hits >= trigger_level:
                 if detected_debug_log_enabled:
                     elapsed = time.monotonic() - started
                     log_event(
@@ -185,6 +198,8 @@ class OpenWakeWordDetector(WakeDetector):
                         label=label,
                         confidence=f"{confidence:.3f}",
                         threshold=f"{self.config.threshold:.3f}",
+                        trigger_level=trigger_level,
+                        trigger_hits=trigger_hits,
                     )
                 pcm = audio_buffer.pcm()
                 return WakeEvent(

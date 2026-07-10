@@ -1895,6 +1895,7 @@ class VoiceAssistant:
         wake_ms: int,
         wake_ack_handle: _WakeAckHandle | None = None,
         speech_start_timeout_seconds: float = 0.0,
+        max_speech_ms: int | None = None,
         turn_index: int | None = None,
     ) -> tuple[AssistantReply, str]:
         if turn_index is None:
@@ -1953,6 +1954,7 @@ class VoiceAssistant:
                 stt_extra_timings,
             ) = self._record_and_stream_transcribe(
                 speech_start_timeout_seconds=speech_start_timeout_seconds,
+                max_speech_ms=max_speech_ms,
             )
             wake_ack_ms = wake_ack_handle.join() if wake_ack_handle is not None else 0
         else:
@@ -1962,6 +1964,7 @@ class VoiceAssistant:
             utterance = self.vad.record(
                 self.command_audio,
                 start_timeout_seconds=speech_start_timeout_seconds,
+                max_speech_ms=max_speech_ms,
             )
             vad_ms = int((time.monotonic() - vad_started) * 1000)
             log_event(
@@ -2089,6 +2092,7 @@ class VoiceAssistant:
         self,
         *,
         speech_start_timeout_seconds: float,
+        max_speech_ms: int | None = None,
     ) -> tuple[Utterance, str, int, int, dict[str, int]]:
         vad_started = time.monotonic()
         stream_handle: _StreamingSttHandle | None = self._take_standby_streaming_stt()
@@ -2122,6 +2126,7 @@ class VoiceAssistant:
                 start_timeout_seconds=speech_start_timeout_seconds,
                 on_speech_start=on_speech_start,
                 on_speech_audio=on_speech_audio,
+                max_speech_ms=max_speech_ms,
             )
         except Exception:
             if stream_handle is not None:
@@ -2246,6 +2251,12 @@ class VoiceAssistant:
             ),
         )
 
+    def _follow_up_max_speech_ms(self) -> int | None:
+        value = int(getattr(self.config.conversation, "follow_up_max_speech_ms", 10000))
+        if value <= 0:
+            return None
+        return value
+
     def _finish_wake_speech_timeout(
         self,
         wake_ack_handle: _WakeAckHandle | None,
@@ -2362,6 +2373,7 @@ class VoiceAssistant:
                                 follow_up_wake,
                                 wake_ms=0,
                                 speech_start_timeout_seconds=speech_start_timeout_seconds,
+                                max_speech_ms=self._follow_up_max_speech_ms(),
                             )
                         except SpeechStartTimeoutError:
                             log_event(

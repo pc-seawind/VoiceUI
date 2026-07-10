@@ -24,6 +24,7 @@ class VadRecorder:
         stop_event: threading.Event | None = None,
         on_speech_start: Callable[[], None] | None = None,
         on_speech_audio: Callable[[bytes], None] | None = None,
+        max_speech_ms: int | None = None,
     ) -> Utterance:
         raise NotImplementedError
 
@@ -39,13 +40,15 @@ class EnergyVadRecorder(VadRecorder):
         stop_event: threading.Event | None = None,
         on_speech_start: Callable[[], None] | None = None,
         on_speech_audio: Callable[[bytes], None] | None = None,
+        max_speech_ms: int | None = None,
     ) -> Utterance:
         chunk_ms = audio.block_ms
         pre_roll_chunks = max(1, self.config.pre_roll_ms // chunk_ms)
         min_speech_chunks = max(1, self.config.min_speech_ms // chunk_ms)
         start_buffer_chunks = pre_roll_chunks + min_speech_chunks
         silence_chunks = max(1, self.config.silence_ms // chunk_ms)
-        max_chunks = max(1, self.config.max_speech_ms // chunk_ms)
+        effective_max_speech_ms = _effective_max_speech_ms(self.config, max_speech_ms)
+        max_chunks = max(1, effective_max_speech_ms // chunk_ms)
         start_timeout_ms = max(0, int(start_timeout_seconds * 1000))
 
         pre_roll: deque[bytes] = deque(maxlen=start_buffer_chunks)
@@ -135,6 +138,7 @@ class SileroVadRecorder(VadRecorder):
         stop_event: threading.Event | None = None,
         on_speech_start: Callable[[], None] | None = None,
         on_speech_audio: Callable[[bytes], None] | None = None,
+        max_speech_ms: int | None = None,
     ) -> Utterance:
         if audio.sample_rate not in self._VALID_SAMPLE_RATES:
             raise RuntimeError(
@@ -154,7 +158,8 @@ class SileroVadRecorder(VadRecorder):
         min_speech_frames = max(1, self.config.min_speech_ms // window_ms)
         start_buffer_frames = pre_roll_frames + min_speech_frames
         silence_frames = max(1, self.config.silence_ms // window_ms)
-        max_frames = max(1, self.config.max_speech_ms // window_ms)
+        effective_max_speech_ms = _effective_max_speech_ms(self.config, max_speech_ms)
+        max_frames = max(1, effective_max_speech_ms // window_ms)
         start_timeout_ms = max(0, int(start_timeout_seconds * 1000))
 
         pre_roll: deque[bytes] = deque(maxlen=start_buffer_frames)
@@ -261,6 +266,7 @@ class WebRtcVadRecorder(VadRecorder):
         stop_event: threading.Event | None = None,
         on_speech_start: Callable[[], None] | None = None,
         on_speech_audio: Callable[[bytes], None] | None = None,
+        max_speech_ms: int | None = None,
     ) -> Utterance:
         if audio.sample_rate not in self._VALID_SAMPLE_RATES:
             raise RuntimeError(
@@ -281,7 +287,8 @@ class WebRtcVadRecorder(VadRecorder):
         min_speech_frames = max(1, self.config.min_speech_ms // frame_ms)
         start_buffer_frames = pre_roll_frames + min_speech_frames
         silence_frames = max(1, self.config.silence_ms // frame_ms)
-        max_frames = max(1, self.config.max_speech_ms // frame_ms)
+        effective_max_speech_ms = _effective_max_speech_ms(self.config, max_speech_ms)
+        max_frames = max(1, effective_max_speech_ms // frame_ms)
         start_timeout_ms = max(0, int(start_timeout_seconds * 1000))
 
         pre_roll: deque[bytes] = deque(maxlen=start_buffer_frames)
@@ -381,6 +388,12 @@ def _build_utterance(
             duration_ms = int(len(pcm) / 2 / sample_rate * 1000)
             trimmed_ms = int(trim_bytes / 2 / sample_rate * 1000)
     return Utterance(pcm=pcm, sample_rate=sample_rate, duration_ms=duration_ms), trimmed_ms
+
+
+def _effective_max_speech_ms(config: VadConfig, override_ms: int | None) -> int:
+    if override_ms is None:
+        return max(1, int(config.max_speech_ms))
+    return max(1, int(override_ms))
 
 
 def _pcm16_frames(audio: AudioInput, frame_ms: int) -> Iterator[bytes]:

@@ -25,6 +25,7 @@ wake:
   # Keep production wake less sensitive on the XVF3800 raw channel.  If a room
   # is noisy, tune within 0.45-0.55 instead of dropping back to bring-up levels.
   threshold: 0.5
+  trigger_level: 2
   max_wait_seconds: 0
   inference_framework: onnx
   debug: true
@@ -117,6 +118,7 @@ conversation:
   # After a wake word, stay in conversation mode and listen for follow-up
   # speech on the command/AEC channel before returning to wake monitoring.
   follow_up_seconds: 10
+  follow_up_max_speech_ms: 10000
   wake_speech_start_timeout_seconds: 8
   max_turns: 12
   max_spoken_reply_chars: 80
