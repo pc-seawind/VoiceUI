@@ -102,13 +102,13 @@ class ConfigTests(unittest.TestCase):
         windows_config = load_config(resolve_config_path("auto", platform="win32"))
 
         self.assertEqual(linux_config.audio.device, LINUX_XVF_DEVICE)
-        self.assertEqual(linux_config.wake.engine, "openwakeword")
+        self.assertEqual(linux_config.wake.engine, "wekws_mha")
         self.assertEqual(linux_config.stt.provider, "aliyun_nls")
         self.assertTrue(linux_config.web.enabled)
         self.assertEqual(linux_config.web.host, "0.0.0.0")
         self.assertEqual(linux_config.web.port, 8765)
         self.assertIn(windows_config.audio.device, XVF_INPUT_DEVICES)
-        self.assertEqual(windows_config.wake.engine, "openwakeword")
+        self.assertEqual(windows_config.wake.engine, "wekws_mha")
         self.assertEqual(windows_config.stt.provider, "aliyun_nls")
         self.assertTrue(windows_config.web.enabled)
         self.assertEqual(windows_config.web.host, "0.0.0.0")
@@ -263,13 +263,17 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.tts.provider, "console")
         self.assertTrue(config.logging.continuous["wake.score"])
 
-    def test_linux_wake_aliyun_config_uses_openwakeword_and_aliyun_backends(self) -> None:
+    def test_linux_wake_aliyun_config_uses_wekws_mha_and_aliyun_backends(self) -> None:
         config = load_config("config.demo.linux.wake.aliyun.yaml")
 
         self.assertEqual(config.audio.device, LINUX_XVF_DEVICE)
-        self.assertEqual(config.wake.engine, "openwakeword")
-        self.assertEqual(config.wake.inference_framework, "onnx")
-        self.assertEqual(config.wake.model, "alexa")
+        self.assertEqual(config.wake.engine, "wekws_mha")
+        self.assertEqual(config.wake.model, "models/wake/leela_mha/avg_5.pt")
+        self.assertEqual(
+            config.wake.wekws_label_thresholds,
+            {"hey_leela": 0.996, "hello_leela": 0.997},
+        )
+        self.assertEqual(config.wake.wekws_window_seconds, 2.0)
         self.assertEqual(config.wake.trigger_level, 2)
         self.assertEqual(config.wake.max_wait_seconds, 0)
         self.assertTrue(config.wake_ack.enabled)
@@ -465,11 +469,15 @@ class ConfigTests(unittest.TestCase):
             aliyun_tts_config.tts.endpoint,
             "wss://nls-gateway-cn-beijing.aliyuncs.com/ws/v1",
         )
-        self.assertEqual(aliyun_wake_config.wake.engine, "openwakeword")
+        self.assertEqual(aliyun_wake_config.wake.engine, "wekws_mha")
         self.assertTrue(aliyun_wake_config.audio.debug)
         self.assertEqual(aliyun_wake_config.audio.device, XVF_INPUT_DEVICE)
-        self.assertEqual(aliyun_wake_config.wake.model, "alexa")
-        self.assertEqual(aliyun_wake_config.wake.threshold, 0.5)
+        self.assertEqual(aliyun_wake_config.wake.model, "models/wake/leela_mha/avg_5.pt")
+        self.assertEqual(aliyun_wake_config.wake.threshold, 0.997)
+        self.assertEqual(
+            aliyun_wake_config.wake.wekws_label_thresholds,
+            {"hey_leela": 0.996, "hello_leela": 0.997},
+        )
         self.assertEqual(aliyun_wake_config.wake.trigger_level, 2)
         self.assertTrue(aliyun_wake_config.wake.debug)
         self.assertTrue(aliyun_wake_config.wake_ack.enabled)

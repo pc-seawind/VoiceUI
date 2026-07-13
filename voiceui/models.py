@@ -69,9 +69,11 @@ class AudioConfig:
 
 @dataclass(slots=True)
 class WakeConfig:
-    engine: Literal["disabled", "manual", "openwakeword", "sherpa_onnx"] = "disabled"
+    engine: Literal["disabled", "manual", "openwakeword", "wekws_mha", "sherpa_onnx"] = "disabled"
     model: str = "alexa"
     threshold: float = 0.5
+    wekws_label_thresholds: dict[str, float] = field(default_factory=dict)
+    wekws_window_seconds: float = 2.0
     trigger_level: int = 1
     max_wait_seconds: float = 0.0
     inference_framework: Literal["onnx", "tflite"] = "onnx"

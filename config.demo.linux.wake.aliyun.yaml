@@ -20,14 +20,16 @@ audio:
   debug: true
 
 wake:
-  engine: openwakeword
-  model: alexa
-  # Keep production wake less sensitive on the XVF3800 raw channel.  If a room
-  # is noisy, tune within 0.45-0.55 instead of dropping back to bring-up levels.
-  threshold: 0.5
+  engine: wekws_mha
+  model: models/wake/leela_mha/avg_5.pt
+  # These are the package's evaluated 0.2 FAR/hour operating points.
+  threshold: 0.997
+  wekws_label_thresholds:
+    hey_leela: 0.996
+    hello_leela: 0.997
+  wekws_window_seconds: 2.0
   trigger_level: 2
   max_wait_seconds: 0
-  inference_framework: onnx
   debug: true
   debug_interval_seconds: 1.0
   debug_top_predictions: 6

@@ -572,7 +572,7 @@ audio buffer around wake detection.
 
 For the first XVF3800 prototype:
 
-- Wake word: `openwakeword` with `alexa`.
+- Wake word: packaged WeKWS MHA/MFCC model with `hey_leela` and `hello_leela`.
 - Endpointing: Silero VAD for the current hardware demo. Tune
   `vad.threshold` as a probability threshold, raise it if background noise
   triggers speech, and adjust `vad.silence_ms` if command endings are clipped

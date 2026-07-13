@@ -234,6 +234,157 @@ class SherpaOnnxDetector(WakeDetector):
         )
 
 
+class WekwsMhaDetector(WakeDetector):
+    def __init__(self, config: WakeConfig):
+        self.config = config
+        self._runtime = None
+
+    def _load_runtime(self):
+        from voiceui.wekws import LeelaMhaRuntime
+
+        log_event(
+            "wake",
+            "loading",
+            log_id="wake.loading",
+            engine="wekws_mha",
+            model=self.config.model,
+            window_seconds=f"{self.config.wekws_window_seconds:.1f}",
+        )
+        return LeelaMhaRuntime(self.config.model)
+
+    def warm_up(self) -> bool:
+        if self._runtime is None:
+            self._runtime = self._load_runtime()
+        return True
+
+    def wait(self, audio: AudioInput) -> WakeEvent:
+        if self._runtime is None:
+            self._runtime = self._load_runtime()
+        if audio.sample_rate != self._runtime.sample_rate:
+            raise RuntimeError(
+                "Leela MHA requires "
+                f"{self._runtime.sample_rate} Hz audio, got sample_rate={audio.sample_rate}"
+            )
+
+        started = time.monotonic()
+        score_log_enabled = is_log_enabled("wake.score", kind="continuous")
+        debug_enabled_log_enabled = is_log_enabled(
+            "wake.debug_enabled",
+            default_enabled=self.config.debug,
+        )
+        detected_debug_log_enabled = is_log_enabled(
+            "wake.detected_debug",
+            default_enabled=self.config.debug,
+        )
+        debug_enabled = (
+            self.config.debug
+            or score_log_enabled
+            or debug_enabled_log_enabled
+            or detected_debug_log_enabled
+        )
+        debug_interval = max(0.1, self.config.debug_interval_seconds)
+        next_debug_at = started + debug_interval
+        debug_window = _WakeDebugWindow()
+        trigger_level = max(1, int(self.config.trigger_level))
+        trigger_hits = 0
+        trigger_label = ""
+        event_audio = _PcmRingBuffer(
+            max_bytes=int(audio.sample_rate * 2 * max(0.0, self.config.debug_audio_seconds))
+        )
+        model_audio = _PcmRingBuffer(
+            max_bytes=int(
+                audio.sample_rate * 2 * max(0.1, self.config.wekws_window_seconds)
+            )
+        )
+        if debug_enabled_log_enabled:
+            log_event(
+                "wake",
+                "debug_enabled",
+                log_id="wake.debug_enabled",
+                default_enabled=self.config.debug,
+                **_audio_input_params(audio),
+                model=self.config.model,
+                threshold=f"{self.config.threshold:.3f}",
+                framework="wekws_mha",
+            )
+
+        for chunk in audio.chunks():
+            event_audio.append(chunk)
+            model_audio.append(chunk)
+            predict_started = time.monotonic()
+            predictions = self._runtime.score_pcm(model_audio.pcm(), audio.sample_rate)
+            predict_ms = (time.monotonic() - predict_started) * 1000
+            label, confidence = _best_prediction(predictions)
+            threshold = self.config.wekws_label_thresholds.get(label, self.config.threshold)
+            if debug_enabled:
+                try:
+                    import numpy as np  # type: ignore[import-untyped]
+                except ImportError as exc:
+                    raise RuntimeError(
+                        "WeKWS MHA wake detection requires numpy. "
+                        'Install with: pip install -e ".[wake]"'
+                    ) from exc
+                samples = np.frombuffer(chunk, dtype=np.int16)
+                now = time.monotonic()
+                debug_window.update(
+                    samples=samples,
+                    predictions=predictions,
+                    label=label,
+                    confidence=confidence,
+                    predict_ms=predict_ms,
+                    audio_ms=int(len(samples) / audio.sample_rate * 1000),
+                )
+                if now >= next_debug_at:
+                    log_continuous(
+                        "wake",
+                        "score",
+                        log_id="wake.score",
+                        elapsed_s=f"{now - started:.1f}",
+                        **debug_window.snapshot(threshold, self.config.debug_top_predictions),
+                    )
+                    debug_window.reset()
+                    next_debug_at = now + debug_interval
+
+            if confidence >= threshold:
+                if label == trigger_label:
+                    trigger_hits += 1
+                else:
+                    trigger_label = label
+                    trigger_hits = 1
+            else:
+                trigger_label = ""
+                trigger_hits = 0
+
+            if trigger_hits >= trigger_level:
+                if detected_debug_log_enabled:
+                    log_event(
+                        "wake",
+                        "detected_debug",
+                        log_id="wake.detected_debug",
+                        default_enabled=self.config.debug,
+                        elapsed_s=f"{time.monotonic() - started:.2f}",
+                        label=label,
+                        confidence=f"{confidence:.3f}",
+                        threshold=f"{threshold:.3f}",
+                        trigger_level=trigger_level,
+                        trigger_hits=trigger_hits,
+                    )
+                pcm = event_audio.pcm()
+                return WakeEvent(
+                    engine="wekws_mha",
+                    confidence=confidence,
+                    label=label,
+                    pcm=pcm,
+                    sample_rate=audio.sample_rate,
+                    duration_ms=_pcm_duration_ms(pcm, audio.sample_rate),
+                )
+            elapsed = time.monotonic() - started
+            if self.config.max_wait_seconds > 0 and elapsed >= self.config.max_wait_seconds:
+                raise TimeoutError("Timed out waiting for wake word.")
+
+        raise RuntimeError("Audio stream ended while waiting for wake word.")
+
+
 def create_wake_detector(config: WakeConfig) -> WakeDetector:
     if config.engine == "disabled":
         return DisabledWakeDetector()
@@ -241,6 +392,8 @@ def create_wake_detector(config: WakeConfig) -> WakeDetector:
         return ManualWakeDetector()
     if config.engine == "openwakeword":
         return OpenWakeWordDetector(config)
+    if config.engine == "wekws_mha":
+        return WekwsMhaDetector(config)
     if config.engine == "sherpa_onnx":
         return SherpaOnnxDetector(config)
     raise ValueError(f"Unsupported wake engine: {config.engine}")

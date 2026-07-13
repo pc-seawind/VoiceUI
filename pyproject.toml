@@ -18,7 +18,13 @@ demo = [
   "scipy>=1.11.0",
   "silero-vad>=5.1.0"
 ]
-wake = ["openwakeword>=0.6.0", "onnxruntime>=1.16.0", "numpy>=1.26.0"]
+wake = [
+  "openwakeword>=0.6.0",
+  "onnxruntime>=1.16.0",
+  "numpy>=1.26.0",
+  "torch>=2.0.0",
+  "torchaudio>=2.0.0"
+]
 clarity = [
   "torch>=2.0.0",
   "torchaudio>=2.0.0",
@@ -43,6 +49,8 @@ all = [
   "openwakeword>=0.6.0",
   "onnxruntime>=1.16.0",
   "numpy>=1.26.0",
+  "torch>=2.0.0",
+  "torchaudio>=2.0.0",
   "faster-whisper>=1.0.0",
   "silero-vad>=5.1.0",
   "webrtcvad-wheels>=2.0.14",

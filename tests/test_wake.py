@@ -11,6 +11,7 @@ from voiceui.wake import (
     DisabledWakeDetector,
     ManualWakeDetector,
     OpenWakeWordDetector,
+    WekwsMhaDetector,
     _best_prediction,
     _format_predictions,
     _normalize_openwakeword_label,
@@ -38,6 +39,41 @@ class WakeTests(unittest.TestCase):
         detector = create_wake_detector(WakeConfig(engine="openwakeword"))
 
         self.assertIsInstance(detector, OpenWakeWordDetector)
+
+    def test_create_wekws_mha_detector_does_not_load_model(self) -> None:
+        detector = create_wake_detector(WakeConfig(engine="wekws_mha"))
+
+        self.assertIsInstance(detector, WekwsMhaDetector)
+
+    def test_wekws_mha_uses_per_label_thresholds(self) -> None:
+        class FakeAudio:
+            sample_rate = 16000
+
+            def chunks(self):
+                yield b"\x00\x00" * 1280
+                yield b"\x00\x00" * 1280
+
+        class FakeRuntime:
+            sample_rate = 16000
+
+            def score_pcm(self, _pcm, _sample_rate):
+                return {"hey_leela": 0.996, "hello_leela": 0.1}
+
+        detector = WekwsMhaDetector(
+            WakeConfig(
+                engine="wekws_mha",
+                threshold=0.997,
+                wekws_label_thresholds={"hey_leela": 0.996},
+                trigger_level=2,
+            )
+        )
+        detector._runtime = FakeRuntime()
+
+        event = detector.wait(FakeAudio())
+
+        self.assertEqual(event.engine, "wekws_mha")
+        self.assertEqual(event.label, "hey_leela")
+        self.assertEqual(event.confidence, 0.996)
 
     def test_openwakeword_resets_model_state_before_wait(self) -> None:
         class FakeAudio:
