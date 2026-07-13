@@ -274,7 +274,7 @@ class ConfigTests(unittest.TestCase):
             {"hey_leela": 0.996, "hello_leela": 0.997},
         )
         self.assertEqual(config.wake.wekws_window_seconds, 2.0)
-        self.assertEqual(config.wake.trigger_level, 2)
+        self.assertEqual(config.wake.trigger_level, 1)
         self.assertEqual(config.wake.max_wait_seconds, 0)
         self.assertTrue(config.wake_ack.enabled)
         self.assertEqual(config.vad.engine, "silero")
@@ -478,7 +478,7 @@ class ConfigTests(unittest.TestCase):
             aliyun_wake_config.wake.wekws_label_thresholds,
             {"hey_leela": 0.996, "hello_leela": 0.997},
         )
-        self.assertEqual(aliyun_wake_config.wake.trigger_level, 2)
+        self.assertEqual(aliyun_wake_config.wake.trigger_level, 1)
         self.assertTrue(aliyun_wake_config.wake.debug)
         self.assertTrue(aliyun_wake_config.wake_ack.enabled)
         self.assertEqual(
