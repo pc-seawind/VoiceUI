@@ -22,7 +22,7 @@ from voiceui.models import AssistantConfig, Utterance, WakeEvent
 from voiceui.stt import create_stt
 from voiceui.tts import synthesize_to_wav
 from voiceui.wake import create_wake_detector, list_openwakeword_models
-from voiceui.wake_ack import create_wake_ack_player, resolve_wake_ack_path
+from voiceui.wake_ack import resolve_wake_ack_path
 
 _DEFAULT_WAKE_ACK_STYLE = (
     "自然、清晰、亲切、短促，适合智能音箱被唤醒后的中文回应。"
@@ -64,7 +64,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Use command_stream_channel or wake_stream_channel",
     )
     parser.add_argument("--audio-channel", type=int, help="Override configured audio channel")
-    parser.add_argument("--wake-test", action="store_true", help="Wait for one wake word and exit")
+    parser.add_argument("--wake-test", action="store_true", help="Continuously test wake detection")
     parser.add_argument(
         "--wake-monitor",
         action="store_true",
@@ -154,6 +154,7 @@ def main(argv: list[str] | None = None) -> int:
             configure_log_files(
                 debug_log_path=audio_dump.debug_log_path(),
                 text_record_dir=audio_dump.text_record_dir(),
+                stdout_modules={"wake"} if args.wake_test else None,
             )
 
         if args.generate_wake_ack:
@@ -210,7 +211,51 @@ def main(argv: list[str] | None = None) -> int:
             print(summary.to_json())
             return 0
 
-        if args.wake_test or args.wake_monitor:
+        if args.wake_test:
+            assert audio_dump is not None
+            channel = (
+                args.audio_channel
+                if args.audio_channel is not None
+                else config.audio.wake_stream_channel
+            )
+            audio = create_audio_input(config.audio, enabled=True, selected_channel=channel)
+            detector = create_wake_detector(config.wake)
+            detections = 0
+            while True:
+                recording_audio = RecordingAudioInput(
+                    audio,
+                    max_seconds=max(0.0, config.wake.debug_audio_seconds),
+                )
+                log_event(
+                    "wake",
+                    "test_waiting",
+                    log_id="wake.test_waiting",
+                    detections=detections,
+                )
+                started = time.monotonic()
+                wake = detector.wait(recording_audio)
+                latency_ms = int((time.monotonic() - started) * 1000)
+                if not wake.pcm:
+                    wake = _wake_event_from_recording(
+                        recording_audio,
+                        engine=wake.engine,
+                        label=wake.label,
+                        confidence=wake.confidence,
+                    )
+                detections += 1
+                log_event(
+                    "wake",
+                    "detected",
+                    log_id="wake.detected",
+                    engine=wake.engine,
+                    label=wake.label,
+                    confidence=f"{wake.confidence:.3f}",
+                    latency_ms=latency_ms,
+                    detections=detections,
+                )
+                _save_wake_debug(config, wake, wake_ms=latency_ms, audio_dump=audio_dump)
+
+        if args.wake_monitor:
             assert audio_dump is not None
             audio_dump.start_system_input_dump(config.audio)
             channel = (
@@ -221,49 +266,48 @@ def main(argv: list[str] | None = None) -> int:
             audio = create_audio_input(config.audio, enabled=True, selected_channel=channel)
             recording_audio = RecordingAudioInput(
                 audio,
-                max_seconds=(
-                    args.seconds
-                    if args.wake_monitor
-                    else max(0.0, config.wake.debug_audio_seconds)
-                ),
+                max_seconds=args.seconds,
             )
             started = time.monotonic()
-            if args.wake_monitor:
-                config.wake.debug = True
+            config.wake.debug = True
+            if config.wake.engine == "openwakeword":
                 config.wake.model = args.wake_model or "any"
-                config.wake.threshold = (
-                    args.wake_threshold if args.wake_threshold is not None else 1.1
-                )
-                config.wake.max_wait_seconds = max(0.1, args.seconds)
-                config.wake.debug_top_predictions = max(config.wake.debug_top_predictions, 10)
-                log_event(
-                    "wake",
-                    "monitor_started",
-                    log_id="wake.monitor_started",
-                    seconds=f"{config.wake.max_wait_seconds:g}",
-                    model=config.wake.model,
-                    threshold=f"{config.wake.threshold:.3f}",
-                )
+            config.wake.threshold = (
+                args.wake_threshold if args.wake_threshold is not None else 1.1
+            )
+            if config.wake.engine == "wekws_mha":
+                config.wake.wekws_label_thresholds = {
+                    label: config.wake.threshold
+                    for label in config.wake.wekws_label_thresholds
+                }
+            config.wake.max_wait_seconds = max(0.1, args.seconds)
+            config.wake.debug_top_predictions = max(config.wake.debug_top_predictions, 10)
+            log_event(
+                "wake",
+                "monitor_started",
+                log_id="wake.monitor_started",
+                seconds=f"{config.wake.max_wait_seconds:g}",
+                model=config.wake.model,
+                threshold=f"{config.wake.threshold:.3f}",
+            )
             try:
                 wake = create_wake_detector(config.wake).wait(recording_audio)
             except TimeoutError:
-                if args.wake_monitor:
-                    latency_ms = int((time.monotonic() - started) * 1000)
-                    _save_wake_debug(
-                        config,
-                        _wake_event_from_recording(
-                            recording_audio,
-                            engine=config.wake.engine,
-                            label="timeout",
-                            confidence=0.0,
-                        ),
-                        wake_ms=latency_ms,
-                        audio_dump=audio_dump,
-                    )
-                    log_event("wake", "monitor_done", log_id="wake.monitor_done")
-                    audio_dump.stop_system_input_dump()
-                    return 0
-                raise
+                latency_ms = int((time.monotonic() - started) * 1000)
+                _save_wake_debug(
+                    config,
+                    _wake_event_from_recording(
+                        recording_audio,
+                        engine=config.wake.engine,
+                        label="timeout",
+                        confidence=0.0,
+                    ),
+                    wake_ms=latency_ms,
+                    audio_dump=audio_dump,
+                )
+                log_event("wake", "monitor_done", log_id="wake.monitor_done")
+                audio_dump.stop_system_input_dump()
+                return 0
             latency_ms = int((time.monotonic() - started) * 1000)
             if not wake.pcm:
                 wake = _wake_event_from_recording(
@@ -282,25 +326,6 @@ def main(argv: list[str] | None = None) -> int:
                 latency_ms=latency_ms,
             )
             _save_wake_debug(config, wake, wake_ms=latency_ms, audio_dump=audio_dump)
-            if args.wake_monitor:
-                audio_dump.stop_system_input_dump()
-                return 0
-            ack_started = time.monotonic()
-            try:
-                create_wake_ack_player(
-                    config.wake_ack,
-                    fallback_device=config.tts.playback_device,
-                ).play()
-                ack_ms = int((time.monotonic() - ack_started) * 1000)
-                if ack_ms:
-                    log_event(
-                        "wake_ack",
-                        "played",
-                        log_id="wake_ack.played",
-                        latency_ms=ack_ms,
-                    )
-            except Exception as exc:
-                log_event("wake_ack", "error", log_id="wake_ack.error", error=exc)
             audio_dump.stop_system_input_dump()
             return 0
 

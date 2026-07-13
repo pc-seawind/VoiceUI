@@ -139,6 +139,30 @@ class LogTests(unittest.TestCase):
             self.assertIn("module=vad | event=completed", content)
             self.assertIn("params=duration_ms=100", content)
 
+    def test_stdout_module_filter_keeps_allowed_modules_and_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            debug_log_path = f"{temp_dir}/debug.log"
+            configure_log_files(
+                debug_log_path=debug_log_path,
+                stdout_modules={"wake"},
+            )
+
+            output = io.StringIO()
+            with redirect_stdout(output):
+                log_event("wake", "detected", label="hey_leela")
+                log_event("audio", "recorded", path="test.wav")
+                log_event("error", "runtime", error="boom")
+
+            stdout_text = output.getvalue()
+            self.assertIn("module=wake | event=detected", stdout_text)
+            self.assertNotIn("module=audio | event=recorded", stdout_text)
+            self.assertIn("module=error | event=runtime", stdout_text)
+
+            file_text = Path(debug_log_path).read_text(encoding="utf-8")
+            self.assertIn("module=wake | event=detected", file_text)
+            self.assertIn("module=audio | event=recorded", file_text)
+            self.assertIn("module=error | event=runtime", file_text)
+
     def test_service_stdout_mode_routes_logs_to_file_and_context_to_stdout(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             debug_log_path = f"{temp_dir}/debug.log"

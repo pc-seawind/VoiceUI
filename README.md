@@ -429,16 +429,17 @@ python -m voiceui --config config.demo.mify.yaml
 For the audio demo, press Enter when prompted, speak one command, and wait for
 the transcript plus assistant reply.
 
-After the manual demo works, verify wake detection with openWakeWord:
+Verify the configured production wake model continuously without starting ASR,
+LLM, TTS, or wake acknowledgement playback:
 
 ```powershell
-python -m voiceui --config config.demo.wake.yaml --wake-test
+python -m voiceui --config config.demo.wake.aliyun.yaml --wake-test --wake-debug
 ```
 
-Say "alexa". The first run downloads the openWakeWord feature model and
-`alexa` ONNX model. A successful detection prints `module=wake | event=detected`
-with the label, confidence, and latency, then plays the local wake
-acknowledgement WAV.
+Say "Hi Leela" or "Hello Leela". Each successful detection prints
+`module=wake | event=detected`, then returns to `module=wake |
+event=test_waiting`. The command keeps listening until `Ctrl+C`, and its console
+output is limited to wake logs and runtime errors.
 Periodic `module=wake | event=score` lines are continuous logs and stay off by
 default to avoid console spam. Enable `logging.continuous.wake.score: true`, or
 use `--wake-debug` / `--wake-monitor`, when you need audio level, top model

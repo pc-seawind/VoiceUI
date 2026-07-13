@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sys
 import threading
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -115,6 +116,7 @@ LOG_SPECS: tuple[LogSpec, ...] = (
     LogSpec("wake_ack.limiter", "continuous", "wake_ack", "limiter", False),
     LogSpec("wake.loading", "event", "wake", "loading"),
     LogSpec("wake.monitor_done", "event", "wake", "monitor_done"),
+    LogSpec("wake.test_waiting", "event", "wake", "test_waiting"),
     LogSpec("wake.warm_up_error", "event", "wake", "warm_up_error"),
     LogSpec("wake.warmed_up", "event", "wake", "warmed_up"),
     LogSpec("wake.monitor_started", "event", "wake", "monitor_started"),
@@ -171,6 +173,7 @@ _OUTPUT_LOCK = threading.Lock()
 _DEBUG_LOG_PATH: Path | None = None
 _TEXT_RECORD_DIR: Path | None = None
 _STDOUT_MODE: StdoutMode = "all"
+_STDOUT_MODULES: frozenset[str] | None = None
 
 
 def configure_logging(config: object | None) -> None:
@@ -183,13 +186,15 @@ def configure_log_files(
     debug_log_path: str | Path | None = None,
     text_record_dir: str | Path | None = None,
     stdout_mode: StdoutMode | None = None,
+    stdout_modules: Iterable[str] | None = None,
 ) -> None:
-    global _DEBUG_LOG_PATH, _TEXT_RECORD_DIR, _STDOUT_MODE
+    global _DEBUG_LOG_PATH, _TEXT_RECORD_DIR, _STDOUT_MODE, _STDOUT_MODULES
     with _OUTPUT_LOCK:
         _DEBUG_LOG_PATH = Path(debug_log_path) if debug_log_path is not None else None
         _TEXT_RECORD_DIR = Path(text_record_dir) if text_record_dir is not None else None
         if stdout_mode is not None:
             _STDOUT_MODE = stdout_mode
+        _STDOUT_MODULES = frozenset(stdout_modules) if stdout_modules is not None else None
         if _DEBUG_LOG_PATH is not None:
             _DEBUG_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
             _DEBUG_LOG_PATH.touch(exist_ok=True)
@@ -390,6 +395,12 @@ def _stdout_lines_for_log(
     log_line: str,
     context_line: str | None,
 ) -> list[str]:
+    if (
+        _STDOUT_MODULES is not None
+        and module not in _STDOUT_MODULES
+        and not _is_error_log(module, event)
+    ):
+        return []
     if _STDOUT_MODE == "all":
         return [log_line]
     if _STDOUT_MODE == "none":

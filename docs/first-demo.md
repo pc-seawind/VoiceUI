@@ -215,12 +215,12 @@ The wake demo uses openWakeWord with the built-in `alexa` model. VoiceUI
 loads it through ONNXRuntime on Windows.
 
 ```powershell
-python -m voiceui --config config.demo.wake.yaml --wake-test
+python -m voiceui --config config.demo.wake.aliyun.yaml --wake-test --wake-debug
 ```
 
-Say "alexa". On the first run, openWakeWord downloads its feature model and
-the `alexa` model. A successful detection plays the local "我在" WAV and
-prints:
+Say "Hi Leela" or "Hello Leela". A successful detection prints the wake label,
+confidence, and latency, then immediately returns to the waiting state. The
+command only prints wake logs and runtime errors, and continues until `Ctrl+C`:
 
 ```text
 2026-06-03T19:30:01.234 | module=wake | event=detected | params=engine=openwakeword label=alexa confidence=... latency_ms=...
