@@ -74,6 +74,7 @@ class WakeConfig:
     threshold: float = 0.5
     wekws_label_thresholds: dict[str, float] = field(default_factory=dict)
     wekws_window_seconds: float = 2.0
+    wekws_hop_frames: int = 2
     trigger_level: int = 1
     max_wait_seconds: float = 0.0
     inference_framework: Literal["onnx", "tflite"] = "onnx"

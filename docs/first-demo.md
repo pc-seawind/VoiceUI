@@ -211,8 +211,7 @@ That confirms microphone, VAD, and speaker output but uses mock ASR/LLM text.
 
 ## 8. Verify Wake Word
 
-The wake demo uses openWakeWord with the built-in `alexa` model. VoiceUI
-loads it through ONNXRuntime on Windows.
+The production wake demo uses the Leela WeKWS MHA model.
 
 ```powershell
 python -m voiceui --config config.demo.wake.aliyun.yaml --wake-test --wake-debug
@@ -220,10 +219,15 @@ python -m voiceui --config config.demo.wake.aliyun.yaml --wake-test --wake-debug
 
 Say "Hi Leela" or "Hello Leela". A successful detection prints the wake label,
 confidence, and latency, then immediately returns to the waiting state. The
-command only prints wake logs and runtime errors, and continues until `Ctrl+C`:
+command only prints wake logs and runtime errors, and continues until `Ctrl+C`.
+It uses a 2-second window and a configurable integer frame hop. The default
+`wekws_hop_frames: 2` is 160 ms with the 80 ms input frame size. Each hit clears
+the window and saves that exact 2-second window to the path shown by
+`event=audio_saved`:
 
 ```text
-2026-06-03T19:30:01.234 | module=wake | event=detected | params=engine=openwakeword label=alexa confidence=... latency_ms=...
+2026-06-03T19:30:01.234 | module=wake | event=detected | params=engine=wekws_mha label=hello_leela confidence=... latency_ms=...
+2026-06-03T19:30:01.240 | module=wake | event=audio_saved | params=path=debug_sessions/.../audio_dumps/wake_01_....wav
 ```
 
 `module=wake | event=score` is a continuous log and stays off by default to

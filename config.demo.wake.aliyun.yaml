@@ -25,6 +25,7 @@ wake:
     hey_leela: 0.996
     hello_leela: 0.997
   wekws_window_seconds: 2.0
+  wekws_hop_frames: 2
   trigger_level: 1
   max_wait_seconds: 0
   debug: true

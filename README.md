@@ -439,16 +439,19 @@ python -m voiceui --config config.demo.wake.aliyun.yaml --wake-test --wake-debug
 Say "Hi Leela" or "Hello Leela". Each successful detection prints
 `module=wake | event=detected`, then returns to `module=wake |
 event=test_waiting`. The command keeps listening until `Ctrl+C`, and its console
-output is limited to wake logs and runtime errors.
+output is limited to wake logs and runtime errors. WeKWS uses a 2-second window
+and evaluates once every `wake.wekws_hop_frames` input frames. The production
+default is 2 frames, or 160 ms with the 80 ms audio block size. A detection
+clears the window before listening starts again.
 Periodic `module=wake | event=score` lines are continuous logs and stay off by
 default to avoid console spam. Enable `logging.continuous.wake.score: true`, or
 use `--wake-debug` / `--wake-monitor`, when you need audio level, top model
 scores, threshold, and inference latency.
-When `debug.enabled` and `debug.save_audio` are true, wake tests and full
-assistant turns also save `wake_01_<start>_<end>.wav` under
-`debug_sessions/<run>/audio_dumps/`. Use this to hear the exact selected wake
-channel that openWakeWord received. `--wake-monitor` saves the monitored wake
-audio even when no wake word is detected.
+Wake tests force audio saving on and write the exact detected 2-second model
+window as `wake_01_<start>_<end>.wav` under
+`debug_sessions/<run>/audio_dumps/`. The `wake.audio_saved` log prints the file
+path after every detection. `--wake-monitor` also saves the monitored audio when
+no wake word is detected.
 For hardware bring-up, `config.demo.wake.yaml` uses `wake.threshold: 0.5`.
 Lower it temporarily toward `0.35` if it misses real wake words, or raise it if
 it false-wakes.

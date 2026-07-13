@@ -249,6 +249,7 @@ class WekwsMhaDetector(WakeDetector):
             engine="wekws_mha",
             model=self.config.model,
             window_seconds=f"{self.config.wekws_window_seconds:.1f}",
+            hop_frames=max(1, int(self.config.wekws_hop_frames)),
         )
         return LeelaMhaRuntime(self.config.model)
 
@@ -288,14 +289,12 @@ class WekwsMhaDetector(WakeDetector):
         trigger_level = max(1, int(self.config.trigger_level))
         trigger_hits = 0
         trigger_label = ""
-        event_audio = _PcmRingBuffer(
-            max_bytes=int(audio.sample_rate * 2 * max(0.0, self.config.debug_audio_seconds))
-        )
-        model_audio = _PcmRingBuffer(
-            max_bytes=int(
-                audio.sample_rate * 2 * max(0.1, self.config.wekws_window_seconds)
-            )
-        )
+        window_seconds = max(0.1, self.config.wekws_window_seconds)
+        hop_frames = max(1, int(self.config.wekws_hop_frames))
+        window_bytes = _pcm16_bytes_for_seconds(audio.sample_rate, window_seconds)
+        model_audio = _PcmRingBuffer(max_bytes=window_bytes)
+        has_scored_window = False
+        frames_since_prediction = 0
         if debug_enabled_log_enabled:
             log_event(
                 "wake",
@@ -306,13 +305,36 @@ class WekwsMhaDetector(WakeDetector):
                 model=self.config.model,
                 threshold=f"{self.config.threshold:.3f}",
                 framework="wekws_mha",
+                window_seconds=f"{window_seconds:.1f}",
+                hop_frames=hop_frames,
+                hop_ms=hop_frames * audio.block_ms,
             )
 
         for chunk in audio.chunks():
-            event_audio.append(chunk)
             model_audio.append(chunk)
+            if model_audio.size < window_bytes:
+                if (
+                    self.config.max_wait_seconds > 0
+                    and time.monotonic() - started >= self.config.max_wait_seconds
+                ):
+                    raise TimeoutError("Timed out waiting for wake word.")
+                continue
+            if has_scored_window:
+                frames_since_prediction += 1
+                if frames_since_prediction < hop_frames:
+                    if (
+                        self.config.max_wait_seconds > 0
+                        and time.monotonic() - started >= self.config.max_wait_seconds
+                    ):
+                        raise TimeoutError("Timed out waiting for wake word.")
+                    continue
+                frames_since_prediction = 0
+            else:
+                has_scored_window = True
+
+            model_pcm = model_audio.pcm()
             predict_started = time.monotonic()
-            predictions = self._runtime.score_pcm(model_audio.pcm(), audio.sample_rate)
+            predictions = self._runtime.score_pcm(model_pcm, audio.sample_rate)
             predict_ms = (time.monotonic() - predict_started) * 1000
             label, confidence = _best_prediction(predictions)
             threshold = self.config.wekws_label_thresholds.get(label, self.config.threshold)
@@ -340,7 +362,9 @@ class WekwsMhaDetector(WakeDetector):
                         "score",
                         log_id="wake.score",
                         elapsed_s=f"{now - started:.1f}",
-                        **debug_window.snapshot(threshold, self.config.debug_top_predictions),
+                        **debug_window.snapshot(
+                            threshold, self.config.debug_top_predictions
+                        ),
                     )
                     debug_window.reset()
                     next_debug_at = now + debug_interval
@@ -369,14 +393,13 @@ class WekwsMhaDetector(WakeDetector):
                         trigger_level=trigger_level,
                         trigger_hits=trigger_hits,
                     )
-                pcm = event_audio.pcm()
                 return WakeEvent(
                     engine="wekws_mha",
                     confidence=confidence,
                     label=label,
-                    pcm=pcm,
+                    pcm=model_pcm,
                     sample_rate=audio.sample_rate,
-                    duration_ms=_pcm_duration_ms(pcm, audio.sample_rate),
+                    duration_ms=_pcm_duration_ms(model_pcm, audio.sample_rate),
                 )
             elapsed = time.monotonic() - started
             if self.config.max_wait_seconds > 0 and elapsed >= self.config.max_wait_seconds:
@@ -502,6 +525,15 @@ class _PcmRingBuffer:
 
     def pcm(self) -> bytes:
         return b"".join(self._chunks)
+
+    @property
+    def size(self) -> int:
+        return self._size
+
+
+def _pcm16_bytes_for_seconds(sample_rate: int, seconds: float) -> int:
+    byte_count = max(2, int(sample_rate * 2 * seconds))
+    return byte_count - (byte_count % 2)
 
 
 def _pcm_duration_ms(pcm: bytes, sample_rate: int) -> int:

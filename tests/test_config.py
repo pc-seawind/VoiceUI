@@ -103,12 +103,14 @@ class ConfigTests(unittest.TestCase):
 
         self.assertEqual(linux_config.audio.device, LINUX_XVF_DEVICE)
         self.assertEqual(linux_config.wake.engine, "wekws_mha")
+        self.assertEqual(linux_config.wake.wekws_hop_frames, 2)
         self.assertEqual(linux_config.stt.provider, "aliyun_nls")
         self.assertTrue(linux_config.web.enabled)
         self.assertEqual(linux_config.web.host, "0.0.0.0")
         self.assertEqual(linux_config.web.port, 8765)
         self.assertIn(windows_config.audio.device, XVF_INPUT_DEVICES)
         self.assertEqual(windows_config.wake.engine, "wekws_mha")
+        self.assertEqual(windows_config.wake.wekws_hop_frames, 2)
         self.assertEqual(windows_config.stt.provider, "aliyun_nls")
         self.assertTrue(windows_config.web.enabled)
         self.assertEqual(windows_config.web.host, "0.0.0.0")
@@ -274,6 +276,7 @@ class ConfigTests(unittest.TestCase):
             {"hey_leela": 0.996, "hello_leela": 0.997},
         )
         self.assertEqual(config.wake.wekws_window_seconds, 2.0)
+        self.assertEqual(config.wake.wekws_hop_frames, 2)
         self.assertEqual(config.wake.trigger_level, 1)
         self.assertEqual(config.wake.max_wait_seconds, 0)
         self.assertTrue(config.wake_ack.enabled)

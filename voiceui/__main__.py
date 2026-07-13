@@ -4,6 +4,7 @@ import argparse
 import json
 import sys
 import time
+from pathlib import Path
 
 from voiceui.audio import (
     RecordingAudioInput,
@@ -129,6 +130,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.wake_monitor:
             config.logging.continuous["wake.score"] = True
 
+        if args.wake_test:
+            config.debug.enabled = True
+            config.debug.save_audio = True
+            config.debug.voice_path_dump_enabled = True
+
         configure_logging(config.logging)
 
         if args.list_log_switches:
@@ -253,7 +259,19 @@ def main(argv: list[str] | None = None) -> int:
                     latency_ms=latency_ms,
                     detections=detections,
                 )
-                _save_wake_debug(config, wake, wake_ms=latency_ms, audio_dump=audio_dump)
+                wake_path = _save_wake_debug(
+                    config,
+                    wake,
+                    wake_ms=latency_ms,
+                    audio_dump=audio_dump,
+                )
+                if wake_path is not None:
+                    log_event(
+                        "wake",
+                        "audio_saved",
+                        log_id="wake.audio_saved",
+                        path=wake_path,
+                    )
 
         if args.wake_monitor:
             assert audio_dump is not None
@@ -374,22 +392,25 @@ def _save_wake_debug(
     wake: WakeEvent,
     wake_ms: int,
     audio_dump: AudioDumpManager | None = None,
-) -> None:
+) -> Path | None:
+    debug_data = TurnDebugData(
+        node_id=config.node.id,
+        room=config.node.room,
+        wake={
+            "engine": wake.engine,
+            "label": wake.label,
+            "confidence": wake.confidence,
+        },
+        timings_ms={"wake": wake_ms},
+    )
     debug_dir = DebugRecorder(config.debug, audio_dump=audio_dump).save_turn(
-        TurnDebugData(
-            node_id=config.node.id,
-            room=config.node.room,
-            wake={
-                "engine": wake.engine,
-                "label": wake.label,
-                "confidence": wake.confidence,
-            },
-            timings_ms={"wake": wake_ms},
-        ),
+        debug_data,
         wake_audio=wake,
     )
     if debug_dir:
         log_event("debug", "saved", log_id="debug.saved", path=debug_dir)
+    dump_path = debug_data.wake.get("dump_path")
+    return Path(dump_path) if isinstance(dump_path, str) else None
 
 
 def _pcm_duration_ms(pcm: bytes, sample_rate: int) -> int:

@@ -48,15 +48,20 @@ class WakeTests(unittest.TestCase):
     def test_wekws_mha_uses_per_label_thresholds(self) -> None:
         class FakeAudio:
             sample_rate = 16000
+            block_ms = 80
 
             def chunks(self):
-                yield b"\x00\x00" * 1280
-                yield b"\x00\x00" * 1280
+                for _index in range(27):
+                    yield b"\x00\x00" * 1280
 
         class FakeRuntime:
             sample_rate = 16000
 
+            def __init__(self):
+                self.score_calls = 0
+
             def score_pcm(self, _pcm, _sample_rate):
+                self.score_calls += 1
                 return {"hey_leela": 0.996, "hello_leela": 0.1}
 
         detector = WekwsMhaDetector(
@@ -67,13 +72,89 @@ class WakeTests(unittest.TestCase):
                 trigger_level=2,
             )
         )
-        detector._runtime = FakeRuntime()
+        runtime = FakeRuntime()
+        detector._runtime = runtime
 
         event = detector.wait(FakeAudio())
 
         self.assertEqual(event.engine, "wekws_mha")
         self.assertEqual(event.label, "hey_leela")
         self.assertEqual(event.confidence, 0.996)
+        self.assertEqual(runtime.score_calls, 2)
+
+    def test_wekws_mha_uses_two_second_window_and_configurable_frame_hop(self) -> None:
+        class FakeAudio:
+            sample_rate = 16000
+            block_ms = 80
+
+            def chunks(self):
+                for _index in range(28):
+                    yield b"\x00\x00" * 1280
+
+        class FakeRuntime:
+            sample_rate = 16000
+
+            def __init__(self):
+                self.window_sizes: list[int] = []
+
+            def score_pcm(self, pcm, _sample_rate):
+                self.window_sizes.append(len(pcm))
+                score = 0.1 if len(self.window_sizes) == 1 else 0.9
+                return {"hey_leela": score}
+
+        detector = WekwsMhaDetector(
+            WakeConfig(
+                engine="wekws_mha",
+                threshold=0.5,
+                wekws_window_seconds=2.0,
+                wekws_hop_frames=3,
+            )
+        )
+        runtime = FakeRuntime()
+        detector._runtime = runtime
+
+        event = detector.wait(FakeAudio())
+
+        self.assertEqual(runtime.window_sizes, [64000, 64000])
+        self.assertEqual(event.duration_ms, 2000)
+        self.assertEqual(len(event.pcm), 64000)
+
+    def test_wekws_mha_clears_window_between_waits(self) -> None:
+        class FakeAudio:
+            sample_rate = 16000
+            block_ms = 80
+
+            def chunks(self):
+                for _index in range(25):
+                    yield b"\x00\x00" * 1280
+
+        class FakeRuntime:
+            sample_rate = 16000
+
+            def __init__(self):
+                self.score_calls = 0
+
+            def score_pcm(self, _pcm, _sample_rate):
+                self.score_calls += 1
+                return {"hey_leela": 0.9}
+
+        detector = WekwsMhaDetector(
+            WakeConfig(
+                engine="wekws_mha",
+                threshold=0.5,
+                wekws_window_seconds=2.0,
+                wekws_hop_frames=2,
+            )
+        )
+        runtime = FakeRuntime()
+        detector._runtime = runtime
+
+        first = detector.wait(FakeAudio())
+        second = detector.wait(FakeAudio())
+
+        self.assertEqual(first.duration_ms, 2000)
+        self.assertEqual(second.duration_ms, 2000)
+        self.assertEqual(runtime.score_calls, 2)
 
     def test_openwakeword_resets_model_state_before_wait(self) -> None:
         class FakeAudio:
@@ -235,6 +316,7 @@ class WakeTests(unittest.TestCase):
         buffer.append(b"dd")
 
         self.assertEqual(buffer.pcm(), b"bbccdd")
+        self.assertEqual(buffer.size, 6)
 
     def test_openwakeword_model_name_normalization(self) -> None:
         self.assertEqual(_normalize_openwakeword_label("Hey Jarvis"), "hey_jarvis")
