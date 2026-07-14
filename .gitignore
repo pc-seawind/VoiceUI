@@ -10,6 +10,15 @@ config.local*.yaml
 *.wav
 !voiceui/resources/*.wav
 models/
+!models/
+models/*
+!models/wake/
+models/wake/*
+!models/wake/leela_mha/
+models/wake/leela_mha/*
+!models/wake/leela_mha/avg_5.pt
+!models/wake/leela_mha/config.yaml
+!models/wake/leela_mha/words.txt
 device-identity.json
 debug_sessions/
 .voiceui/
