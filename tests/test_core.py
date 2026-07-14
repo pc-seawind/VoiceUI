@@ -847,13 +847,55 @@ class CoreTests(unittest.TestCase):
         self.assertFalse(_looks_like_time_query("一个月的时间里持续上涨超过60%"))
 
     def test_voice_termination_matching_uses_short_explicit_commands(self) -> None:
-        phrases = ["停止", "结束", "闭嘴", "stop"]
+        phrases = ["停止", "结束", "闭嘴", "休眠", "stop"]
 
         self.assertTrue(_matches_termination_command("停止。", phrases))
         self.assertTrue(_matches_termination_command("闭嘴", phrases))
+        self.assertTrue(_matches_termination_command("休眠。", phrases))
         self.assertTrue(_matches_termination_command("stop", phrases))
         self.assertFalse(_matches_termination_command("停止播放", phrases))
         self.assertFalse(_matches_termination_command("结束后提醒我", phrases))
+
+    def test_default_voice_termination_accepts_sleep_command(self) -> None:
+        assistant = VoiceAssistant(AssistantConfig())
+
+        self.assertTrue(assistant._is_voice_termination_command("休眠。"))  # pylint: disable=protected-access
+
+    def test_assistant_name_greeting_is_direct_intent(self) -> None:
+        assistant = VoiceAssistant(
+            AssistantConfig(
+                input=InputConfig(mode="audio"),
+                wake=WakeConfig(engine="disabled"),
+            )
+        )
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            wake_decision = assistant._gate_voice_transcript(  # pylint: disable=protected-access
+                "Hello, 丽娜。",
+                "wake",
+            )
+            follow_up_decision = assistant._gate_voice_transcript(  # pylint: disable=protected-access
+                "嗨琳娜。",
+                "follow_up",
+            )
+
+        self.assertEqual(wake_decision, ("accept", "direct_intent", ""))
+        self.assertEqual(follow_up_decision, ("accept", "direct_intent", ""))
+
+    def test_text_turn_handles_assistant_name_greeting_locally(self) -> None:
+        assistant = VoiceAssistant(AssistantConfig(input=InputConfig(mode="text")))
+        chat = RecordingChat()
+        tts = FakeTts()
+        assistant.chat = chat
+        assistant.tts = tts
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            reply = assistant.run_text_turn("嗨琳娜。")
+
+        self.assertEqual(reply.routed_to, "system")
+        self.assertEqual(reply.text, "我在。")
+        self.assertEqual(chat.calls, [])
+        self.assertEqual(tts.spoken, ["我在。"])
 
     def test_text_turn_does_not_route_background_time_phrase_to_time_tool(self) -> None:
         config = AssistantConfig(
@@ -1658,6 +1700,23 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(assistant.tts.spoken, ["reply 1"])
         self.assertEqual(fake_vad.items, [self_echo])
         self.assertIsNone(assistant._pending_barge_utterance)
+
+    def test_empty_barge_in_transcript_is_not_queued_as_next_turn(self) -> None:
+        config = AssistantConfig(
+            input=InputConfig(mode="audio"),
+            conversation=ConversationConfig(barge_in_enabled=True),
+        )
+        assistant = VoiceAssistant(config)
+        assistant.vad = FakeVad([Utterance(pcm=b"", sample_rate=16000, duration_ms=80)])
+        assistant.stt = FakeStreamingStt("")
+        assistant.tts = BargeFirstTts()
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            utterance = assistant._speak_with_barge_in("reply")
+
+        self.assertIsNone(utterance)
+        self.assertIsNone(assistant._pending_barge_utterance)
+        self.assertIsNone(assistant._pending_barge_transcript)
 
     def test_barge_in_echo_of_normal_reply_is_rejected_without_llm(self) -> None:
         config = AssistantConfig(

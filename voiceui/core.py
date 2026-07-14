@@ -631,6 +631,8 @@ class VoiceAssistant:
     def _try_handle_local_conversation_command(self, transcript: str) -> str | None:
         if _looks_like_end_conversation_command(transcript):
             return "好的。"
+        if _looks_like_assistant_name_greeting(transcript):
+            return "我在。"
         return None
 
     def _is_voice_termination_command(self, transcript: str) -> bool:
@@ -1732,6 +1734,15 @@ class VoiceAssistant:
         if isinstance(utterance, Utterance):
             transcript = state.get("transcript")
             if isinstance(transcript, str):
+                if not transcript.strip():
+                    self._clear_pending_barge_in()
+                    log_event(
+                        "barge_in",
+                        "no_speech",
+                        log_id="barge_in.no_speech",
+                        reason="empty_transcript",
+                    )
+                    return None
                 self._pending_barge_transcript = transcript
                 self._pending_barge_stt_ms = int(state.get("stt_ms") or 0)
                 extra_timings = state.get("stt_extra_timings")
@@ -1832,6 +1843,15 @@ class VoiceAssistant:
         if isinstance(utterance, Utterance):
             transcript = state.get("transcript")
             if isinstance(transcript, str):
+                if not transcript.strip():
+                    self._clear_pending_barge_in()
+                    log_event(
+                        "barge_in",
+                        "no_speech",
+                        log_id="barge_in.no_speech",
+                        reason="empty_transcript",
+                    )
+                    return text, None
                 self._pending_barge_transcript = transcript
                 self._pending_barge_stt_ms = int(state.get("stt_ms") or 0)
                 extra_timings = state.get("stt_extra_timings")
@@ -2715,6 +2735,8 @@ def _looks_like_end_conversation_command(text: str) -> bool:
         "没事了",
         "不用了",
         "算了",
+        "休眠",
+        "睡眠",
         "停",
         "停止",
         "stop",
@@ -2727,6 +2749,8 @@ def _looks_like_end_conversation_command(text: str) -> bool:
 
 def _looks_like_direct_voice_intent(text: str) -> bool:
     normalized = text.lower().replace(" ", "")
+    if _looks_like_assistant_name_greeting(text):
+        return True
     if (
         normalized.isascii()
         and any(char.isalpha() for char in normalized)
@@ -2799,6 +2823,27 @@ def _looks_like_direct_voice_intent(text: str) -> bool:
     if normalized in {"好的", "好", "可以", "不要", "不用", "停", "停止"}:
         return True
     return False
+
+
+def _looks_like_assistant_name_greeting(text: str) -> bool:
+    normalized = _normalize_spoken_text(text)
+    if not normalized:
+        return False
+    assistant_names = ("丽娜", "琳娜", "莉娜", "leela", "lina", "lena")
+    if normalized in assistant_names:
+        return True
+    if not any(name in normalized for name in assistant_names):
+        return False
+    greetings = ("hello", "hi", "hey", "哈喽", "嗨", "嘿", "你好")
+    return any(normalized.startswith(greeting) for greeting in greetings)
+
+
+def _normalize_spoken_text(text: str) -> str:
+    return "".join(
+        char
+        for char in text.lower()
+        if char.isalnum() or "\u4e00" <= char <= "\u9fff"
+    )
 
 
 def _looks_like_strong_voice_intent(text: str) -> bool:

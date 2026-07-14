@@ -28,6 +28,8 @@ DEFAULT_VOICE_TERMINATION_PHRASES: tuple[str, ...] = (
     "\u4e0d\u7528\u4e86",
     "\u6ca1\u4e8b\u4e86",
     "\u7b97\u4e86",
+    "\u4f11\u7720",
+    "\u7761\u7720",
     "\u5148\u8fd9\u6837",
     "\u5148\u8fd9\u6837\u5427",
     "\u5c31\u8fd9\u6837",
