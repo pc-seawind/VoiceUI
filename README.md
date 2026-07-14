@@ -375,6 +375,11 @@ Use `--audio-dump` only when diagnosing audio path issues:
 .\voiceui_service.cmd --audio-dump
 ```
 
+Use `--voice-path-dump` to save wake and per-turn voice-path WAVs without the
+long-running raw system input recording. The wake WAV is written immediately
+when the model triggers, so it is still available when no command follows the
+wake word.
+
 After package installation, the same entry is available as `voiceui-service`.
 
 Audio dumps are also normalized. When `debug.enabled` and `debug.save_audio`

@@ -1861,6 +1861,23 @@ class VoiceAssistant:
             confidence=f"{wake.confidence:.3f}",
             latency_ms=wake_ms,
         )
+        dump = self.audio_dump.write_voice_path_dump(
+            None,
+            "wake",
+            wake.pcm,
+            sample_rate=wake.sample_rate,
+            duration_ms=wake.duration_ms,
+        )
+        if dump is not None:
+            wake.dump_path = str(dump.path)
+            wake.dump_start_ms = dump.start_ms
+            wake.dump_end_ms = dump.end_ms
+            log_event(
+                "wake",
+                "audio_saved",
+                log_id="wake.audio_saved",
+                path=dump.path,
+            )
         return wake, wake_ms
 
     def _start_wake_ack(self) -> _WakeAckHandle:
@@ -2271,6 +2288,7 @@ class VoiceAssistant:
             seconds=timeout_seconds,
             next_state="returning_to_wake",
         )
+        self.audio_dump.end_turn()
         return AssistantReply(text="", routed_to="system")
 
     def run_once(self) -> AssistantReply:
@@ -2288,7 +2306,7 @@ class VoiceAssistant:
             with self._turn_lock:
                 self._duck_music("conversation")
                 try:
-                    turn_index = self.audio_dump.begin_turn()
+                    turn_index = self.audio_dump.ensure_turn()
                     wake_ack_handle = self._start_wake_ack()
                     try:
                         reply, _transcript = self._run_audio_turn(
@@ -2323,7 +2341,7 @@ class VoiceAssistant:
             with self._turn_lock:
                 self._duck_music("conversation")
                 try:
-                    turn_index = self.audio_dump.begin_turn()
+                    turn_index = self.audio_dump.ensure_turn()
                     wake_ack_handle = self._start_wake_ack()
                     self.session.reset()
                     try:

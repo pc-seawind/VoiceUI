@@ -46,6 +46,18 @@ class FakeWake:
         return WakeEvent(engine="test_wake", confidence=1.0, label="wake")
 
 
+class FakeAudioWake:
+    def wait(self, _audio) -> WakeEvent:
+        return WakeEvent(
+            engine="wekws_mha",
+            confidence=0.999,
+            label="hello_leela",
+            pcm=b"\x01\x00" * 32000,
+            sample_rate=16000,
+            duration_ms=2000,
+        )
+
+
 def _text_record_summary(records: list[dict[str, object]]) -> list[tuple[object, object, object]]:
     return [(record["module"], record["role"], record["text"]) for record in records]
 
@@ -558,6 +570,33 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(len(chat.calls), 1)
         self.assertEqual(fake_vad.items, [SpeechStartTimeoutError])
 
+    def test_wait_for_wake_immediately_saves_detected_audio(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = AssistantConfig(
+                input=InputConfig(mode="audio"),
+                wake=WakeConfig(engine="disabled"),
+                debug=DebugConfig(
+                    enabled=True,
+                    output_dir=temp_dir,
+                    save_audio=True,
+                    voice_path_dump_enabled=True,
+                ),
+            )
+            assistant = VoiceAssistant(config)
+            assistant.wake = FakeAudioWake()
+
+            try:
+                with contextlib.redirect_stdout(io.StringIO()) as output:
+                    wake, _wake_ms = assistant._wait_for_wake()
+
+                self.assertTrue(wake.dump_path)
+                self.assertTrue(Path(wake.dump_path).exists())
+                self.assertEqual(len(list(Path(temp_dir).rglob("wake_01_*.wav"))), 1)
+                self.assertIn("event=audio_saved", output.getvalue())
+            finally:
+                assistant.audio_dump.end_turn()
+                assistant.close()
+
     def test_wake_speech_timeout_returns_to_wake_without_llm_or_tts(self) -> None:
         config = AssistantConfig(
             input=InputConfig(mode="audio"),
@@ -588,6 +627,7 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(tts.spoken, [])
         self.assertEqual(fake_vad.start_timeouts, [2])
         self.assertIn("event=wake_speech_timeout", output.getvalue())
+        self.assertIsNone(assistant.audio_dump.current_turn_index)
 
     def test_wake_asr_termination_returns_to_wake_without_llm_or_tts(self) -> None:
         config = AssistantConfig(

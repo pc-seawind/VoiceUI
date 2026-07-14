@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from voiceui.audio_dump import AudioDumpManager
 from voiceui.debug import DebugRecorder, TurnDebugData
 from voiceui.models import DebugConfig, Utterance, WakeEvent
 
@@ -61,6 +62,51 @@ class DebugTests(unittest.TestCase):
             self.assertIn("dump_path", metadata["utterance"])
             self.assertIn("dump_start_ms", metadata["utterance"])
             self.assertIn("dump_end_ms", metadata["utterance"])
+
+    def test_debug_recorder_reuses_immediate_wake_dump(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = DebugConfig(
+                enabled=True,
+                output_dir=temp_dir,
+                save_audio=True,
+                save_metadata=True,
+                voice_path_dump_enabled=True,
+            )
+            audio_dump = AudioDumpManager(config)
+            wake_pcm = b"\x01\x00" * 32000
+            dump = audio_dump.write_voice_path_dump(
+                None,
+                "wake",
+                wake_pcm,
+                sample_rate=16000,
+                duration_ms=2000,
+            )
+            assert dump is not None
+            wake = WakeEvent(
+                engine="wekws_mha",
+                confidence=0.999,
+                label="hello_leela",
+                pcm=wake_pcm,
+                sample_rate=16000,
+                duration_ms=2000,
+                dump_path=str(dump.path),
+                dump_start_ms=dump.start_ms,
+                dump_end_ms=dump.end_ms,
+            )
+            recorder = DebugRecorder(config, audio_dump=audio_dump)
+
+            recorder.save_turn(
+                TurnDebugData(node_id="node", room="room"),
+                wake_audio=wake,
+            )
+
+            wake_files = list((dump.path.parent).glob("wake_01_*.wav"))
+            self.assertEqual(wake_files, [dump.path])
+            metadata = json.loads(
+                (dump.path.parent.parent / "metadata.json").read_text(encoding="utf-8")
+            )["turns"][0]["wake"]
+            self.assertEqual(metadata["dump_path"], str(dump.path))
+            self.assertEqual(metadata["duration_ms"], 2000)
 
     def test_disabled_debug_recorder_writes_nothing(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

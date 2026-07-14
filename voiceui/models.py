@@ -362,6 +362,9 @@ class WakeEvent:
     pcm: bytes = b""
     sample_rate: int = 16000
     duration_ms: int = 0
+    dump_path: str = ""
+    dump_start_ms: int = 0
+    dump_end_ms: int = 0
 
 
 @dataclass(slots=True)

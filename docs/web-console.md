@@ -32,6 +32,10 @@ stream, use:
 voiceui-service --config auto --voice-path-dump
 ```
 
+With this option, the detected wake window is written immediately as
+`audio_dumps/wake_<turn>_<start>_<end>.wav`. It does not wait for VAD, STT, or
+the rest of the turn, so wake-only timeouts and false wakes remain inspectable.
+
 Use `--system-input-dump` only when the audio device supports a second
 continuous reader; `--audio-dump` enables both dump modes.
 

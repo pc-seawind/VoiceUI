@@ -50,7 +50,11 @@ class DebugRecorder:
             data.wake["duration_ms"] = wake_audio.duration_ms
             data.wake["sample_rate"] = wake_audio.sample_rate
             data.wake["bytes"] = len(wake_audio.pcm)
-            if wake_audio.pcm and self.config.save_audio:
+            if wake_audio.dump_path:
+                data.wake["dump_path"] = wake_audio.dump_path
+                data.wake["dump_start_ms"] = wake_audio.dump_start_ms
+                data.wake["dump_end_ms"] = wake_audio.dump_end_ms
+            elif wake_audio.pcm and self.config.save_audio:
                 dump = self.audio_dump.write_voice_path_dump(
                     None,
                     "wake",
