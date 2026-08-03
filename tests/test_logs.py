@@ -173,13 +173,21 @@ class LogTests(unittest.TestCase):
 
             output = io.StringIO()
             with redirect_stdout(output):
+                log_event("wake", "loading", model="wake.pt")
+                log_event("wake", "warmed_up", latency_ms=100)
+                log_event("service", "started", config="auto")
                 log_event("vad", "completed", duration_ms=100)
+                log_event("wake", "detected", label="hello_leela")
                 log_event("stt", "completed", latency_ms=10, text="hello")
                 log_event("tts", "completed", latency_ms=20, text="hi")
                 log_event("error", "runtime", error="boom")
 
             stdout_text = output.getvalue()
+            self.assertIn("module=wake | event=loading", stdout_text)
+            self.assertIn("module=wake | event=warmed_up", stdout_text)
+            self.assertIn("module=service | event=started", stdout_text)
             self.assertNotIn("module=vad | event=completed", stdout_text)
+            self.assertNotIn("module=wake | event=detected", stdout_text)
             self.assertIn("context=voice | role=user | text=hello", stdout_text)
             self.assertIn("context=voice | role=assistant | text=hi", stdout_text)
             self.assertIn("module=error | event=runtime", stdout_text)

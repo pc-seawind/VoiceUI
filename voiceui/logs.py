@@ -175,6 +175,19 @@ _DEBUG_LOG_PATH: Path | None = None
 _TEXT_RECORD_DIR: Path | None = None
 _STDOUT_MODE: StdoutMode = "all"
 _STDOUT_MODULES: frozenset[str] | None = None
+_STARTUP_STDOUT_LOGS = frozenset(
+    {
+        ("service", "started"),
+        ("web", "started"),
+        ("wake", "loading"),
+        ("wake", "warmed_up"),
+        ("vad", "warmed_up"),
+        ("stt", "warmed_up"),
+        ("llm", "warmed_up"),
+        ("tts", "warmed_up"),
+        ("weather", "warmed_up"),
+    }
+)
 
 
 def configure_logging(config: object | None) -> None:
@@ -409,8 +422,11 @@ def _stdout_lines_for_log(
     lines: list[str] = []
     if _is_error_log(module, event):
         lines.append(log_line)
-    if _STDOUT_MODE == "errors_and_voice_context" and context_line is not None:
-        lines.append(context_line)
+    if _STDOUT_MODE == "errors_and_voice_context":
+        if (module, event) in _STARTUP_STDOUT_LOGS and log_line not in lines:
+            lines.append(log_line)
+        if context_line is not None:
+            lines.append(context_line)
     return lines
 
 
