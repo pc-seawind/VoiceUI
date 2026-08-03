@@ -1,0 +1,60 @@
+{
+  "benchmark": {
+    "p50_ms": 12.439965008525178,
+    "p95_ms": 13.125325433793478,
+    "runs": 200,
+    "threads": 1
+  },
+  "checkpoint": "exp/leela_mha/avg_5.pt",
+  "checkpoint_sha256": "bc8b119d293936202dd0e746634d5098bf39b7c12c832ff9b3d7d5e056e104af",
+  "input_shape": [
+    1,
+    198,
+    80
+  ],
+  "model": "exp/leela_mha/native/leela_mha_198f_fp32.onnx",
+  "model_bytes": 742317,
+  "model_sha256": "dea5b36390671371e63948ae1d07cc15de0a4adbf107ff13c106a87243c4b710",
+  "operators": {
+    "Add": 3,
+    "BatchNormalization": 1,
+    "Cast": 2,
+    "Concat": 5,
+    "Constant": 48,
+    "Div": 1,
+    "Expand": 4,
+    "GRU": 4,
+    "Gather": 7,
+    "Gemm": 1,
+    "MatMul": 4,
+    "Mod": 1,
+    "Mul": 2,
+    "Reshape": 11,
+    "Shape": 6,
+    "Sigmoid": 1,
+    "Slice": 3,
+    "Softmax": 1,
+    "Sqrt": 3,
+    "Squeeze": 5,
+    "Transpose": 9,
+    "Unsqueeze": 5
+  },
+  "opset": 17,
+  "output_shape": [
+    1,
+    198,
+    2
+  ],
+  "verification": {
+    "atol": 2e-06,
+    "max_abs": 1.564621925354004e-07,
+    "mean_abs": 2.6300708810822472e-08,
+    "passed": true,
+    "runs": 10
+  },
+  "versions": {
+    "onnx": "1.22.0",
+    "onnxruntime": "1.27.0",
+    "torch": "2.13.0+cu130"
+  }
+}

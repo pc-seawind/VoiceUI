@@ -334,21 +334,20 @@ class VoiceAssistant:
         self.audio_dump.start_system_input_dump(self.config.audio)
 
     def _warm_up_runtime_modules(self) -> None:
-        def warm_up_audio_models() -> None:
-            # Both local models initialize PyTorch. Loading them concurrently
-            # increases cold-start contention on Windows, so keep this lane serial.
-            self._warm_up_component("wake", self.wake)
-            self._warm_up_component("vad", self.vad)
-
+        components = (
+            ("wake", self.wake),
+            ("vad", self.vad),
+            ("stt", self.stt),
+            ("llm", self.chat),
+            ("tts", self.tts),
+        )
         with ThreadPoolExecutor(
-            max_workers=4,
+            max_workers=len(components),
             thread_name_prefix="voiceui-warmup",
         ) as executor:
             futures = [
-                executor.submit(warm_up_audio_models),
-                executor.submit(self._warm_up_component, "stt", self.stt),
-                executor.submit(self._warm_up_component, "llm", self.chat),
-                executor.submit(self._warm_up_component, "tts", self.tts),
+                executor.submit(self._warm_up_component, module, component)
+                for module, component in components
             ]
             for future in futures:
                 future.result()

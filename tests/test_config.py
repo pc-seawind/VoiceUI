@@ -270,10 +270,13 @@ class ConfigTests(unittest.TestCase):
 
         self.assertEqual(config.audio.device, LINUX_XVF_DEVICE)
         self.assertEqual(config.wake.engine, "wekws_mha")
-        self.assertEqual(config.wake.model, "models/wake/leela_mha/avg_5.pt")
+        self.assertEqual(
+            config.wake.model,
+            "models/wake/mfcc_mha_2label/leela_mha_198f_dynamic_int8.onnx",
+        )
         self.assertEqual(
             config.wake.wekws_label_thresholds,
-            {"hey_leela": 0.996, "hello_leela": 0.997},
+            {"hey_leela": 0.9958701, "hello_leela": 0.9970402},
         )
         self.assertEqual(config.wake.wekws_window_seconds, 2.0)
         self.assertEqual(config.wake.wekws_hop_frames, 2)
@@ -475,11 +478,14 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(aliyun_wake_config.wake.engine, "wekws_mha")
         self.assertTrue(aliyun_wake_config.audio.debug)
         self.assertEqual(aliyun_wake_config.audio.device, XVF_INPUT_DEVICE)
-        self.assertEqual(aliyun_wake_config.wake.model, "models/wake/leela_mha/avg_5.pt")
+        self.assertEqual(
+            aliyun_wake_config.wake.model,
+            "models/wake/mfcc_mha_2label/leela_mha_198f_dynamic_int8.onnx",
+        )
         self.assertEqual(aliyun_wake_config.wake.threshold, 0.997)
         self.assertEqual(
             aliyun_wake_config.wake.wekws_label_thresholds,
-            {"hey_leela": 0.996, "hello_leela": 0.997},
+            {"hey_leela": 0.9958701, "hello_leela": 0.9970402},
         )
         self.assertEqual(aliyun_wake_config.wake.trigger_level, 1)
         self.assertTrue(aliyun_wake_config.wake.debug)

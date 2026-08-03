@@ -240,7 +240,7 @@ class WekwsMhaDetector(WakeDetector):
         self._runtime = None
 
     def _load_runtime(self):
-        from voiceui.wekws import LeelaMhaRuntime
+        from voiceui.wekws_onnx import LeelaMhaOnnxRuntime
 
         log_event(
             "wake",
@@ -251,7 +251,7 @@ class WekwsMhaDetector(WakeDetector):
             window_seconds=f"{self.config.wekws_window_seconds:.1f}",
             hop_frames=max(1, int(self.config.wekws_hop_frames)),
         )
-        return LeelaMhaRuntime(self.config.model)
+        return LeelaMhaOnnxRuntime(self.config.model)
 
     def warm_up(self) -> bool:
         if self._runtime is None:
@@ -304,7 +304,7 @@ class WekwsMhaDetector(WakeDetector):
                 **_audio_input_params(audio),
                 model=self.config.model,
                 threshold=f"{self.config.threshold:.3f}",
-                framework="wekws_mha",
+                framework=getattr(self._runtime, "backend", "wekws_mha"),
                 window_seconds=f"{window_seconds:.1f}",
                 hop_frames=hop_frames,
                 hop_ms=hop_frames * audio.block_ms,

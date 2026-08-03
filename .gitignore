@@ -19,6 +19,8 @@ models/wake/leela_mha/*
 !models/wake/leela_mha/avg_5.pt
 !models/wake/leela_mha/config.yaml
 !models/wake/leela_mha/words.txt
+!models/wake/mfcc_mha_2label/
+!models/wake/mfcc_mha_2label/*
 device-identity.json
 debug_sessions/
 .voiceui/

@@ -21,9 +21,7 @@ demo = [
 wake = [
   "openwakeword>=0.6.0",
   "onnxruntime>=1.16.0",
-  "numpy>=1.26.0",
-  "torch>=2.0.0",
-  "torchaudio>=2.0.0"
+  "numpy>=1.26.0"
 ]
 clarity = [
   "torch>=2.0.0",

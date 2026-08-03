@@ -1,0 +1,17 @@
+{
+  "format_version": 1,
+  "model": "leela_mha_198f_dynamic_int8.onnx",
+  "model_sha256": "2c0ec214757b1bdb5dd8de1e8b38d855e7b2c6ceff33a13f2946dc5e87ef35c1",
+  "sample_rate": 16000,
+  "pcm_samples": 32000,
+  "input_shape": [1, 198, 80],
+  "output_shape": [1, 198, 2],
+  "runtime_dither": 0.0,
+  "labels": ["hey_leela", "hello_leela"],
+  "thresholds": {
+    "hey_leela": 0.995870053768158,
+    "hello_leela": 0.9970402121543884
+  },
+  "threshold_provenance": "fixed_int8_far.json; historical dev FAR <= 0.2/h",
+  "onnxruntime_version": "1.27.0"
+}

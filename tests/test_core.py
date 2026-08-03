@@ -467,7 +467,7 @@ class SlowWakeAck(FakeWakeAck):
 
 
 class CoreTests(unittest.TestCase):
-    def test_runtime_warm_up_overlaps_cloud_and_serializes_torch_models(self) -> None:
+    def test_runtime_components_warm_up_concurrently(self) -> None:
         assistant = object.__new__(VoiceAssistant)
         assistant.wake = object()
         assistant.vad = object()
@@ -475,22 +475,16 @@ class CoreTests(unittest.TestCase):
         assistant.chat = object()
         assistant.tts = object()
         calls: list[tuple[str, str]] = []
-        cloud_started = threading.Event()
-        wake_finished = threading.Event()
+        all_started = threading.Event()
         lock = threading.Lock()
 
         def warm_up(module: str, _component: object) -> None:
             with lock:
                 calls.append((module, threading.current_thread().name))
-            if module == "wake":
-                if not cloud_started.wait(timeout=2):
-                    raise AssertionError("cloud warm-up did not overlap wake warm-up")
-                wake_finished.set()
-            elif module == "vad":
-                if not wake_finished.is_set():
-                    raise AssertionError("VAD warm-up started before wake warm-up finished")
-            else:
-                cloud_started.set()
+                if len(calls) == 5:
+                    all_started.set()
+            if not all_started.wait(timeout=2):
+                raise AssertionError("runtime components did not warm up concurrently")
 
         assistant._warm_up_component = warm_up
 

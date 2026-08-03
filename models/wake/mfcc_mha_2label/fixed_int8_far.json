@@ -1,0 +1,123 @@
+{
+  "metric_definition": "exact score threshold at FAR/hour constraint",
+  "scores": "exp/leela_mha/native/fixed_int8_scores.npz",
+  "num_clips": 158042,
+  "keywords": {
+    "hey_leela": {
+      "positive_score_mean": 0.9783529043197632,
+      "positive_score_p05": 0.9328292608261108,
+      "negative_score_mean": 0.005697432439774275,
+      "negative_score_p95": 0.005418532993644476,
+      "target_far_per_hour": {
+        "0.2": {
+          "threshold": 0.995870053768158,
+          "true_accepts": 29252,
+          "positive_count": 35859,
+          "recall": 0.8157505786552888,
+          "false_accepts": 12,
+          "negative_hours": 61.88133574652778,
+          "far_per_hour": 0.19391953737316234,
+          "max_false_accepts": 12
+        },
+        "0.5": {
+          "threshold": 0.9868875741958618,
+          "true_accepts": 32081,
+          "positive_count": 35859,
+          "recall": 0.8946429069410747,
+          "false_accepts": 30,
+          "negative_hours": 61.88133574652778,
+          "far_per_hour": 0.4847988434329058,
+          "max_false_accepts": 30
+        },
+        "1.0": {
+          "threshold": 0.9592477679252625,
+          "true_accepts": 33614,
+          "positive_count": 35859,
+          "recall": 0.9373936808053767,
+          "false_accepts": 61,
+          "negative_hours": 61.88133574652778,
+          "far_per_hour": 0.9857576483135752,
+          "max_false_accepts": 61
+        },
+        "2.0": {
+          "threshold": 0.8897809386253357,
+          "true_accepts": 34442,
+          "positive_count": 35859,
+          "recall": 0.960484118352436,
+          "false_accepts": 123,
+          "negative_hours": 61.88133574652778,
+          "far_per_hour": 1.9876752580749137,
+          "max_false_accepts": 123
+        },
+        "5.0": {
+          "threshold": 0.627983570098877,
+          "true_accepts": 35143,
+          "positive_count": 35859,
+          "recall": 0.9800329066622048,
+          "false_accepts": 309,
+          "negative_hours": 61.88133574652778,
+          "far_per_hour": 4.99342808735893,
+          "max_false_accepts": 309
+        }
+      }
+    },
+    "hello_leela": {
+      "positive_score_mean": 0.9856427311897278,
+      "positive_score_p05": 0.9698773622512817,
+      "negative_score_mean": 0.007558189332485199,
+      "negative_score_p95": 0.007533937692642212,
+      "target_far_per_hour": {
+        "0.2": {
+          "threshold": 0.9970402121543884,
+          "true_accepts": 32099,
+          "positive_count": 37203,
+          "recall": 0.8628067628954654,
+          "false_accepts": 12,
+          "negative_hours": 60.907943125,
+          "far_per_hour": 0.19701863803498781,
+          "max_false_accepts": 12
+        },
+        "0.5": {
+          "threshold": 0.9890913367271423,
+          "true_accepts": 34282,
+          "positive_count": 37203,
+          "recall": 0.9214848264924872,
+          "false_accepts": 30,
+          "negative_hours": 60.907943125,
+          "far_per_hour": 0.4925465950874695,
+          "max_false_accepts": 30
+        },
+        "1.0": {
+          "threshold": 0.9789319038391113,
+          "true_accepts": 35003,
+          "positive_count": 37203,
+          "recall": 0.9408649840066662,
+          "false_accepts": 60,
+          "negative_hours": 60.907943125,
+          "far_per_hour": 0.985093190174939,
+          "max_false_accepts": 60
+        },
+        "2.0": {
+          "threshold": 0.9434949159622192,
+          "true_accepts": 35783,
+          "positive_count": 37203,
+          "recall": 0.9618310351315754,
+          "false_accepts": 121,
+          "negative_hours": 60.907943125,
+          "far_per_hour": 1.986604600186127,
+          "max_false_accepts": 121
+        },
+        "5.0": {
+          "threshold": 0.7967405915260315,
+          "true_accepts": 36465,
+          "positive_count": 37203,
+          "recall": 0.980162890089509,
+          "false_accepts": 304,
+          "negative_hours": 60.907943125,
+          "far_per_hour": 4.9911388302196915,
+          "max_false_accepts": 304
+        }
+      }
+    }
+  }
+}

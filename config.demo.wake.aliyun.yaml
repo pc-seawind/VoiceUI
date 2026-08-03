@@ -17,13 +17,12 @@ audio:
 
 wake:
   engine: wekws_mha
-  model: models/wake/leela_mha/avg_5.pt
-  # The package was evaluated with max frame posterior per clip. Preserve the
-  # per-keyword 0.2 FAR/hour operating points in the live detector.
+  model: models/wake/mfcc_mha_2label/leela_mha_198f_dynamic_int8.onnx
+  # Historical dev operating points at FAR <= 0.2/hour for the INT8 model.
   threshold: 0.997
   wekws_label_thresholds:
-    hey_leela: 0.996
-    hello_leela: 0.997
+    hey_leela: 0.9958701
+    hello_leela: 0.9970402
   wekws_window_seconds: 2.0
   wekws_hop_frames: 2
   trigger_level: 1

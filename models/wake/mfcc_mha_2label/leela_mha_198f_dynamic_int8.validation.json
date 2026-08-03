@@ -1,0 +1,45 @@
+{
+  "benchmark": {
+    "p50_ms": 5.905283003812656,
+    "p95_ms": 6.418138244771399,
+    "runs": 300,
+    "threads": 1
+  },
+  "input": "exp/leela_mha/native/leela_mha_198f_fp32.onnx",
+  "input_bytes": 742317,
+  "operators": {
+    "Add": 4,
+    "BatchNormalization": 1,
+    "Cast": 5,
+    "Concat": 5,
+    "Constant": 48,
+    "Div": 1,
+    "DynamicQuantizeLinear": 3,
+    "Expand": 4,
+    "GRU": 4,
+    "Gather": 7,
+    "MatMul": 2,
+    "MatMulInteger": 3,
+    "Mod": 1,
+    "Mul": 8,
+    "Reshape": 11,
+    "Shape": 6,
+    "Sigmoid": 1,
+    "Slice": 3,
+    "Softmax": 1,
+    "Sqrt": 3,
+    "Squeeze": 5,
+    "Transpose": 9,
+    "Unsqueeze": 5
+  },
+  "output": "exp/leela_mha/native/leela_mha_198f_dynamic_int8.onnx",
+  "output_bytes": 673183,
+  "per_channel": false,
+  "verification": {
+    "atol": 0.01,
+    "max_abs": 0.005071580410003662,
+    "mean_abs": 0.00021843303093191935,
+    "passed": true,
+    "runs": 20
+  }
+}
